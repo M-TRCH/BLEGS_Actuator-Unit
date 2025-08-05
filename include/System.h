@@ -16,7 +16,7 @@
 #define PWM_C_PIN       PB13
 #define MISO_PIN        PA6 
 #define MOSI_PIN        PA7
-#define SCLK_PIN        PA5
+#define SCK_PIN         PA5
 #define CS_ENC_PIN      PB12
 #define ADC_IA_PIN      PA2
 #define ADC_IC_PIN      PA3
@@ -29,14 +29,19 @@
 #define TX3_PIN         PA9
 
 // (1) System constants
-#define SERIAL3_BAUDRATE    2000000
+#define SERIAL3_BAUDRATE        2000000u
+#define ANALOG_READ_RESOLUTION  12u
+#define PWM_FREQUENCY           20000u
+#define PWM_RESOLUTION          12u  
 
 // (2) Object definitions
 extern HardwareSerial Serial3;
 
-// (3) Function declarations
-void systemInit();
-void setLEDBuiltIn(uint8_t state);
+// (3) Macros definitions
+#define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
 
+// (4) Function declarations
+void systemInit();
+void setLEDBuiltIn(bool run=false, bool cal=false, bool err=false);
 
 #endif // SYSTEM_H
