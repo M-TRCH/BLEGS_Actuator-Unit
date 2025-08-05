@@ -1,6 +1,6 @@
 
-#include "SVPWM.h"
-#include "System.h"
+#include "svpwm.h"
+#include "system.h"
 
 void setPWMdutyCycle(float dutyA, float dutyB, float dutyC) 
 {
@@ -58,28 +58,33 @@ void applySVPWM(float v_alpha, float v_beta)
  * @param   amplitude  Amplitude of the voltage vector 
  * @param   velocity   Angular velocity of the rotating vector (Hz)
  * @param   sampleTime Time step for the simulation (ms)
+ * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
  */ 
-void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime)
+void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool isCCW)
 {
     static float electrical_angle = 0.0f; // Initialize the electrical angle
     velocity *= 2.0f * PI; // Convert velocity to radians per second 
     
-    while (true)
-    {    
-        // 0) Using the electrical angle to calculate the αβ components
-        float v_alpha = amplitude * cos(electrical_angle);
-        float v_beta  = amplitude * sin(electrical_angle);
+    // 0) Using the electrical angle to calculate the αβ components
+    float v_alpha = amplitude * cos(electrical_angle);
+    float v_beta  = amplitude * sin(electrical_angle);
 
-        // 1) Apply the SVPWM transformation
-        applySVPWM(v_alpha, v_beta);
+    // 1) Apply the SVPWM transformation
+    applySVPWM(v_alpha, v_beta);
 
-        // 2) Increment the electrical angle based on the velocity and sample time
-        float Ts = sampleTime / 1000.0f;
+    // 2) Increment the electrical angle based on the velocity and sample time
+    float Ts = sampleTime / 1000.0f;
+    if (isCCW)
+    {
         electrical_angle += velocity * Ts;
         if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
-        
-        delay(sampleTime); 
     }
+    else
+    {   
+        electrical_angle -= velocity * Ts;
+        if (electrical_angle < 0.0f) electrical_angle += 2.0f * PI;
+    }
+    delay(sampleTime); 
 }
 
 void applySVPWM(float v_d, float v_q, float theta_rad)
@@ -138,22 +143,27 @@ void applySVPWM(float v_d, float v_q, float theta_rad)
  * @param   amplitude  Amplitude of the voltage vector 
  * @param   velocity   Angular velocity of the rotating vector (Hz)
  * @param   sampleTime Time step for the simulation (ms)
+ * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
  */ 
-void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime)
+void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bool isCCW)
 {
     static float electrical_angle = 0.0f; // Initialize the electrical angle
     velocity *= 2.0f * PI; // Convert velocity to radians per second 
     
-    while (true)
-    {    
-        // 0) Apply the SVPWM transformation
-        applySVPWM(v_d, v_q, electrical_angle);
+    // 0) Apply the SVPWM transformation
+    applySVPWM(v_d, v_q, electrical_angle);
 
-        // 1) Increment the electrical angle based on the velocity and sample time
-        float Ts = sampleTime / 1000.0f;
+    // 1) Increment the electrical angle based on the velocity and sample time
+    float Ts = sampleTime / 1000.0f;
+    if (isCCW)
+    {
         electrical_angle += velocity * Ts;
         if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
-        
-        delay(sampleTime); 
     }
+    else
+    {   
+        electrical_angle -= velocity * Ts;
+        if (electrical_angle < 0.0f) electrical_angle += 2.0f * PI;
+    }
+    delay(sampleTime); 
 }

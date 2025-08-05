@@ -1,5 +1,5 @@
 
-#include "System.h"
+#include "system.h"
 
 HardwareSerial Serial3(RX3_PIN, TX3_PIN); // RX, TX pins for Serial3
 
