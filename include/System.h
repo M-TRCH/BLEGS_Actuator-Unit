@@ -29,10 +29,10 @@
 #define TX3_PIN         PA9
 
 // (1) System constants
-#define SERIAL3_BAUDRATE        2000000u
-#define ANALOG_READ_RESOLUTION  12u
-#define PWM_FREQUENCY           20000u
-#define PWM_RESOLUTION          12u  
+#define SERIAL3_BAUDRATE        2000000U
+#define ANALOG_READ_RESOLUTION  12U
+#define PWM_FREQUENCY           20000U
+#define PWM_RESOLUTION          12U  
 
 // (2) Object definitions
 extern HardwareSerial Serial3;
