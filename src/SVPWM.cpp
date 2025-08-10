@@ -1,6 +1,5 @@
 
 #include "svpwm.h"
-#include "system.h"
 
 void setPWMdutyCycle(float dutyA, float dutyB, float dutyC) 
 {
@@ -60,7 +59,7 @@ void applySVPWM(float v_alpha, float v_beta)
  * @param   sampleTime Time step for the simulation (ms)
  * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
  */ 
-void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool isCCW)
+void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool ccw)
 {
     static float electrical_angle = 0.0f; // Initialize the electrical angle
     velocity *= 2.0f * PI; // Convert velocity to radians per second 
@@ -74,7 +73,7 @@ void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool 
 
     // 2) Increment the electrical angle based on the velocity and sample time
     float Ts = sampleTime / 1000.0f;
-    if (isCCW)
+    if (ccw)
     {
         electrical_angle += velocity * Ts;
         if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
@@ -145,7 +144,7 @@ void applySVPWM(float v_d, float v_q, float theta_rad)
  * @param   sampleTime Time step for the simulation (ms)
  * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
  */ 
-void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bool isCCW)
+void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bool ccw)
 {
     static float electrical_angle = 0.0f; // Initialize the electrical angle
     velocity *= 2.0f * PI; // Convert velocity to radians per second 
@@ -155,7 +154,7 @@ void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bo
 
     // 1) Increment the electrical angle based on the velocity and sample time
     float Ts = sampleTime / 1000.0f;
-    if (isCCW)
+    if (ccw)
     {
         electrical_angle += velocity * Ts;
         if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
