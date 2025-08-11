@@ -7,6 +7,7 @@ void systemInit()
 {
     // Initialize Serial3 with the defined baud rate
     Serial3.begin(SERIAL3_BAUDRATE); // Initialize Serial3 with defined baud rate
+    Serial3.setTimeout(SERIAL3_TIMEOUT); // Set timeout for Serial3
 
     // Initialize pins
     pinMode(LED_RUN_PIN, OUTPUT);

@@ -1,6 +1,17 @@
  
 #include "motor_control.h"
 
+// (1) Global variables
+// svpwm variables
+float vq_cmd = 0.0f;    // Current q-axis voltage command
+float vd_cmd = 0.0f;    // Current d-axis voltage command
+// scheduling variables
+unsigned long last_svpwm_time = 0;               // Last SVPWM time in microseconds
+unsigned long last_position_control_time = 0;    // Last position control time in microseconds
+unsigned long last_debug_time = 0;                // Last debug time in microseconds
+// position control variables
+PIDController position_pid(0.001f, 0.0f, 0.0f);    // Position PID controller
+
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
  * @param   v_mag       Magnitude of the voltage vector 
@@ -109,4 +120,13 @@ float findRotorOffset(float v_mag, float step_angle, bool ccw, float revolution)
     return offset_fine; // Return encoder offset in counts
 }
 
+void svpwmControl(float vd_ref, float vq_ref, float angle_rad)
+{
+    applySVPWM(vd_ref, vq_ref, angle_rad); // Apply SVPWM with rotor angle in radians
+}
+
+void positionControl(float measured, float *output)
+{
+    *output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
+}
 

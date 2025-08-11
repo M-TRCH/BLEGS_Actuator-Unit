@@ -30,6 +30,7 @@
 
 // (1) System constants
 #define SERIAL3_BAUDRATE        2000000U
+#define SERIAL3_TIMEOUT         50U
 #define ANALOG_READ_RESOLUTION  12U
 #define PWM_FREQUENCY           20000U
 #define PWM_RESOLUTION          12U  

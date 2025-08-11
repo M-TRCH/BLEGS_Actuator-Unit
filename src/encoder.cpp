@@ -33,5 +33,5 @@ float readRotorAngle(bool ccw)
     {   
         rotor_angle_with_offset += _14_BIT; // compensate for negative angles
     }
-    return rotor_angle_with_offset * 360.0 * POLE_PAIRS / _14_BIT;    // compute rotor angle in degrees
+    return rotor_angle_with_offset * RAW_TO_ROTOR_ANGLE;    // compute rotor angle in degrees
 }
