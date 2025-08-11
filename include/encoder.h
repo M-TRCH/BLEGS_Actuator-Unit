@@ -12,16 +12,22 @@
 #define SPI_SPEED           200000
 #define _14_BIT             16384
 #define RAW_TO_ROTOR_ANGLE  (360.0 * POLE_PAIRS / _14_BIT)
+#define RAW_TO_DEGREE       (360.0 / _14_BIT)
 #define _14_BIT_DIVIDED_PP  (_14_BIT / POLE_PAIRS)
 #define CCW                 true
 #define CW                  false
 
 // (1) Global variables
+// Encoder readings
 extern uint16_t raw_rotor_angle; 
+// Rotor offsets
 extern float const_rotor_offset_cw; 
 extern float const_rotor_offset_ccw;
 extern float rotor_offset_cw;       
 extern float rotor_offset_ccw;       
+// Rotor angle tracking
+extern int rotor_turns;
+extern float last_raw_angle_deg;
 
 // (2) Objects definition
 extern AS5047P rotor;
@@ -30,5 +36,7 @@ extern AS5047P rotor;
 void encoderInit();
 void updateRawRotorAngle();
 float readRotorAngle(bool ccw=true);
+void updateMultiTurnTracking();
+float readRotorAbsoluteAngle();
 
 #endif // ENCODER_H

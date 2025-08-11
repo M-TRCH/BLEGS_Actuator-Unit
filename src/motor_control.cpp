@@ -8,9 +8,10 @@ float vd_cmd = 0.0f;    // Current d-axis voltage command
 // scheduling variables
 unsigned long last_svpwm_time = 0;               // Last SVPWM time in microseconds
 unsigned long last_position_control_time = 0;    // Last position control time in microseconds
-unsigned long last_debug_time = 0;                // Last debug time in microseconds
+unsigned long last_debug_time = 0;               // Last debug time in microseconds
+unsigned long last_s_curve_time = 0;             // Last S-curve time in microseconds
 // position control variables
-PIDController position_pid(0.001f, 0.0f, 0.0f);    // Position PID controller
+PIDController position_pid(0.004f, 0.002f, 0.0f, 2000.0f, 20.0f, 5.0f);    // Position PID controller
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
@@ -125,6 +126,10 @@ void svpwmControl(float vd_ref, float vq_ref, float angle_rad)
     applySVPWM(vd_ref, vq_ref, angle_rad); // Apply SVPWM with rotor angle in radians
 }
 
+/* @brief   Position control using PID
+ * @param   measured   The measured position
+ * @param   output     Pointer to the output voltage
+ */
 void positionControl(float measured, float *output)
 {
     *output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
