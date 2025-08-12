@@ -37,9 +37,12 @@ void loop()
       #endif
 
       #ifdef POSITION_CONTROL_WITH_SCURVE
-          float new_setpoint = Serial3.parseFloat();
-          float current_pos = readRotorAbsoluteAngle();
-          scurvePlan(current_pos, new_setpoint, 2000.0f, 2000.0f, 40000.0f);
+        float new_setpoint = Serial3.parseFloat();
+        float current_pos = readRotorAbsoluteAngle();
+        if (new_setpoint != position_pid.setpoint) 
+        {
+          scurvePlan(current_pos, new_setpoint, 4000.0f, 18000.0f * 10.0f);
+        }
       #endif
     }
   }    
@@ -58,16 +61,6 @@ void loop()
     svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
   }
 
-  // S-curve control
-  if (current_time - last_s_curve_time >= S_CURVE_PERIOD_US) 
-  {
-    last_s_curve_time = current_time;
-  
-    #ifdef POSITION_CONTROL_WITH_SCURVE
-      position_pid.setpoint = scurveGetPosition((current_time - start_scurve_time) / 1e6f);
-    #endif
-  }
-
   // Position controller
   if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
   {
@@ -78,7 +71,8 @@ void loop()
     #endif
     
     #ifdef POSITION_CONTROL_WITH_SCURVE
-        positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+      position_pid.setpoint = scurveGetPosition((current_time - start_scurve_time) / 1e6f);
+      positionControl(readRotorAbsoluteAngle(), &vq_cmd);
     #endif
   }
 

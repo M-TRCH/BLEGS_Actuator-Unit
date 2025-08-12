@@ -29,13 +29,12 @@ extern float vd_cmd; // Current d-axis voltage command
 extern unsigned long last_svpwm_time;               // Last SVPWM time in microseconds
 extern unsigned long last_position_control_time;    // Last position control time in microseconds
 extern unsigned long last_debug_time;               // Last debug time in microseconds
-extern unsigned long last_s_curve_time;             // Last S-curve time in microseconds
 // position control variables
 extern PIDController position_pid;                  // Position PID controller
 
 // (2) Configuration
-#define POSITION_CONTROL_ONLY
-// #define POSITION_CONTROL_WITH_SCURVE
+// #define POSITION_CONTROL_ONLY
+#define POSITION_CONTROL_WITH_SCURVE
 
 void findConstOffset(bool active, float v_mag, float step_angle, float step_offset, bool ccw = true);
 float findRotorOffset(float v_mag, float step_angle, bool ccw = true, float revolution = 1.0f);

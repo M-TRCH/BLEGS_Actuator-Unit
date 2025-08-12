@@ -11,9 +11,9 @@ unsigned long start_scurve_time = 0;
  * @param   amax    Maximum acceleration
  * @param   jmax    Maximum jerk
  */
-void scurvePlan(float start, float end, float vmax, float amax, float jmax) 
+void scurvePlan(float start, float end, float vmax, float amax) 
 {
-    scurve.plan(start, end, vmax, amax, jmax);
+    scurve.plan(start, end, vmax, amax);
     scurve_time = 0.0f;
     start_scurve_time = micros(); // Record the start time in microseconds
 }

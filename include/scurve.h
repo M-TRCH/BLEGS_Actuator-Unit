@@ -9,7 +9,7 @@ extern ScurveProfile scurve;
 extern float scurve_time;
 extern unsigned long start_scurve_time;
 
-void scurvePlan(float start, float end, float vmax, float amax, float jmax);
+void scurvePlan(float start, float end, float vmax, float amax);
 void scurveUpdateTime(float dt);
 float scurveGetPosition(float time);
 

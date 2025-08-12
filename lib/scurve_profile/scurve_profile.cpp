@@ -1,63 +1,64 @@
-
 #include "scurve_profile.h"
 #include <cmath>
 
-/* @brief   Plan the S-curve profile parameters
+/* @brief   Plan the trapezoidal profile parameters
  * @param   start   Start position
  * @param   end     End position
  * @param   v_max   Max velocity
  * @param   a_max   Max acceleration
- * @param   j_max   Max jerk
  */
-void ScurveProfile::plan(float start, float end, float v_max, float a_max, float j_max) 
+void ScurveProfile::plan(float start, float end, float v_max, float a_max) 
 {
     q0 = start;
     q1 = end;
     vmax = v_max;
     amax = a_max;
-    jmax = j_max;
 
     float dq = fabs(q1 - q0);
+    float dir = (q1 > q0) ? 1.0f : -1.0f;
 
-    Tj = amax / jmax;
-    Ta = Tj + (vmax - amax * Tj) / amax;
-    Tv = (dq - (amax * Ta * Ta + amax * Tj * Tj) / 2) / vmax;
-    if (Tv < 0) Tv = 0;
+    // Calculate acceleration time
+    Ta = vmax / amax;
+    float d_acc = 0.5f * amax * Ta * Ta;
 
-    totalTime = 2 * Ta + Tv;
+    // Calculate constant velocity time
+    Tv = (dq - 2.0f * d_acc) / vmax;
+    if (Tv < 0) {
+        // Triangle profile (no constant velocity)
+        Ta = sqrt(dq / amax);
+        Tv = 0.0f;
+    }
+
+    totalTime = 2.0f * Ta + Tv;
+
+    // Set unused S-curve variables to zero for safety
+    jmax = 0.0f;
+    Tj = 0.0f;
 }
 
-/* @brief   Get the position at time t
+/* @brief   Get the position at time t (trapezoidal profile)
  * @param   t       Time in seconds
- * @return  Position in radians
+ * @return  Position in units of q0/q1
  */
 float ScurveProfile::getPosition(float t) 
 {
+    float dq = fabs(q1 - q0);
     float dir = (q1 > q0) ? 1.0f : -1.0f;
-    float pos = q0;
 
     if (t < 0) return q0;
     if (t > totalTime) return q1;
 
-    if (t < Tj) {
-        pos += dir * (jmax * t * t * t / 6.0f);
-    } else if (t < (Ta - Tj)) {
-        pos += dir * (amax / 6.0f * (3 * t * t - 3 * Tj * t + Tj * Tj));
-    } else if (t < Ta) {
-        float dt = t - (Ta - Tj);
-        pos += dir * (amax * (Ta - Tj) * (Ta - Tj) / 2.0f + amax * (Ta - Tj) * dt + jmax * dt * dt * dt / 6.0f - amax * dt * dt / 2.0f);
+    if (t < Ta) {
+        // Acceleration phase
+        return q0 + dir * 0.5f * amax * t * t;
     } else if (t < (Ta + Tv)) {
-        pos += dir * (amax * Ta * Ta / 2.0f + vmax * (t - Ta));
-    } else if (t < (Ta + Tv + Tj)) {
-        float dt = t - (Ta + Tv);
-        pos += dir * (amax * Ta * Ta / 2.0f + vmax * Tv + vmax * dt - jmax * dt * dt * dt / 6.0f);
-    } else if (t < (totalTime - Tj)) {
-        float dt = t - (Ta + Tv + Tj);
-        pos += dir * (amax * Ta * Ta / 2.0f + vmax * Tv + vmax * Tj - amax / 6.0f * (3 * dt * dt + 3 * Tj * dt + Tj * Tj));
+        // Constant velocity phase
+        float d_acc = 0.5f * amax * Ta * Ta;
+        return q0 + dir * (d_acc + vmax * (t - Ta));
     } else {
-        float dt = t - (totalTime - Tj);
-        pos = q1 - dir * (jmax * (Tj - dt) * (Tj - dt) * (Tj - dt) / 6.0f);
+        // Deceleration phase
+        float td = t - (Ta + Tv);
+        float d_acc = 0.5f * amax * Ta * Ta;
+        return q0 + dir * (d_acc + vmax * Tv + vmax * td - 0.5f * amax * td * td);
     }
-
-    return pos;
 }

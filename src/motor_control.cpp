@@ -9,9 +9,8 @@ float vd_cmd = 0.0f;    // Current d-axis voltage command
 unsigned long last_svpwm_time = 0;               // Last SVPWM time in microseconds
 unsigned long last_position_control_time = 0;    // Last position control time in microseconds
 unsigned long last_debug_time = 0;               // Last debug time in microseconds
-unsigned long last_s_curve_time = 0;             // Last S-curve time in microseconds
 // position control variables
-PIDController position_pid(0.004f, 0.002f, 0.0f, 2000.0f, 20.0f, 5.0f);    // Position PID controller
+PIDController position_pid(0.04f, 0.02f, 0.0f, 4000.0f, 20.0f, 0.5f);    // Position PID controller
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
