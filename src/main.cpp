@@ -22,12 +22,12 @@ void setup()
   setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
   // Set default vd and vq for commutation test
   vd_cmd = 0.0;  
-  vq_cmd = 1.5;   
+  vq_cmd = 1.5;     
 }
   
 void loop() 
 {
-  // Update position setpoint
+  // Update position setpoint for debugging
   if (Serial3.available())
   {
     if (Serial3.find('#'))
@@ -41,7 +41,8 @@ void loop()
         float current_pos = readRotorAbsoluteAngle();
         if (new_setpoint != position_pid.setpoint) 
         {
-          scurvePlan(current_pos, new_setpoint, 4000.0f, 18000.0f * 10.0f);
+          scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+          start_scurve_time = micros(); // Record the start time in microseconds
         }
       #endif
     }
@@ -71,7 +72,7 @@ void loop()
     #endif
     
     #ifdef POSITION_CONTROL_WITH_SCURVE
-      position_pid.setpoint = scurveGetPosition((current_time - start_scurve_time) / 1e6f);
+      position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
       positionControl(readRotorAbsoluteAngle(), &vq_cmd);
     #endif
   }
@@ -81,8 +82,8 @@ void loop()
   { 
     last_debug_time = current_time;
 
-    Serial3.print(position_pid.setpoint);
+    Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
     Serial3.print("\t");
-    Serial3.println(readRotorAbsoluteAngle());
+    Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
   }
 }

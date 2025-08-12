@@ -1,21 +1,28 @@
 #include "scurve_profile.h"
 #include <cmath>
 
-/* @brief   Plan the trapezoidal profile parameters
+/* @brief   Plan the trapezoidal profile parameters with auto amax limit
  * @param   start   Start position
  * @param   end     End position
  * @param   v_max   Max velocity
- * @param   a_max   Max acceleration
+ * @param   a_max   Max acceleration (suggested)
+ * @param   amax_min Minimum acceleration limit
+ * @param   amax_max Maximum acceleration limit
  */
-void ScurveProfile::plan(float start, float end, float v_max, float a_max) 
+void ScurveProfile::plan(float start, float end, float v_max, float a_max, float amax_min, float amax_max) 
 {
     q0 = start;
     q1 = end;
     vmax = v_max;
-    amax = a_max;
 
     float dq = fabs(q1 - q0);
-    float dir = (q1 > q0) ? 1.0f : -1.0f;
+
+    // Auto adjust amax based on distance and velocity, within min/max limits
+    float amax_auto = vmax * vmax / (dq > 1e-6f ? dq : 1e-6f);
+    amax = fmax(amax_min, fmin(amax_max, fmin(a_max, amax_auto)));
+    amax = fmax(amax, 1e-6f); // Prevent divide by zero
+
+    this->amax = amax;
 
     // Calculate acceleration time
     Ta = vmax / amax;

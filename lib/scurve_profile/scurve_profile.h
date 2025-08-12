@@ -15,7 +15,7 @@ public:
     float totalTime; // Total profile time
 
     // Plan the S-curve profile parameters
-    void plan(float start, float end, float v_max, float a_max); 
+    void plan(float start, float end, float v_max, float a_max, float amax_min, float amax_max);
 
     // Get position at time t
     float getPosition(float t);
