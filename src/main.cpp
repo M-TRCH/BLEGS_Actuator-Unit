@@ -18,7 +18,10 @@ void setup()
 
   // Start up sequence 
   setPWMdutyCycle();  // Set initial PWM duty cycle to zero
-  // while(!SW_START_PRESSING);
+  while(!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE)
+  {
+
+  }
   setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
   // Set default vd and vq for commutation test
   vd_cmd = 0.0;  

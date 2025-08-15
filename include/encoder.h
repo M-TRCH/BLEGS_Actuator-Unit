@@ -7,7 +7,8 @@
 #include "AS5047P.h"
 #include "system.h"
 #include "motor_conf.h"
-
+#include "config.h" 
+    
 // (0) Constants values
 #define SPI_SPEED           200000
 #define _14_BIT             16384
@@ -32,7 +33,6 @@ extern float last_raw_angle_deg;
 // (2) Objects definition
 extern AS5047P rotor;
 
-// (3) Function prototypes
 void encoderInit();
 void updateRawRotorAngle();
 float readRotorAngle(bool ccw=true);

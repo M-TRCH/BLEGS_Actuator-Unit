@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
+#include "config.h" 
 
 // (0) Pin definitions for the STM32G431CBU6 board
 #define LED_RUN_PIN     PC10
@@ -42,7 +43,6 @@ extern HardwareSerial Serial3;
 // (3) Macros definitions
 #define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
 
-// (4) Function declarations
 void systemInit();
 void setLEDBuiltIn(bool run=false, bool cal=false, bool err=false);
 
