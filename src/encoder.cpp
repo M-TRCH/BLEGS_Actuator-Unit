@@ -27,7 +27,11 @@ void encoderInit()
 
 void updateRawRotorAngle()
 {
-    raw_rotor_angle = _14_BIT - rotor.readAngleRaw(); 
+    #if RAW_ROTOR_ANGLE_INVERT == true
+        raw_rotor_angle = _14_BIT - rotor.readAngleRaw(); 
+    #else
+        raw_rotor_angle = rotor.readAngleRaw(); 
+    #endif
 }
 
 float readRotorAngle(bool ccw)
