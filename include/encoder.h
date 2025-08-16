@@ -41,7 +41,7 @@ void encoderInit();
 void updateRawRotorAngle();
 float readRotorAngle(bool ccw=true);
 void updateMultiTurnTracking();
-float readRotorAbsoluteAngle(bool with_offset=false);
+float readRotorAbsoluteAngle(bool with_offset=true);
 float computeOffsetAngleIK(float angle_ik, float angle_mea);
 
 #endif // ENCODER_H

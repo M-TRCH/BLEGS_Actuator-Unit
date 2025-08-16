@@ -4,6 +4,7 @@
 #include "encoder.h"
 #include "motor_control.h"
 #include "scurve.h"
+#include "config.h"
 
 void setup() 
 {
@@ -35,6 +36,9 @@ void setup()
         Serial3.print("\t\tFinal Absolute: ");
         Serial3.println(abs_angle_with_offset, SERIAL3_DECIMAL_PLACES);
 
+        // Set up start s-curve setpoint with calibration angle
+        scurve.plan(abs_angle_with_offset, HIP_PITCH_CALIBRATION_ANGLE, 2000.0f, 80000.0f, 1000.0f, 80000.0f);
+        start_scurve_time = micros(); // Record the start time in microseconds
         delay(10);
     }
     setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
@@ -56,12 +60,16 @@ void loop()
 
             #ifdef POSITION_CONTROL_WITH_SCURVE
                 float new_setpoint = Serial3.parseFloat();
-                float current_pos = readRotorAbsoluteAngle();
+                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
                 if (new_setpoint != position_pid.setpoint) 
                 {
                     scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
                     start_scurve_time = micros(); // Record the start time in microseconds
                 }
+            #endif
+
+            #ifdef LEG_CONTROL
+                // Implement leg control logic here
             #endif
         }
     }    

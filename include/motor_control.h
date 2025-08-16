@@ -32,10 +32,6 @@ extern unsigned long last_debug_time;               // Last debug time in micros
 // position control variables
 extern PIDController position_pid;                  // Position PID controller
 
-// (2) Configuration
-// #define POSITION_CONTROL_ONLY
-#define POSITION_CONTROL_WITH_SCURVE
-
 void findConstOffset(bool active, float v_mag, float step_angle, float step_offset, bool ccw = true);
 float findRotorOffset(float v_mag, float step_angle, bool ccw = true, float revolution = 1.0f);
 void svpwmControl(float vd_ref = 0.0f, float vq_ref = 0.0f, float angle_rad = 0.0f);

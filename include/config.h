@@ -12,7 +12,12 @@
 #define KNEE_PITCH  1
 #define MOTOR_ROLE  HIP_PITCH                   // Define the motor role (HIP_PITCH or KNEE_PITCH)
 
-// (2) Sensor configuration
+// (2) Control configuration
+// #define POSITION_CONTROL_ONLY
+#define POSITION_CONTROL_WITH_SCURVE
+// #define LEG_CONTROL
+
+// (3) Sensor configuration
 #define RAW_ROTOR_ANGLE_INVERT          true    // Set to true if the raw rotor angle is inverted.   
 
 #if MOTOR_ROLE == HIP_PITCH
@@ -21,7 +26,7 @@
     #define ROTOR_ABSOLUTE_ANGLE_INVERT     true    
 #endif
 
-// (3) Inverse kinematics configuration
+// (4) Inverse kinematics configuration
 #define HIP_PITCH_CALIBRATION_ANGLE     -152.4f // Calibration angle for hip pitch
 #define KNEE_PITCH_CALIBRATION_ANGLE    136.6f  // Calibration angle for knee pitch
 
