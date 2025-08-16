@@ -17,6 +17,8 @@
 #define _14_BIT_DIVIDED_PP  (_14_BIT / POLE_PAIRS)
 #define CCW                 true
 #define CW                  false
+#define WITH_ABS_OFFSET     true
+#define WITHOUT_ABS_OFFSET  false
 
 // (1) Global variables
 // Encoder readings
@@ -26,17 +28,20 @@ extern float const_rotor_offset_cw;
 extern float const_rotor_offset_ccw;
 extern float rotor_offset_cw;       
 extern float rotor_offset_ccw;       
-// Rotor angle tracking
+// Absolute rotor angle 
 extern int rotor_turns;
 extern float last_raw_angle_deg;
+// Absolute rotor angle offset
+extern float rotor_offset_abs;
 
 // (2) Objects definition
 extern AS5047P rotor;
 
-void encoderInit();
+void encoderInit(); 
 void updateRawRotorAngle();
 float readRotorAngle(bool ccw=true);
 void updateMultiTurnTracking();
-float readRotorAbsoluteAngle();
+float readRotorAbsoluteAngle(bool with_offset=false);
+float computeOffsetAngleIK(float angle_ik, float angle_mea);
 
 #endif // ENCODER_H

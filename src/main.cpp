@@ -21,7 +21,20 @@ void setup()
     while(!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE)
     {
         updateRawRotorAngle();  
-        Serial3.println(raw_rotor_angle);
+        updateMultiTurnTracking();
+
+        float abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
+        float abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+
+        Serial3.print("Turns: ");
+        Serial3.print((float)rotor_turns, SERIAL3_DECIMAL_PLACES);
+        Serial3.print("\t\tAbsolute: ");
+        Serial3.print(abs_angle, SERIAL3_DECIMAL_PLACES);
+        Serial3.print("\t\tOffset: ");
+        Serial3.print(computeOffsetAngleIK(HIP_PITCH_CALIBRATION_ANGLE, abs_angle), SERIAL3_DECIMAL_PLACES);
+        Serial3.print("\t\tFinal Absolute: ");
+        Serial3.println(abs_angle_with_offset, SERIAL3_DECIMAL_PLACES);
+
         delay(10);
     }
     setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
@@ -29,8 +42,8 @@ void setup()
     vd_cmd = 0.0;  
     vq_cmd = 1.5;     
 }
-  
-void loop() 
+
+void loop()
 {
     // Update position setpoint for debugging
     if (Serial3.available())
@@ -67,7 +80,7 @@ void loop()
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
-  // Position controller
+    // Position controller
     if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
     {
         last_position_control_time = current_time;

@@ -16,9 +16,13 @@
 #define RAW_ROTOR_ANGLE_INVERT          true    // Set to true if the raw rotor angle is inverted.   
 
 #if MOTOR_ROLE == HIP_PITCH
-    #define ROTOR_ABSOLUTE_ANGLE_INVERT     false   // Set to true if the absolute rotor angle is inverted.
+    #define ROTOR_ABSOLUTE_ANGLE_INVERT     false   
 #elif MOTOR_ROLE == KNEE_PITCH
     #define ROTOR_ABSOLUTE_ANGLE_INVERT     true    
 #endif
+
+// (3) Inverse kinematics configuration
+#define HIP_PITCH_CALIBRATION_ANGLE     -152.4f // Calibration angle for hip pitch
+#define KNEE_PITCH_CALIBRATION_ANGLE    136.6f  // Calibration angle for knee pitch
 
 #endif // CONFIG_H

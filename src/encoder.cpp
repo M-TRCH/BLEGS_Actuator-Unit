@@ -8,9 +8,11 @@ float const_rotor_offset_cw = 848.0f;       // Constant offset for clockwise rot
 float const_rotor_offset_ccw = 693.0f;      // Constant offset for counter-clockwise rotation
 float rotor_offset_cw = 0.0f;               // Offset for clockwise rotation
 float rotor_offset_ccw = 0.0f;              // Offset for counter-clockwise rotation
-// Rotor angle tracking
+// Absolute rotor angle
 int rotor_turns = 0;
 float last_raw_angle_deg = 0.0f;
+// Absolute rotor angle offset
+float rotor_offset_abs = 1353.67f;
 
 void encoderInit() 
 {
@@ -56,9 +58,23 @@ void updateMultiTurnTracking()
     last_raw_angle_deg = raw_angle_deg;
 }
 
-float readRotorAbsoluteAngle()
+float readRotorAbsoluteAngle(bool with_offset)
 {
-    float angle_deg = raw_rotor_angle * RAW_TO_DEGREE;
+    float angle_deg = raw_rotor_angle * RAW_TO_DEGREE; 
     float absolute_pos = rotor_turns * 360.0f + angle_deg;
-    return absolute_pos;
+    if (with_offset) 
+    {
+        ROTOR_ABSOLUTE_ANGLE_INVERT ? absolute_pos += rotor_offset_abs : absolute_pos -= rotor_offset_abs;
+    }
+    return ROTOR_ABSOLUTE_ANGLE_INVERT ? -absolute_pos : absolute_pos;
+}
+
+/*  @brief Computes     the offset angle for inverse kinematics
+ *  @param angle_ik     The angle from inverse kinematics
+ *  @param angle_mea    The measured angle
+ */
+float computeOffsetAngleIK(float angle_ik, float angle_mea)
+{
+    angle_ik *= GEAR_RATIO;         // Convert IK angle to absolute angle
+    return angle_mea - angle_ik;    // Compute the offset angle
 }
