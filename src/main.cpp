@@ -5,15 +5,25 @@
 #include "motor_control.h"
 #include "scurve.h"
 #include "config.h"
+#include "eeprom_utils.h"
 
 void setup() 
 {
     systemInit();   // Initialize the system
     encoderInit();  // Initialize the encoder  
+    #if WRITE_MOTOR_DATA_TO_EEPROM 
+        #if MOTOR_ROLE == HIP_PITCH
+            saveMotorDataToEEPROM(324.0f, 150.0f, 1353.67f);
+        #elif MOTOR_ROLE == KNEE_PITCH
+            saveMotorDataToEEPROM(0.0f, 0.0f, 0.0f);
+        #endif
+    #endif
 
     // Motor alignment
     setLEDBuiltIn(false, true, false);  // Set CAL LED on, others off
     findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
+    // Load motor data from EEPROM
+    loadMotorDataFromEEPROM(const_rotor_offset_cw, const_rotor_offset_ccw, rotor_offset_abs);
     rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
     rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
 

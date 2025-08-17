@@ -4,15 +4,15 @@
 AS5047P rotor(CS_ENC_PIN, SPI_SPEED);
 uint16_t raw_rotor_angle = 0;               // Global variable to hold the raw rotor angle
 // Rotor offsets
-float const_rotor_offset_cw = 324.0f;       // Constant offset for clockwise rotation
-float const_rotor_offset_ccw = 150.0f;      // Constant offset for counter-clockwise rotation
+float const_rotor_offset_cw = 0.0f;       // Constant offset for clockwise rotation
+float const_rotor_offset_ccw = 0.0f;      // Constant offset for counter-clockwise rotation
 float rotor_offset_cw = 0.0f;               // Offset for clockwise rotation
 float rotor_offset_ccw = 0.0f;              // Offset for counter-clockwise rotation
 // Absolute rotor angle
 int rotor_turns = 0;
 float last_raw_angle_deg = 0.0f;
 // Absolute rotor angle offset
-float rotor_offset_abs = 1353.67f;
+float rotor_offset_abs = 0.0f;
 
 void encoderInit() 
 {

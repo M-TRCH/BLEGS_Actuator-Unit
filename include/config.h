@@ -11,6 +11,7 @@
 #define HIP_PITCH   0
 #define KNEE_PITCH  1
 #define MOTOR_ROLE  HIP_PITCH                   // Define the motor role (HIP_PITCH or KNEE_PITCH)
+#define WRITE_MOTOR_DATA_TO_EEPROM      false   // Enable writing motor data to EEPROM
 
 // (2) Control configuration
 // #define POSITION_CONTROL_ONLY
