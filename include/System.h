@@ -42,6 +42,7 @@ extern HardwareSerial Serial3;
 
 // (3) Macros definitions
 #define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
+#define SW_STOP_PRESSING   (digitalRead(SW_STOP_PIN) == LOW)
 
 void systemInit();
 void setLEDBuiltIn(bool run=false, bool cal=false, bool err=false);

@@ -13,13 +13,14 @@ void setup()
 
     // Motor alignment
     setLEDBuiltIn(false, true, false);  // Set CAL LED on, others off
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CW); 
+    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
     rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
     rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
 
     // Start up sequence 
     setPWMdutyCycle();  // Set initial PWM duty cycle to zero
-    while(!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE)
+    uint32_t last_start_time = millis();
+    while((!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE) || (millis() - last_start_time < 3000))
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
@@ -37,14 +38,14 @@ void setup()
         Serial3.println(abs_angle_with_offset, SERIAL3_DECIMAL_PLACES);
 
         // Set up start s-curve setpoint with calibration angle
-        scurve.plan(abs_angle_with_offset, HIP_PITCH_CALIBRATION_ANGLE, 2000.0f, 80000.0f, 1000.0f, 80000.0f);
+        scurve.plan(abs_angle_with_offset, HIP_PITCH_DEFAULT_ANGLE, 2000.0f, 80000.0f, 1000.0f, 80000.0f);
         start_scurve_time = micros(); // Record the start time in microseconds
         delay(10);
     }
     setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
-    vq_cmd = 1.5;     
+    vq_cmd = 18.5;     
 }
 
 void loop()

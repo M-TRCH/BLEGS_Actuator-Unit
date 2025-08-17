@@ -5,7 +5,7 @@
 #include <Arduino.h>
 
 // (0) General configuration
-#define WAIT_START_PRESSING_ENABLE      true    // Enable waiting for start button press before starting the motor
+#define WAIT_START_PRESSING_ENABLE      false    // Enable waiting for start button press before starting the motor
 
 // (1) Motor configuration
 #define HIP_PITCH   0
@@ -29,5 +29,7 @@
 // (4) Inverse kinematics configuration
 #define HIP_PITCH_CALIBRATION_ANGLE     -152.4f // Calibration angle for hip pitch
 #define KNEE_PITCH_CALIBRATION_ANGLE    136.6f  // Calibration angle for knee pitch
+#define HIP_PITCH_DEFAULT_ANGLE         HIP_PITCH_CALIBRATION_ANGLE * GEAR_RATIO
+#define KNEE_PITCH_DEFAULT_ANGLE        KNEE_PITCH_CALIBRATION_ANGLE * GEAR_RATIO
 
 #endif // CONFIG_H
