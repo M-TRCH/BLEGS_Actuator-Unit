@@ -21,9 +21,9 @@
 #define RAW_ROTOR_ANGLE_INVERT          true    // Set to true if the raw rotor angle is inverted.   
 
 #if MOTOR_ROLE == HIP_PITCH
-    #define ROTOR_ABSOLUTE_ANGLE_INVERT     false   
+    
 #elif MOTOR_ROLE == KNEE_PITCH
-    #define ROTOR_ABSOLUTE_ANGLE_INVERT     true    
+
 #endif
 
 // (4) Inverse kinematics configuration

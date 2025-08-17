@@ -62,11 +62,8 @@ float readRotorAbsoluteAngle(bool with_offset)
 {
     float angle_deg = raw_rotor_angle * RAW_TO_DEGREE; 
     float absolute_pos = rotor_turns * 360.0f + angle_deg;
-    if (with_offset) 
-    {
-        ROTOR_ABSOLUTE_ANGLE_INVERT ? absolute_pos += rotor_offset_abs : absolute_pos -= rotor_offset_abs;
-    }
-    return ROTOR_ABSOLUTE_ANGLE_INVERT ? -absolute_pos : absolute_pos;
+    if (with_offset) absolute_pos -= rotor_offset_abs;
+    return absolute_pos; // return absolute position in degrees
 }
 
 /*  @brief Computes     the offset angle for inverse kinematics
