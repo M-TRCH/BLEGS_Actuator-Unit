@@ -6,6 +6,7 @@
 #include "scurve.h"
 #include "config.h"
 #include "eeprom_utils.h"
+#include "ik_utils.h"
 
 void setup() 
 {
@@ -86,7 +87,16 @@ void loop()
             #endif
 
             #ifdef LEG_CONTROL
-                // Implement leg control logic here
+                float x_target = Serial3.parseFloat();
+                float y_target = Serial3.parseFloat();
+                float theta1, theta2;
+                ik2dof.setTarget(x_target, y_target, true);
+                ik2dof.getJointAnglesDeg(theta1, theta2);
+                
+                Serial3.print("Theta1: ");
+                Serial3.print(theta1, SERIAL3_DECIMAL_PLACES);
+                Serial3.print("\t\tTheta2: ");
+                Serial3.println(theta2, SERIAL3_DECIMAL_PLACES);
             #endif
         }
     }    
@@ -125,8 +135,8 @@ void loop()
     { 
         last_debug_time = current_time;
 
-        Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
-        Serial3.print("\t");
-        Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
+        // Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
+        // Serial3.print("\t");
+        // Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
     }
 }

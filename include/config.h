@@ -5,7 +5,7 @@
 #include <Arduino.h>
 
 // (0) General configuration
-#define WAIT_START_PRESSING_ENABLE      true    // Enable waiting for start button press before starting the motor
+#define WAIT_START_PRESSING_ENABLE      false    // Enable waiting for start button press before starting the motor
 
 // (1) Motor configuration
 #define HIP_PITCH   0
@@ -16,7 +16,7 @@
 // (2) Control configuration
 // #define POSITION_CONTROL_ONLY
 // #define POSITION_CONTROL_WITH_SCURVE
-// #define LEG_CONTROL
+#define LEG_CONTROL
 
 // (3) Sensor configuration
 #define RAW_ROTOR_ANGLE_INVERT          true    // Set to true if the raw rotor angle is inverted.   
