@@ -30,6 +30,9 @@
 #define TX3_PIN         PA9
 
 // (1) System constants
+#define SERIAL2_BAUDRATE        9600U
+#define SERIAL2_TIMEOUT         50U
+#define SERIAL2_DECIMAL_PLACES  1
 #define SERIAL3_BAUDRATE        2000000U
 #define SERIAL3_TIMEOUT         50U
 #define SERIAL3_DECIMAL_PLACES  2
@@ -38,6 +41,7 @@
 #define PWM_RESOLUTION          12U
 
 // (2) Object definitions
+extern HardwareSerial Serial2;
 extern HardwareSerial Serial3;
 
 // (3) Macros definitions

@@ -1,13 +1,18 @@
 
 #include "system.h"
 
-HardwareSerial Serial3(RX3_PIN, TX3_PIN); // RX, TX pins for Serial3
+HardwareSerial Serial2(RX_PIN, TX_PIN);     // RX, TX pins for Serial2
+HardwareSerial Serial3(RX3_PIN, TX3_PIN);   // RX, TX pins for Serial3
 
 void systemInit() 
 {
+    // Initialize Serial2 with the defined baud rate
+    Serial2.begin(SERIAL2_BAUDRATE);
+    Serial2.setTimeout(SERIAL2_TIMEOUT);
+
     // Initialize Serial3 with the defined baud rate
-    Serial3.begin(SERIAL3_BAUDRATE); // Initialize Serial3 with defined baud rate
-    Serial3.setTimeout(SERIAL3_TIMEOUT); // Set timeout for Serial3
+    Serial3.begin(SERIAL3_BAUDRATE);
+    Serial3.setTimeout(SERIAL3_TIMEOUT);
 
     // Initialize pins
     pinMode(LED_RUN_PIN, OUTPUT);

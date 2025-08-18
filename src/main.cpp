@@ -13,15 +13,16 @@ void setup()
     encoderInit();  // Initialize the encoder  
     #if WRITE_MOTOR_DATA_TO_EEPROM 
         #if MOTOR_ROLE == HIP_PITCH
-            saveMotorDataToEEPROM(324.0f, 150.0f, 1353.67f);
+            saveMotorDataToEEPROM(1082.0f, 924.0f, 1286.72f);
         #elif MOTOR_ROLE == KNEE_PITCH
-            saveMotorDataToEEPROM(0.0f, 0.0f, 0.0f);
+            saveMotorDataToEEPROM(324.0f, 150.0f, 1353.67f);
         #endif
     #endif
 
     // Motor alignment
     setLEDBuiltIn(false, true, false);  // Set CAL LED on, others off
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
+    findConstOffset(false, 2.0f, 0.05f, 0.5f, CW); 
+    
     // Load motor data from EEPROM
     loadMotorDataFromEEPROM(const_rotor_offset_cw, const_rotor_offset_ccw, rotor_offset_abs);
     rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
@@ -53,11 +54,14 @@ void setup()
         scurve.plan(abs_angle_with_offset, default_angle, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
         start_scurve_time = micros(); // Record the start time in microseconds
         delay(10);
+
+        Serial2.println(abs_angle_with_offset); // for serial2 testing
     }
     setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
+    
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
-    vq_cmd = 18.5;     
+    vq_cmd = 0.0; //18.0;     
 }
 
 void loop()
