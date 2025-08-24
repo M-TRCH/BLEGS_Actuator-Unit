@@ -16,7 +16,7 @@ void setup()
         #if MOTOR_ROLE == HIP_PITCH
             saveMotorDataToEEPROM(1082.0f, 924.0f, 1286.72f);
         #elif MOTOR_ROLE == KNEE_PITCH
-            saveMotorDataToEEPROM(324.0f, 150.0f, 1353.67f);
+            saveMotorDataToEEPROM(324.0f, 150.0f, 1235.18f);
         #endif
     #endif
 
@@ -89,14 +89,28 @@ void loop()
             #ifdef LEG_CONTROL
                 float x_target = Serial3.parseInt();
                 float y_target = Serial3.parseInt();
-                float theta1, theta2;
+                float theta1, theta2, new_setpoint;
                 ik2dof.setTarget(x_target, y_target, true);
                 ik2dof.getJointAnglesDeg(theta1, theta2);
                 
-                Serial3.print("Theta1: ");
-                Serial3.print(theta1, SERIAL3_DECIMAL_PLACES);
-                Serial3.print("\t\tTheta2: ");
-                Serial3.println(theta2, SERIAL3_DECIMAL_PLACES);
+                #if MOTOR_ROLE == HIP_PITCH
+                    new_setpoint = theta1 * GEAR_RATIO;
+                #elif MOTOR_ROLE == KNEE_PITCH
+                    new_setpoint = theta2 * -GEAR_RATIO;
+                #endif
+                
+                float current_angle = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                if (current_angle != new_setpoint)
+                {
+                    scurve.plan(current_angle, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                    start_scurve_time = micros(); // Record the start time in microseconds
+                }
+                // Serial3.print("Theta1: ");
+                // Serial3.print(theta1, SERIAL3_DECIMAL_PLACES);
+                // Serial3.print("\t\tTheta2: ");
+                // Serial3.print(theta2, SERIAL3_DECIMAL_PLACES);
+                // Serial3.print("\t\tActual: ");
+                // Serial3.println(readRotorAbsoluteAngle(WITH_ABS_OFFSET), SERIAL3_DECIMAL_PLACES); 
             #endif
         }
     }    
@@ -128,6 +142,11 @@ void loop()
             position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
             positionControl(readRotorAbsoluteAngle(), &vq_cmd);
         #endif
+
+        #ifdef LEG_CONTROL
+            position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
+            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+        #endif
     }
 
     // Debug information
@@ -135,8 +154,8 @@ void loop()
     { 
         last_debug_time = current_time;
 
-        // Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
-        // Serial3.print("\t");
-        // Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
+        Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
+        Serial3.print("\t");
+        Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
     }
 }
