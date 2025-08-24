@@ -87,8 +87,8 @@ void loop()
             #endif
 
             #ifdef LEG_CONTROL
-                float x_target = Serial3.parseFloat();
-                float y_target = Serial3.parseFloat();
+                float x_target = Serial3.parseInt();
+                float y_target = Serial3.parseInt();
                 float theta1, theta2;
                 ik2dof.setTarget(x_target, y_target, true);
                 ik2dof.getJointAnglesDeg(theta1, theta2);
