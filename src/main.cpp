@@ -56,7 +56,7 @@ void setup()
         start_scurve_time = micros(); // Record the start time in microseconds
         delay(10);
 
-        Serial2.println(abs_angle_with_offset); // for serial2 testing
+        // Serial2.println(abs_angle_with_offset); // for serial2 testing
     }
     setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
     
@@ -68,27 +68,36 @@ void setup()
 void loop()
 {
     // Update position setpoint for debugging
-    if (Serial3.available())
-    {
-        if (Serial3.find('#'))
+    #ifdef POSITION_CONTROL || POSITION_CONTROL_WITH_SCURVE
+        if (Serial3.available())
         {
-            #ifdef POSITION_CONTROL_ONLY
-                position_pid.setSetpoint(Serial3.parseInt());  // Read position setpoint from serial
-            #endif
+            if (Serial3.find('#'))
+            {
+                #ifdef POSITION_CONTROL_ONLY
+                    position_pid.setSetpoint(Serial3.parseInt());  // Read position setpoint from serial
+                #endif
 
-            #ifdef POSITION_CONTROL_WITH_SCURVE
-                float new_setpoint = Serial3.parseFloat();
-                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                if (new_setpoint != position_pid.setpoint) 
-                {
-                    scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                    start_scurve_time = micros(); // Record the start time in microseconds
-                }
-            #endif
+                #ifdef POSITION_CONTROL_WITH_SCURVE
+                    float new_setpoint = Serial3.parseFloat();
+                    float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                    if (new_setpoint != position_pid.setpoint) 
+                    {
+                        scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                        start_scurve_time = micros(); // Record the start time in microseconds
+                    }
+                #endif
+            }
+        }
+    #endif
 
-            #ifdef LEG_CONTROL
-                float x_target = Serial3.parseInt();
-                float y_target = Serial3.parseInt();
+    // Update cartesian position
+    #ifdef LEG_CONTROL
+        if (Serial2.available())
+        {
+            if (Serial2.find('#'))
+            {
+                float x_target = Serial2.parseInt();
+                float y_target = Serial2.parseInt();
                 float theta1, theta2, new_setpoint;
                 ik2dof.setTarget(x_target, y_target, true);
                 ik2dof.getJointAnglesDeg(theta1, theta2);
@@ -111,9 +120,9 @@ void loop()
                 // Serial3.print(theta2, SERIAL3_DECIMAL_PLACES);
                 // Serial3.print("\t\tActual: ");
                 // Serial3.println(readRotorAbsoluteAngle(WITH_ABS_OFFSET), SERIAL3_DECIMAL_PLACES); 
-            #endif
+            }
         }
-    }    
+    #endif
 
     // SVPWM controller
     unsigned long current_time = micros();
