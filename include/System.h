@@ -7,26 +7,27 @@
 #include "config.h" 
 
 // Pin definitions for the STM32G431CBU6 board
-#define LED_STATUS_PIN  PC13
-#define SW_CALC_PIN     PA0
-#define SW_START_PIN    PA1
-#define PWM_A_PIN       PB0
-#define PWM_B_PIN       PB1
-#define PWM_C_PIN       PB13
-#define MISO_PIN        PA6 
-#define MOSI_PIN        PA7
-#define SCK_PIN         PA5
-#define CS_ENC_PIN      PB12
-#define SEN_IA_PIN      PA2
-#define SEN_IC_PIN      PA3
-#define SEN_1_PIN       PB9
-#define SEN_2_PIN       PA15
-#define SYS_RX1_PIN     PA10
-#define SYS_TX1_PIN     PA9
-#define RS232_RX1_PIN   PB7
-#define RS232_TX1_PIN   PC4
-#define RS485_RX3_PIN   PB11
-#define RS485_TX3_PIN   PB10
+// Updated pin definitions - referenced by other files
+#define LED_STATUS_PIN  PC13        // Built-in LED for status indication
+#define SW_CALC_PIN     PA0         // Calculation/Calibration switch
+#define SW_START_PIN    PA1         // Start switch
+#define PWM_A_PIN       PB0         // PWM output for motor phase A
+#define PWM_B_PIN       PB1         // PWM output for motor phase B
+#define PWM_C_PIN       PB13        // PWM output for motor phase C
+#define MISO_PIN        PA6         // SPI MISO pin for encoder
+#define MOSI_PIN        PA7         // SPI MOSI pin for encoder
+#define SCK_PIN         PA5         // SPI SCK pin for encoder
+#define CS_ENC_PIN      PB12        // Chip Select for encoder
+#define SEN_IA_PIN      PA2         // Current sensor for phase A
+#define SEN_IC_PIN      PA3         // Current sensor for phase C
+#define SEN_1_PIN       PB9         // General sensor input 1
+#define SEN_2_PIN       PA15        // General sensor input 2
+#define SYS_RX1_PIN     PA10        // System Serial1 RX pin
+#define SYS_TX1_PIN     PA9         // System Serial1 TX pin
+#define RS232_RX1_PIN   PB7         // RS232 Serial RX pin
+#define RS232_TX1_PIN   PC4         // RS232 Serial TX pin
+#define RS485_RX3_PIN   PB11        // RS485 Serial3 RX pin
+#define RS485_TX3_PIN   PB10        // RS485 Serial3 TX pin
 
 // System constants
 #define SERIAL1_BAUDRATE        2000000
@@ -48,7 +49,5 @@ extern HardwareSerial Serial3;
 #define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
 
 void systemInit();
-
-void setLEDBuiltIn(bool run=false, bool cal=false, bool err=false);
 
 #endif // SYSTEM_H

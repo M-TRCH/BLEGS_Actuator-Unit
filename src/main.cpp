@@ -10,7 +10,9 @@
 
 void setup() 
 {
+#ifdef SYSTEM_H
     systemInit();   // Initialize the system
+#endif
 
     /*
     encoderInit();  // Initialize the encoder  
@@ -70,6 +72,11 @@ void setup()
 
 void loop()
 {
+    static uint32_t cnt = 0;
+    Serial1.print("Hello World! ");
+    Serial1.println(cnt++);
+    delay(1000);
+
     /*
     // Update position setpoint for debugging
     #ifdef POSITION_CONTROL || POSITION_CONTROL_WITH_SCURVE

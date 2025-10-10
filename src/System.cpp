@@ -1,12 +1,14 @@
 
 #include "system.h"
 
-HardwareSerial Serial1;
-HardwareSerial Serial3;
+HardwareSerial Serial1(SYS_RX1_PIN, SYS_TX1_PIN);       // System Serial1 
+HardwareSerial Serial3(RS485_RX3_PIN, RS485_TX3_PIN);   // RS485 Serial3 
 
-// HardwareSerial Serial1(RX_PIN, TX_PIN);     // RX, TX pins for Serial1
-// HardwareSerial Serial3(RX3_PIN, TX3_PIN);   // RX, TX pins for Serial3
-
+/* @brief       Initialize the system
+ * @details     This function initializes the serial communication, configures the pins,
+ *              sets the ADC resolution for current sensing, and sets the PWM frequency
+ *              and resolution for SVPWM.
+ */
 void systemInit() 
 {
     // Initialize Serial1 with the defined baud rate
@@ -18,10 +20,8 @@ void systemInit()
     Serial3.setTimeout(SERIAL3_TIMEOUT);
 
     // Initialize pins
-    pinMode(LED_RUN_PIN, OUTPUT);
-    pinMode(LED_CAL_PIN, OUTPUT);
-    pinMode(LED_ERR_PIN, OUTPUT); 
-    pinMode(SW_STOP_PIN, INPUT);
+    pinMode(LED_STATUS_PIN, OUTPUT);       
+    pinMode(SW_CALC_PIN, INPUT);           
     pinMode(SW_START_PIN, INPUT);
     pinMode(SEN_1_PIN, INPUT);
     pinMode(SEN_2_PIN, INPUT);
@@ -30,16 +30,4 @@ void systemInit()
 
     analogWriteFrequency(PWM_FREQUENCY);  
     analogWriteResolution(PWM_RESOLUTION);  // Set PWM resolution to 12 bits for SVPWM
-}
-
-/* @brief       Set the built-in LEDs
- * @param run   State for the RUN LED
- * @param cal   State for the CAL LED
- * @param err   State for the ERR LED
- */
-void setLEDBuiltIn(bool run, bool cal, bool err)
-{
-    digitalWrite(LED_RUN_PIN, run);
-    digitalWrite(LED_CAL_PIN, cal);
-    digitalWrite(LED_ERR_PIN, err);
 }
