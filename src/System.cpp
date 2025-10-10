@@ -1,14 +1,17 @@
 
 #include "system.h"
 
-HardwareSerial Serial2(RX_PIN, TX_PIN);     // RX, TX pins for Serial2
-HardwareSerial Serial3(RX3_PIN, TX3_PIN);   // RX, TX pins for Serial3
+HardwareSerial Serial1;
+HardwareSerial Serial3;
+
+// HardwareSerial Serial1(RX_PIN, TX_PIN);     // RX, TX pins for Serial1
+// HardwareSerial Serial3(RX3_PIN, TX3_PIN);   // RX, TX pins for Serial3
 
 void systemInit() 
 {
-    // Initialize Serial2 with the defined baud rate
-    Serial2.begin(SERIAL2_BAUDRATE);
-    Serial2.setTimeout(SERIAL2_TIMEOUT);
+    // Initialize Serial1 with the defined baud rate
+    Serial1.begin(SERIAL1_BAUDRATE);
+    Serial1.setTimeout(SERIAL1_TIMEOUT);
 
     // Initialize Serial3 with the defined baud rate
     Serial3.begin(SERIAL3_BAUDRATE);

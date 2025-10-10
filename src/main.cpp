@@ -1,16 +1,18 @@
 #include <Arduino.h>
 #include "system.h"
-#include "svpwm.h"
-#include "encoder.h"
-#include "motor_control.h"
-#include "scurve.h"
-#include "config.h"
-#include "eeprom_utils.h"
-#include "ik_utils.h"
+// #include "svpwm.h"
+// #include "encoder.h"
+// #include "motor_control.h"
+// #include "scurve.h"
+// #include "config.h"
+// #include "eeprom_utils.h"
+// #include "ik_utils.h"
 
 void setup() 
 {
     systemInit();   // Initialize the system
+
+    /*
     encoderInit();  // Initialize the encoder  
     #if WRITE_MOTOR_DATA_TO_EEPROM 
         #if MOTOR_ROLE == HIP_PITCH
@@ -63,10 +65,12 @@ void setup()
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
     vq_cmd = 0.0; //18.0;     
+    */
 }
 
 void loop()
 {
+    /*
     // Update position setpoint for debugging
     #ifdef POSITION_CONTROL || POSITION_CONTROL_WITH_SCURVE
         if (Serial3.available())
@@ -167,4 +171,5 @@ void loop()
         Serial3.print("\t");
         Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
     }
+    */
 }
