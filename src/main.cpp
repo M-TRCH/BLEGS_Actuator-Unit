@@ -8,6 +8,8 @@
 #include "eeprom_utils.h"
 #include "ik_utils.h"
 
+/* Compatible with r1.5 board */
+
 void setup() 
 {
     systemInit();   // Initialize the system
