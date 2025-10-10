@@ -29,25 +29,31 @@
 #define RS485_RX3_PIN   PB11        // RS485 Serial3 RX pin
 #define RS485_TX3_PIN   PB10        // RS485 Serial3 TX pin
 
+// Serial selection enum
+enum SerialOutputType {
+    SERIAL_SYSTEM = 0,      // Use system pins (SYS_RX1_PIN, SYS_TX1_PIN)
+    SERIAL_RS232 = 1        // Use RS232 pins (RS232_RX1_PIN, RS232_TX1_PIN)
+};
+
 // System constants
-#define SERIAL1_BAUDRATE        2000000
+#define SERIAL1_BAUDRATE        9600
 #define SERIAL1_TIMEOUT         50
 #define SERIAL1_DECIMAL_PLACES  2
 #define SERIAL3_BAUDRATE        9600
 #define SERIAL3_TIMEOUT         50
 #define SERIAL3_DECIMAL_PLACES  1
 #define ANALOG_READ_RESOLUTION  12
-#define PWM_FREQUENCY           20000
-#define PWM_RESOLUTION          12
+#define SVPWM_FREQUENCY         20000
+#define SVPWM_RESOLUTION        12
 
 // Object definitions
-extern HardwareSerial Serial1;
-extern HardwareSerial Serial3;
+extern HardwareSerial* SystemSerial;   // Dynamic System Serial pointer (set in systemInit)
+extern HardwareSerial Serial3;         // Fixed RS485 Serial3
 
 // Macros definitions
 #define SW_CALC_PRESSING   (digitalRead(SW_CALC_PIN) == LOW)
 #define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
 
-void systemInit();
+void systemInit(SerialOutputType serial_output = SERIAL_SYSTEM);
 
 #endif // SYSTEM_H

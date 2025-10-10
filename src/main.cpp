@@ -11,7 +11,7 @@
 void setup() 
 {
 #ifdef SYSTEM_H
-    systemInit();   // Initialize the system
+    systemInit(SERIAL_RS232);   // Initialize the system with RS232 pins
 #endif
 
     /*
@@ -73,9 +73,9 @@ void setup()
 void loop()
 {
     static uint32_t cnt = 0;
-    Serial1.print("Hello World! ");
-    Serial1.println(cnt++);
-    delay(1000);
+    SystemSerial->print("Hello World! ");
+    SystemSerial->println(cnt++);
+    delay(100);
 
     /*
     // Update position setpoint for debugging

@@ -4,21 +4,21 @@
 
 #include <Arduino.h>
 
-// (0) General configuration
+// General configuration
 #define WAIT_START_PRESSING_ENABLE      false   // Enable waiting for start button press before starting the motor
 
-// (1) Motor configuration
+// Motor configuration
 #define HIP_PITCH   0
 #define KNEE_PITCH  1
 #define MOTOR_ROLE  HIP_PITCH                   // Define the motor role (HIP_PITCH or KNEE_PITCH)
 #define WRITE_MOTOR_DATA_TO_EEPROM      false   // Enable writing motor data to EEPROM
 
-// (2) Control configuration
+// Control configuration
 // #define POSITION_CONTROL_ONLY
 // #define POSITION_CONTROL_WITH_SCURVE
-#define LEG_CONTROL
+// #define LEG_CONTROL
 
-// (3) Sensor configuration
+// Sensor configuration
 #define RAW_ROTOR_ANGLE_INVERT          true    // Set to true if the raw rotor angle is inverted.   
 
 #if MOTOR_ROLE == HIP_PITCH
@@ -27,7 +27,7 @@
 
 #endif
 
-// (4) Inverse kinematics configuration
+// Inverse kinematics configuration
 #define HIP_PITCH_CALIBRATION_ANGLE     -152.4f     // Calibration angle for hip pitch
 #define KNEE_PITCH_CALIBRATION_ANGLE    -136.6f     // Calibration angle for knee pitch (Reversing the angle according to the mechanism)
 #define HIP_PITCH_DEFAULT_ANGLE         HIP_PITCH_CALIBRATION_ANGLE * GEAR_RATIO
