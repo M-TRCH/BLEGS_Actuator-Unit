@@ -7,7 +7,6 @@
 #include "AS5047P.h"
 #include "system.h"
 #include "motor_conf.h"
-#include "config.h" 
     
 // (0) Constants values
 #define SPI_SPEED           200000

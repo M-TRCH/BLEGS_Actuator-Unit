@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include "system.h"
 // #include "svpwm.h"
-// #include "encoder.h"
+#include "encoder.h"
 // #include "motor_control.h"
 // #include "scurve.h"
 // #include "config.h"
@@ -12,6 +12,10 @@ void setup()
 {
 #ifdef SYSTEM_H
     systemInit(SERIAL_RS232);   // Initialize the system with RS232 pins
+#endif
+
+#ifdef ENCODER_H
+    encoderInit();  // Initialize the encoder
 #endif
 
     /*
@@ -73,8 +77,13 @@ void setup()
 void loop()
 {
     static uint32_t cnt = 0;
-    SystemSerial->print("Hello World! ");
-    SystemSerial->println(cnt++);
+    updateRawRotorAngle();
+    
+    if (SW_CALC_PRESSING)   SystemSerial->print("CALC Pressed! ");
+    if (SW_START_PRESSING)  SystemSerial->print("START Pressed! ");
+    // SystemSerial->println(cnt++);
+    SystemSerial->println(readRotorAngle());
+    
     delay(100);
 
     /*
