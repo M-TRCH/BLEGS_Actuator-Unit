@@ -45,9 +45,11 @@ void systemInit(SerialOutputType serial_output)
     pinMode(SW_START_PIN, INPUT);
     pinMode(SEN_1_PIN, INPUT);
     pinMode(SEN_2_PIN, INPUT);
+    pinMode(PWM_A_PIN, OUTPUT);
+    pinMode(PWM_B_PIN, OUTPUT);
+    pinMode(PWM_C_PIN, OUTPUT);
 
     analogReadResolution(ANALOG_READ_RESOLUTION); // Set ADC resolution to 12 bits for current sensing
-
     analogWriteFrequency(SVPWM_FREQUENCY);  
     analogWriteResolution(SVPWM_RESOLUTION);  // Set PWM resolution to 12 bits for SVPWM
 }

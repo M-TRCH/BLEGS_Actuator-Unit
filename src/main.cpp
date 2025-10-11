@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "system.h"
-// #include "svpwm.h"
+#include "svpwm.h"
 #include "encoder.h"
 // #include "motor_control.h"
 // #include "scurve.h"
@@ -72,19 +72,37 @@ void setup()
     vd_cmd = 0.0;  
     vq_cmd = 0.0; //18.0;     
     */
+
+    while (!SW_START_PRESSING);
+    delay(1500); // Debounce delay
+    SystemSerial->println("Starting...");
 }
 
 void loop()
 {
-    static uint32_t cnt = 0;
-    updateRawRotorAngle();
-    
-    if (SW_CALC_PRESSING)   SystemSerial->print("CALC Pressed! ");
-    if (SW_START_PRESSING)  SystemSerial->print("START Pressed! ");
+    // testParkOpenLoop(0.0f ,3.0f, 200.0f, 10.0f, false);
+    // testClarkeOpenLoop(4.0f, 20.0f, 100.0f, false);
+
+    static float electrical_angle = 0.0f; // Initialize the electrical angle
+    electrical_angle -= 0.03f; // Increment the angle for testing
+    if (electrical_angle > 2.0f * 3.14f)
+    {
+        electrical_angle -= 2.0f * 3.14f;
+    }
+    if (electrical_angle < 0.0f)
+    {
+        electrical_angle += 2.0f * 3.14f;
+    }
+
+    applySVPWM(0.0, 2.0, electrical_angle);
+
+    // static uint32_t cnt = 0;
+    // updateRawRotorAngle();
+    // if (SW_CALC_PRESSING)   SystemSerial->print("CALC Pressed! ");
+    // if (SW_START_PRESSING)  SystemSerial->print("START Pressed! ");
     // SystemSerial->println(cnt++);
-    SystemSerial->println(readRotorAngle());
+    // SystemSerial->println(readRotorAngle());
     
-    delay(100);
 
     /*
     // Update position setpoint for debugging

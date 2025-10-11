@@ -4,10 +4,10 @@
 #include <Arduino.h>
 #include "system.h"
 
-// (0) System constants
-#define VDC     24.0f // DC bus voltage, used for SVPWM calculations
+// System constants
+#define VDC 12.0f // DC bus voltage, used for SVPWM calculations
 
-// (1) Function declarations
+// function prototypes
 void setPWMdutyCycle(float dutyA=0, float dutyB=0, float dutyC=0);
 void applySVPWM(float v_alpha, float v_beta);
 void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool ccw=true);
