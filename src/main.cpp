@@ -2,11 +2,10 @@
 #include "system.h"
 #include "svpwm.h"
 #include "encoder.h"
-// #include "motor_control.h"
+#include "motor_control.h"
+
 // #include "scurve.h"
-// #include "config.h"
 // #include "eeprom_utils.h"
-// #include "ik_utils.h"
 
 void setup() 
 {
@@ -18,6 +17,17 @@ void setup()
     encoderInit();  // Initialize the encoder
 #endif
 
+#ifdef MOTOR_CONTROL_H
+    // Motor alignment    
+    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
+    const_rotor_offset_cw = 795.0f;
+    const_rotor_offset_ccw = 651.0f;
+
+    rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
+    rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
+    setPWMdutyCycle();  // reset PWM duty cycle to zero
+#endif
+
     /*
     encoderInit();  // Initialize the encoder  
     #if WRITE_MOTOR_DATA_TO_EEPROM 
@@ -27,10 +37,6 @@ void setup()
             saveMotorDataToEEPROM(324.0f, 150.0f, 1235.18f);
         #endif
     #endif
-
-    // Motor alignment
-    setLEDBuiltIn(false, true, false);  // Set CAL LED on, others off
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CW); 
     
     // Load motor data from EEPROM
     loadMotorDataFromEEPROM(const_rotor_offset_cw, const_rotor_offset_ccw, rotor_offset_abs);
@@ -66,24 +72,37 @@ void setup()
 
         // Serial2.println(abs_angle_with_offset); // for serial2 testing
     }
-    setLEDBuiltIn(true, false, false);  // Set RUN LED on, CAL LED off
-    
-    // Set default vd and vq for commutation test
-    vd_cmd = 0.0;  
-    vq_cmd = 0.0; //18.0;     
     */
 
+    // Set default vd and vq for commutation test
+    vd_cmd = 0.0;  
+    vq_cmd = 8.0; 
+
+    // Wait for start button press
     while (!SW_START_PRESSING);
     delay(1500); // Debounce delay
-    SystemSerial->println("Starting...");
+    SystemSerial->println("Starting...");   
 }
 
 void loop()
 {
-    testParkOpenLoop(0.0, 2.0, 0.06, false);
+    // testParkOpenLoop(0.0, 2.0, 0.06, false);
+    // updateRawRotorAngle();
+    // SystemSerial->println(readRotorAngle());    
 
-    updateRawRotorAngle();
-    SystemSerial->println(readRotorAngle());    
+    // SVPWM controller
+    unsigned long current_time = micros();
+    if (current_time - last_svpwm_time >= SVPWM_PERIOD_US)
+    {
+        last_svpwm_time = current_time;
+
+        // Update raw rotor angle and absolute angle
+        updateRawRotorAngle();
+        updateMultiTurnTracking();  
+
+        // apply SVPWM control
+        svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
+    }
 
     /*
     // Update position setpoint for debugging

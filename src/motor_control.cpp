@@ -54,12 +54,12 @@ void findConstOffset(bool active, float v_mag, float step_angle, float step_offs
         if (offset_cmd > _14_BIT) offset_cmd = 0;
 
         // Debug info (theta_cmd, offset_rotor_angle, offset_cmd, offset calculated)
-        Serial3.print(theta_cmd * RAD_TO_DEG / RAW_TO_ROTOR_ANGLE);
-        Serial3.print("\t");
-        Serial3.print(offset_rotor_angle);
-        Serial3.print("\t");
-        Serial3.print(offset_cmd);
-        Serial3.print("\t");
+        SystemSerial->print(theta_cmd * RAD_TO_DEG / RAW_TO_ROTOR_ANGLE);
+        SystemSerial->print("\t");
+        SystemSerial->print(offset_rotor_angle);
+        SystemSerial->print("\t");
+        SystemSerial->print(offset_cmd);
+        SystemSerial->print("\t");
 
         // Calculate base offset within electrical cycle
         float const_offset = offset_cmd; 
@@ -67,7 +67,7 @@ void findConstOffset(bool active, float v_mag, float step_angle, float step_offs
         {
             const_offset -= _14_BIT_DIVIDED_PP;
         }
-        Serial3.println(const_offset);
+        SystemSerial->println(const_offset);
     }
 }
 
