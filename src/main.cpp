@@ -11,7 +11,7 @@
 void setup() 
 {
 #ifdef SYSTEM_H
-    systemInit(SERIAL_RS232);   // Initialize the system with RS232 pins
+    systemInit(SERIAL_SYSTEM);   // Initialize the system with RS232 pins
 #endif
 
 #ifdef ENCODER_H
@@ -80,29 +80,10 @@ void setup()
 
 void loop()
 {
-    // testParkOpenLoop(0.0f ,3.0f, 200.0f, 10.0f, false);
-    // testClarkeOpenLoop(4.0f, 20.0f, 100.0f, false);
+    testParkOpenLoop(0.0, 2.0, 0.06, false);
 
-    static float electrical_angle = 0.0f; // Initialize the electrical angle
-    electrical_angle -= 0.03f; // Increment the angle for testing
-    if (electrical_angle > 2.0f * 3.14f)
-    {
-        electrical_angle -= 2.0f * 3.14f;
-    }
-    if (electrical_angle < 0.0f)
-    {
-        electrical_angle += 2.0f * 3.14f;
-    }
-
-    applySVPWM(0.0, 2.0, electrical_angle);
-
-    // static uint32_t cnt = 0;
-    // updateRawRotorAngle();
-    // if (SW_CALC_PRESSING)   SystemSerial->print("CALC Pressed! ");
-    // if (SW_START_PRESSING)  SystemSerial->print("START Pressed! ");
-    // SystemSerial->println(cnt++);
-    // SystemSerial->println(readRotorAngle());
-    
+    updateRawRotorAngle();
+    SystemSerial->println(readRotorAngle());    
 
     /*
     // Update position setpoint for debugging

@@ -5,13 +5,12 @@
 #include "system.h"
 
 // System constants
-#define VDC 12.0f // DC bus voltage, used for SVPWM calculations
+#define VDC     12.0f // DC bus voltage, used for SVPWM calculations
 
-// function prototypes
+// Function prototypes
 void setPWMdutyCycle(float dutyA=0, float dutyB=0, float dutyC=0);
 void applySVPWM(float v_alpha, float v_beta);
-void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool ccw=true);
 void applySVPWM(float v_d, float v_q, float theta_rad);
-void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bool ccw=true);
+void testParkOpenLoop(float v_d=0.0f, float v_q=2.0f, float increment=0.06f, bool ccw=false);
 
 #endif // SVPWM_H

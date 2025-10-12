@@ -63,39 +63,6 @@ void applySVPWM(float v_alpha, float v_beta)
     // SystemSerial->println(pwm_c);
 }
 
-/* @brief   Test function for open-loop Clarke transformation
- * @param   amplitude  Amplitude of the voltage vector 
- * @param   velocity   Angular velocity of the rotating vector (Hz)
- * @param   sampleTime Time step for the simulation (ms)
- * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
- */ 
-void testClarkeOpenLoop(float amplitude, float velocity, float sampleTime, bool ccw)
-{
-    static float electrical_angle = 0.0f; // Initialize the electrical angle
-    velocity *= 2.0f * PI; // Convert velocity to radians per second 
-    
-    // 0) Using the electrical angle to calculate the αβ components
-    float v_alpha = amplitude * cos(electrical_angle);
-    float v_beta  = amplitude * sin(electrical_angle);
-
-    // 1) Apply the SVPWM transformation
-    applySVPWM(v_alpha, v_beta);
-
-    // 2) Increment the electrical angle based on the velocity and sample time
-    float Ts = sampleTime / 1000.0f;
-    if (ccw)
-    {
-        electrical_angle += velocity * Ts;
-        if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
-    }
-    else
-    {   
-        electrical_angle -= velocity * Ts;
-        if (electrical_angle < 0.0f) electrical_angle += 2.0f * PI;
-    }
-    delay(sampleTime); 
-}
-
 /* @brief   Apply Space Vector PWM (SVPWM) to generate the appropriate PWM signals
  *          for the three motor phases based on the given dq voltages and rotor angle.
  * @param   v_d        d-axis voltage component
@@ -153,32 +120,32 @@ void applySVPWM(float v_d, float v_q, float theta_rad)
     // SystemSerial->print(pwm_b);  SystemSerial->print("\t");
     // SystemSerial->println(pwm_c);
 }
-
-/* @brief   Test function for open-loop Clarke transformation
- * @param   amplitude  Amplitude of the voltage vector 
- * @param   velocity   Angular velocity of the rotating vector (Hz)
- * @param   sampleTime Time step for the simulation (ms)
- * @param   isCCW      Direction of rotation (true for counter-clockwise, false for clockwise)
- */ 
-void testParkOpenLoop(float v_d, float v_q, float velocity, float sampleTime, bool ccw)
+ 
+/* @brief   Test function to apply a constant dq voltage vector while
+ *          incrementally changing the electrical angle to simulate rotation.
+ * @param   v_d        d-axis voltage component
+ * @param   v_q        q-axis voltage component
+ * @param   increment  Incremental change in electrical angle (radians)
+ * @param   ccw        Direction of rotation (true for CCW, false for CW)
+ */
+void testParkOpenLoop(float v_d, float v_q, float increment, bool ccw)
 {
     static float electrical_angle = 0.0f; // Initialize the electrical angle
-    velocity *= 2.0f * PI; // Convert velocity to radians per second 
-    
-    // 0) Apply the SVPWM transformation
-    applySVPWM(v_d, v_q, electrical_angle);
-
-    // 1) Increment the electrical angle based on the velocity and sample time
-    float Ts = sampleTime / 1000.0f;
     if (ccw)
     {
-        electrical_angle += velocity * Ts;
-        if (electrical_angle > 2.0f * PI) electrical_angle -= 2.0f * PI;
+        electrical_angle += increment; // Increment the angle for testing
+        if (electrical_angle > 2.0f * 3.14f)
+        {
+            electrical_angle -= 2.0f * 3.14f;
+        }
     }
     else
-    {   
-        electrical_angle -= velocity * Ts;
-        if (electrical_angle < 0.0f) electrical_angle += 2.0f * PI;
+    {
+        electrical_angle -= increment; // Decrement the angle for testing
+        if (electrical_angle < 0.0f)
+        {
+            electrical_angle += 2.0f * 3.14f;
+        }
     }
-    delay(sampleTime); 
+    applySVPWM(v_d, v_q, electrical_angle);
 }
