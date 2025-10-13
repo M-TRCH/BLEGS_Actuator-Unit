@@ -237,20 +237,25 @@ void printEEPROMConfig()
 /**
  * @brief Save motor calibration data (legacy compatibility)
  */
-void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset) 
+void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, bool active) 
 {
+    if (active)
+    {
     
-    // Update current configuration
-    SET_ROTOR_OFFSET_CW(cwOffset);
-    SET_ROTOR_OFFSET_CCW(ccwOffset);
-    SET_ROTOR_OFFSET_ABS(absOffset);
-    SET_MOTOR_CALIBRATED(true);
     
-    // Save configuration
-    if (saveEEPROMConfig()) {
-        SystemSerial->println("Motor data saved to EEPROM");
-    } else {
-        SystemSerial->println("ERROR: Failed to save motor data");
+        // Update current configuration
+        SET_ROTOR_OFFSET_CW(cwOffset);
+        SET_ROTOR_OFFSET_CCW(ccwOffset);
+        SET_ROTOR_OFFSET_ABS(absOffset);
+        SET_MOTOR_CALIBRATED(true);
+        
+        // Save configuration
+        if (saveEEPROMConfig()) {
+            SystemSerial->println("Motor data saved to EEPROM");
+        } else {
+            SystemSerial->println("ERROR: Failed to save motor data");
+        }
+        while (1); // Halt execution for safety
     }
 }
 
@@ -258,8 +263,7 @@ void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset)
  * @brief Load motor calibration data (legacy compatibility)
  */
 void loadMotorDataFromEEPROM(float &cwOffset, float &ccwOffset, float &absOffset, bool debug) 
-{
-    
+{  
     // Get values from current configuration
     cwOffset = GET_ROTOR_OFFSET_CW();
     ccwOffset = GET_ROTOR_OFFSET_CCW();

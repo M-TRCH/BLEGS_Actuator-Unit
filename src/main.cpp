@@ -15,6 +15,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
+    saveMotorDataToEEPROM(795.0f, 651.0f, 0.0f, false);
 #endif
 
 #ifdef ENCODER_H
@@ -32,43 +33,7 @@ void setup()
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-
-    // SET_ROTOR_OFFSET_CW(795.0f);
-    // SET_ROTOR_OFFSET_CCW(651.0f);
-    // SET_ROTOR_OFFSET_ABS(0.0f);
-    // SET_MOTOR_CALIBRATED(true);
-    // if (saveEEPROMConfig()) 
-    // {
-    //     SystemSerial->println("EEPROM successfully!");
-    // } 
-    // else 
-    // {
-    //     SystemSerial->println("ERROR: Failed to save to EEPROM");
-    // }
-    // while(1)
-    // {
-    //     printEEPROMConfig();
-    //     delay(2000);
-    // }
-
     /*
-    encoderInit();  // Initialize the encoder  
-    #if WRITE_MOTOR_DATA_TO_EEPROM 
-        #if MOTOR_ROLE == HIP_PITCH
-            saveMotorDataToEEPROM(1082.0f, 924.0f, 1286.72f);
-        #elif MOTOR_ROLE == KNEE_PITCH
-            saveMotorDataToEEPROM(324.0f, 150.0f, 1235.18f);
-        #endif
-    #endif
-    
-    // Load motor data from EEPROM
-    loadMotorDataFromEEPROM(const_rotor_offset_cw, const_rotor_offset_ccw, rotor_offset_abs);
-    rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
-    rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
-
-    // Start up sequence 
-    setPWMdutyCycle();  // Set initial PWM duty cycle to zero
-    uint32_t last_start_up_time = millis();
     while((!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE) || (millis() - last_start_up_time < 3000))
     {
         updateRawRotorAngle();  

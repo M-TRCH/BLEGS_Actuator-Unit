@@ -57,7 +57,7 @@ void printEEPROMConfig();
 #define SET_MOTOR_CALIBRATED(val)   (eepromMotorConfig.is_calibrated = (val))
 
 // Legacy compatibility functions (kept for backward compatibility)
-void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset);
+void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, bool active = true);
 void loadMotorDataFromEEPROM(float &cwOffset, float &ccwOffset, float &absOffset, bool debug = false);
 
 #endif // EEPROM_UTILS_H
