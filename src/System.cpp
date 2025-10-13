@@ -7,7 +7,7 @@ HardwareSerial Serial3(RS485_RX3_PIN, RS485_TX3_PIN);   // RS485 Serial3
 
 // Static Serial objects for different configurations
 static HardwareSerial SystemSerial_System(SYS_RX1_PIN, SYS_TX1_PIN);        // System Serial via System pins
-static HardwareSerial SystemSerial_RS232(RS232_RX1_PIN, RS232_TX1_PIN);     // System Serial via RS232 pins 
+static HardwareSerial SystemSerial_RS232(RS232_RX1_PIN, RS232_TX1_PIN);     // System Serial via RS232 pins
 
 /* @brief       Initialize the system
  * @details     This function initializes the serial communication, configures the pins,
@@ -49,7 +49,8 @@ void systemInit(SerialOutputType serial_output)
     pinMode(PWM_B_PIN, OUTPUT);
     pinMode(PWM_C_PIN, OUTPUT);
 
-    analogReadResolution(ANALOG_READ_RESOLUTION); // Set ADC resolution to 12 bits for current sensing
-    analogWriteFrequency(SVPWM_FREQUENCY);  
-    analogWriteResolution(SVPWM_RESOLUTION);  // Set PWM resolution to 12 bits for SVPWM
+    // Set ADC and PWM configurations
+    analogReadResolution(ANALOG_READ_RESOLUTION);   // Set ADC resolution to 12 bits for current sensing
+    analogWriteFrequency(SVPWM_FREQUENCY);          // Set PWM frequency to 20 kHz for SVPWM
+    analogWriteResolution(SVPWM_RESOLUTION);        // Set PWM resolution to 12 bits for SVPWM
 }

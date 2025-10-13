@@ -4,12 +4,18 @@
 #include "encoder.h"
 #include "motor_control.h"
 #include "eeprom_utils.h"
+#include "led.h"
 // #include "scurve.h"
 
 void setup() 
 {
 #ifdef SYSTEM_H
     systemInit(SERIAL_SYSTEM);   // Initialize the system with RS232 pins
+#endif
+
+#ifdef LED_H
+    initLED();                      // Initialize LED system
+    setLEDStatus(LED_STATUS_INIT);  // Show initialization status
 #endif
 
 #ifdef EEPROM_UTILS_H
@@ -69,6 +75,7 @@ void setup()
     while (!SW_START_PRESSING);
     delay(1500); // Debounce delay
     SystemSerial->println("Starting...");   
+    setLEDStatus(LED_STATUS_RUNNING);
 }
 
 void loop()
@@ -90,6 +97,11 @@ void loop()
         // apply SVPWM control
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
+
+#ifdef LED_H
+    // Update LED effects
+    updateLEDStatus();
+#endif
 
     // Debug information
     if (current_time - last_debug_time >= DEBUG_PERIOD_US)

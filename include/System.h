@@ -7,7 +7,6 @@
 #include "config.h" 
 
 // Pin definitions for the STM32G431CBU6 board
-// Updated pin definitions - referenced by other files
 #define LED_STATUS_PIN  PC13        // Built-in LED for status indication
 #define SW_CALC_PIN     PA0         // Calculation/Calibration switch
 #define SW_START_PIN    PA1         // Start switch
@@ -47,8 +46,8 @@ enum SerialOutputType {
 #define SVPWM_RESOLUTION        12
 
 // Object definitions
-extern HardwareSerial* SystemSerial;   // Dynamic System Serial pointer (set in systemInit)
-extern HardwareSerial Serial3;         // Fixed RS485 Serial3
+extern HardwareSerial* SystemSerial;    // Dynamic System Serial pointer (set in systemInit)
+extern HardwareSerial Serial3;          // Fixed RS485 Serial3
 
 // Macros definitions
 #define SW_CALC_PRESSING   (digitalRead(SW_CALC_PIN) == LOW)
