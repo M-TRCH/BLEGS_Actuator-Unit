@@ -3,14 +3,18 @@
 #include "svpwm.h"
 #include "encoder.h"
 #include "motor_control.h"
+#include "eeprom_utils.h"
 
 // #include "scurve.h"
-// #include "eeprom_utils.h"
 
 void setup() 
 {
 #ifdef SYSTEM_H
     systemInit(SERIAL_SYSTEM);   // Initialize the system with RS232 pins
+#endif
+
+#ifdef EEPROM_UTILS_H
+    initEEPROM();   // Initialize EEPROM system
 #endif
 
 #ifdef ENCODER_H
@@ -20,13 +24,32 @@ void setup()
 #ifdef MOTOR_CONTROL_H
     // Motor alignment    
     findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
-    const_rotor_offset_cw = 795.0f;
-    const_rotor_offset_ccw = 651.0f;
+    const_rotor_offset_cw = GET_ROTOR_OFFSET_CW();
+    const_rotor_offset_ccw = GET_ROTOR_OFFSET_CCW();
 
     rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
     rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
+
+
+    // SET_ROTOR_OFFSET_CW(795.0f);
+    // SET_ROTOR_OFFSET_CCW(651.0f);
+    // SET_ROTOR_OFFSET_ABS(0.0f);
+    // SET_MOTOR_CALIBRATED(true);
+    // if (saveEEPROMConfig()) 
+    // {
+    //     SystemSerial->println("EEPROM successfully!");
+    // } 
+    // else 
+    // {
+    //     SystemSerial->println("ERROR: Failed to save to EEPROM");
+    // }
+    // while(1)
+    // {
+    //     printEEPROMConfig();
+    //     delay(2000);
+    // }
 
     /*
     encoderInit();  // Initialize the encoder  
@@ -76,7 +99,7 @@ void setup()
 
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
-    vq_cmd = 8.0; 
+    vq_cmd = -8.0; 
 
     // Wait for start button press
     while (!SW_START_PRESSING);
