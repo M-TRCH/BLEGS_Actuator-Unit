@@ -4,7 +4,6 @@
 #include "encoder.h"
 #include "motor_control.h"
 #include "eeprom_utils.h"
-
 // #include "scurve.h"
 
 void setup() 
@@ -64,7 +63,7 @@ void setup()
 
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
-    vq_cmd = -8.0; 
+    vq_cmd = 8.0; 
 
     // Wait for start button press
     while (!SW_START_PRESSING);
@@ -92,6 +91,16 @@ void loop()
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
+    // Debug information
+    if (current_time - last_debug_time >= DEBUG_PERIOD_US)
+    { 
+        last_debug_time = current_time;
+
+        SystemSerial->print(readRotorAngle(vq_cmd>0? CCW: CW), SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print("\t");
+        SystemSerial->println(0);
+    }
+
     /*
     // Update position setpoint for debugging
     #ifdef POSITION_CONTROL || POSITION_CONTROL_WITH_SCURVE
@@ -116,54 +125,6 @@ void loop()
         }
     #endif
 
-    // Update cartesian position
-    #ifdef LEG_CONTROL
-        if (Serial2.available())
-        {
-            if (Serial2.find('#'))
-            {
-                float x_target = Serial2.parseInt();
-                float y_target = Serial2.parseInt();
-                float theta1, theta2, new_setpoint;
-                ik2dof.setTarget(x_target, y_target, true);
-                ik2dof.getJointAnglesDeg(theta1, theta2);
-                
-                #if MOTOR_ROLE == HIP_PITCH
-                    new_setpoint = theta1 * GEAR_RATIO;
-                #elif MOTOR_ROLE == KNEE_PITCH
-                    new_setpoint = theta2 * -GEAR_RATIO;
-                #endif
-                
-                float current_angle = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                if (current_angle != new_setpoint)
-                {
-                    scurve.plan(current_angle, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                    start_scurve_time = micros(); // Record the start time in microseconds
-                }
-                // Serial3.print("Theta1: ");
-                // Serial3.print(theta1, SERIAL3_DECIMAL_PLACES);
-                // Serial3.print("\t\tTheta2: ");
-                // Serial3.print(theta2, SERIAL3_DECIMAL_PLACES);
-                // Serial3.print("\t\tActual: ");
-                // Serial3.println(readRotorAbsoluteAngle(WITH_ABS_OFFSET), SERIAL3_DECIMAL_PLACES); 
-            }
-        }
-    #endif
-
-    // SVPWM controller
-    unsigned long current_time = micros();
-    if (current_time - last_svpwm_time >= SVPWM_PERIOD_US)
-    {
-        last_svpwm_time = current_time;
-
-        // Update raw rotor angle and absolute angle
-        updateRawRotorAngle();
-        updateMultiTurnTracking();  
-
-        // apply SVPWM control
-        svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
-    }
-
     // Position controller
     if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
     {
@@ -182,16 +143,6 @@ void loop()
             position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
             positionControl(readRotorAbsoluteAngle(), &vq_cmd);
         #endif
-    }
-
-    // Debug information
-    if (current_time - last_debug_time >= DEBUG_PERIOD_US)
-    { 
-        last_debug_time = current_time;
-
-        Serial3.print(position_pid.setpoint, SERIAL3_DECIMAL_PLACES);
-        Serial3.print("\t");
-        Serial3.println(readRotorAbsoluteAngle(), SERIAL3_DECIMAL_PLACES);
     }
     */
 }

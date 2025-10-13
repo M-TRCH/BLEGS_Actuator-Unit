@@ -38,7 +38,7 @@ enum SerialOutputType {
 // System constants
 #define SERIAL1_BAUDRATE        921600
 #define SERIAL1_TIMEOUT         50
-#define SERIAL1_DECIMAL_PLACES  2
+#define SERIAL1_DECIMAL_PLACES  1
 #define SERIAL3_BAUDRATE        9600
 #define SERIAL3_TIMEOUT         50
 #define SERIAL3_DECIMAL_PLACES  1

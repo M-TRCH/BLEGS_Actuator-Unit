@@ -9,8 +9,8 @@
 
 // (0) System constants
 #define SVPWM_FREQUENCY             10000.0                                 // 10 kHz PWM frequency
-#define POSITION_CONTROL_FREQUENCY  5000.0                                  // 2 kHz position control frequency
-#define DEBUG_FREQUENCY             10.0                                    // 50 Hz debug frequency
+#define POSITION_CONTROL_FREQUENCY  5000.0                                  // 5 kHz position control frequency
+#define DEBUG_FREQUENCY             200.0                                   // 200 Hz debug frequency
 #define S_CURVE_FREQUENCY           500.0                                   // 500 Hz debug frequency
 #define SVPWM_PERIOD                (1.0f / SVPWM_FREQUENCY)                // PWM period in nanoseconds
 #define SVPWM_PERIOD_US             (SVPWM_PERIOD * 1e6)                    // PWM period in microseconds
