@@ -72,12 +72,56 @@ void setup()
 
 void loop()
 {
+    // Uncomment to test open-loop park function
     // testParkOpenLoop(0.0, 2.0, 0.08, false);
     // updateRawRotorAngle();
     // SystemSerial->println(readRotorAngle());    
+    
+#ifdef LED_H
+    // Update LED effects
+    updateLEDStatus();
+#endif
 
+    // Get current time
+    uint32_t current_time = micros();
+
+    // Update position setpoint for debugging
+    if (SystemSerial->available())
+    {
+        if (SystemSerial->find('#'))
+        {
+            // #ifdef POSITION_CONTROL_ONLY
+                position_pid.setSetpoint(SystemSerial->parseInt());  // Read position setpoint from serial
+            // #endif
+
+            // #ifdef POSITION_CONTROL_WITH_SCURVE
+            //     float new_setpoint = SystemSerial->parseFloat();
+            //     float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            //     if (new_setpoint != position_pid.setpoint) 
+            //     {
+            //         scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+            //         start_scurve_time = micros(); // Record the start time in microseconds
+            //     }
+            // #endif
+        }
+    }
+
+    // Position controller
+    if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
+    {
+        last_position_control_time = current_time;
+
+        // #ifdef POSITION_CONTROL_ONLY
+            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+        // #endif
+
+        // #ifdef POSITION_CONTROL_WITH_SCURVE
+        //     position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
+        //     positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+        // #endif
+    }
+    
     // SVPWM controller
-    unsigned long current_time = micros();
     if (current_time - last_svpwm_time >= SVPWM_PERIOD_US)
     {
         last_svpwm_time = current_time;
@@ -90,63 +134,13 @@ void loop()
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
-#ifdef LED_H
-    // Update LED effects
-    updateLEDStatus();
-#endif
-
     // Debug information
     if (current_time - last_debug_time >= DEBUG_PERIOD_US)
     { 
         last_debug_time = current_time;
 
-        SystemSerial->print(readRotorAngle(vq_cmd>0? CCW: CW), SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
         SystemSerial->print("\t");
-        SystemSerial->println(0);
+        SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
     }
-
-    /*
-    // Update position setpoint for debugging
-    #ifdef POSITION_CONTROL || POSITION_CONTROL_WITH_SCURVE
-        if (Serial3.available())
-        {
-            if (Serial3.find('#'))
-            {
-                #ifdef POSITION_CONTROL_ONLY
-                    position_pid.setSetpoint(Serial3.parseInt());  // Read position setpoint from serial
-                #endif
-
-                #ifdef POSITION_CONTROL_WITH_SCURVE
-                    float new_setpoint = Serial3.parseFloat();
-                    float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                    if (new_setpoint != position_pid.setpoint) 
-                    {
-                        scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                        start_scurve_time = micros(); // Record the start time in microseconds
-                    }
-                #endif
-            }
-        }
-    #endif
-
-    // Position controller
-    if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
-    {
-        last_position_control_time = current_time;
-
-        #ifdef POSITION_CONTROL_ONLY
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        #endif
-
-        #ifdef POSITION_CONTROL_WITH_SCURVE
-            position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        #endif
-
-        #ifdef LEG_CONTROL
-            position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        #endif
-    }
-    */
 }
