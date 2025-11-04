@@ -20,7 +20,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(795.0f, 651.0f, 0.0f, false);
+    saveMotorDataToEEPROM(803.0f, 664.0f, 1457.4f, false);
 #endif
 
 #ifdef ENCODER_H
@@ -29,47 +29,39 @@ void setup()
 
 #ifdef MOTOR_CONTROL_H
     // Motor alignment    
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW); 
+    findConstOffset(false, 2.0f, 0.05f, 0.5f, CW);  // true for active calibration 
     const_rotor_offset_cw = GET_ROTOR_OFFSET_CW();
     const_rotor_offset_ccw = GET_ROTOR_OFFSET_CCW();
-
+    rotor_offset_abs = GET_ROTOR_OFFSET_ABS();
+    
     rotor_offset_ccw = findRotorOffset(2.0f, 0.004f, CCW, 2.0f);
     rotor_offset_cw = findRotorOffset(2.0f, 0.004f, CW, 2.0f);
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-    /*
-    while((!SW_START_PRESSING && WAIT_START_PRESSING_ENABLE) || (millis() - last_start_up_time < 3000))
+    while (false)
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
 
         float abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
         float abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-        float calibration_angle = MOTOR_ROLE == HIP_PITCH ? HIP_PITCH_CALIBRATION_ANGLE : KNEE_PITCH_CALIBRATION_ANGLE;
-        float default_angle = MOTOR_ROLE == HIP_PITCH ? HIP_PITCH_DEFAULT_ANGLE : KNEE_PITCH_DEFAULT_ANGLE;
+        float calibration_angle = -180.0f; // motor 1 = -180.0f, motor 2 = 0.0f
 
-        Serial3.print("Turns: ");
-        Serial3.print((float)rotor_turns, SERIAL3_DECIMAL_PLACES);
-        Serial3.print("\t\tAbsolute: ");
-        Serial3.print(abs_angle, SERIAL3_DECIMAL_PLACES);
-        Serial3.print("\t\tOffset: ");
-        Serial3.print(computeOffsetAngleIK(calibration_angle, abs_angle), SERIAL3_DECIMAL_PLACES);
-        Serial3.print("\t\tFinal Absolute: ");
-        Serial3.println(abs_angle_with_offset, SERIAL3_DECIMAL_PLACES);
-
-        // Set up start s-curve setpoint with calibration angle
-        scurve.plan(abs_angle_with_offset, default_angle, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
-        start_scurve_time = micros(); // Record the start time in microseconds
+        SystemSerial->print("Turns: ");
+        SystemSerial->print((float)rotor_turns, SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print("\t\tAngle w/o offset: ");
+        SystemSerial->print(abs_angle, SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print("\t\tOffset: ");
+        SystemSerial->print(computeOffsetAngleIK(calibration_angle, abs_angle), SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print("\t\tAngle w offset : ");
+        SystemSerial->println(abs_angle_with_offset, SERIAL1_DECIMAL_PLACES);
         delay(10);
-
-        // Serial2.println(abs_angle_with_offset); // for serial2 testing
     }
-    */
-
+    
     // Set default vd and vq for commutation test
     vd_cmd = 0.0;  
-    vq_cmd = 8.0; 
+    vq_cmd = -8.0; 
 
     // Wait for start button press
     while (!SW_START_PRESSING);
@@ -80,7 +72,7 @@ void setup()
 
 void loop()
 {
-    // testParkOpenLoop(0.0, 2.0, 0.06, false);
+    // testParkOpenLoop(0.0, 2.0, 0.08, false);
     // updateRawRotorAngle();
     // SystemSerial->println(readRotorAngle());    
 

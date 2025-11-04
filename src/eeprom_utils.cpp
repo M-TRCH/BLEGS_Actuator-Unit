@@ -241,8 +241,6 @@ void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, boo
 {
     if (active)
     {
-    
-    
         // Update current configuration
         SET_ROTOR_OFFSET_CW(cwOffset);
         SET_ROTOR_OFFSET_CCW(ccwOffset);
