@@ -5,7 +5,10 @@
 #include "motor_control.h"
 #include "eeprom_utils.h"
 #include "led.h"
-// #include "scurve.h"
+#include "scurve.h"
+
+uint32_t last_find_time;
+float abs_angle, abs_angle_with_offset, calibration_angle;
 
 void setup() 
 {
@@ -39,14 +42,15 @@ void setup()
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-    while (false)
+    last_find_time = millis();
+    while (false || (millis() - last_find_time < 1000))
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
 
-        float abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
-        float abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-        float calibration_angle = -180.0f; // motor 1 = -180.0f, motor 2 = 0.0f
+        abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
+        abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+        calibration_angle = -180.0f; // motor 1 = -180.0f, motor 2 = 0.0f
 
         SystemSerial->print("Turns: ");
         SystemSerial->print((float)rotor_turns, SERIAL1_DECIMAL_PLACES);
@@ -68,6 +72,9 @@ void setup()
     delay(1500); // Debounce delay
     SystemSerial->println("Starting...");   
     setLEDStatus(LED_STATUS_RUNNING);
+
+    scurve.plan(abs_angle_with_offset, calibration_angle * GEAR_RATIO, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
+    start_scurve_time = micros(); // Record the start time in microseconds
 }
 
 void loop()
@@ -91,17 +98,17 @@ void loop()
         if (SystemSerial->find('#'))
         {
             // #ifdef POSITION_CONTROL_ONLY
-                position_pid.setSetpoint(SystemSerial->parseInt());  // Read position setpoint from serial
+                // position_pid.setSetpoint(SystemSerial->parseInt());  // Read position setpoint from serial
             // #endif
 
             // #ifdef POSITION_CONTROL_WITH_SCURVE
-            //     float new_setpoint = SystemSerial->parseFloat();
-            //     float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-            //     if (new_setpoint != position_pid.setpoint) 
-            //     {
-            //         scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-            //         start_scurve_time = micros(); // Record the start time in microseconds
-            //     }
+                float new_setpoint = SystemSerial->parseFloat();
+                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                if (new_setpoint != position_pid.setpoint) 
+                {
+                    scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                    start_scurve_time = micros(); // Record the start time in microseconds
+                }
             // #endif
         }
     }
@@ -112,12 +119,12 @@ void loop()
         last_position_control_time = current_time;
 
         // #ifdef POSITION_CONTROL_ONLY
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+            // positionControl(readRotorAbsoluteAngle(), &vq_cmd);
         // #endif
 
         // #ifdef POSITION_CONTROL_WITH_SCURVE
-        //     position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-        //     positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+            position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
+            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
         // #endif
     }
     
