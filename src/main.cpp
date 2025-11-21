@@ -23,7 +23,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(803.0f, 664.0f, 1457.4f, false);
+    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);
 #endif
 
 #ifdef ENCODER_H
@@ -42,15 +42,22 @@ void setup()
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-    last_find_time = millis();
-    while (false || (millis() - last_find_time < 1000))
+    // Wait for start button press
+    while (!SW_START_PRESSING)
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
 
         abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
         abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-        calibration_angle = -180.0f; // motor 1 = -180.0f, motor 2 = 0.0f
+        calibration_angle = -90.0f; // both motor = -90.0f
+
+        // Check if angle is within calibration range (±5 degrees tolerance)
+        float angle_error = abs(abs_angle_with_offset - (calibration_angle * GEAR_RATIO));
+        if (angle_error <= 20.0f)
+            setLEDStatus(LED_STATUS_READY);  // Green - within calibration range
+        else 
+            setLEDStatus(LED_STATUS_INIT);  // Red - outside calibration range
 
         SystemSerial->print("Turns: ");
         SystemSerial->print((float)rotor_turns, SERIAL1_DECIMAL_PLACES);
@@ -67,12 +74,12 @@ void setup()
     vd_cmd = 0.0;  
     vq_cmd = -8.0; 
 
-    // Wait for start button press
-    while (!SW_START_PRESSING);
+    // Start after button release
     delay(1500); // Debounce delay
     SystemSerial->println("Starting...");   
     setLEDStatus(LED_STATUS_RUNNING);
 
+    // Initialize position control S-curve
     scurve.plan(abs_angle_with_offset, calibration_angle * GEAR_RATIO, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
     start_scurve_time = micros(); // Record the start time in microseconds
 }

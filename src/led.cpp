@@ -308,7 +308,7 @@ void setLEDStatus(LEDStatus_t status)
 {
     switch (status) {
         case LED_STATUS_INIT:
-            setLEDColor(LED_COLOR_YELLOW, LED_BRIGHTNESS_LOW);
+            setLEDColor(LED_COLOR_RED, LED_BRIGHTNESS_LOW);
             break;
             
         case LED_STATUS_READY:
@@ -316,7 +316,7 @@ void setLEDStatus(LEDStatus_t status)
             break;
             
         case LED_STATUS_RUNNING:
-            setLEDColor(LED_COLOR_BLUE, LED_BRIGHTNESS_HIGH);
+            setLEDColor(LED_COLOR_BLUE, LED_BRIGHTNESS_LOW);
             break;
             
         case LED_STATUS_ERROR:
