@@ -31,7 +31,7 @@ void setup()
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
     saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);   // motor 1 configuration
-    saveMotorDataToEEPROM(0.0f, 0.0f, 0.0f, false);         // motor 2 configuration
+    saveMotorDataToEEPROM(486.0f, 325.0f, 709.3f, false);     // motor 2 configuration
 #endif
 
 #ifdef ENCODER_H
@@ -40,7 +40,7 @@ void setup()
 
 #ifdef MOTOR_CONTROL_H
     // Motor alignment    
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CW);  // true for active calibration 
+    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW);  // true for active calibration 
     const_rotor_offset_cw = GET_ROTOR_OFFSET_CW();
     const_rotor_offset_ccw = GET_ROTOR_OFFSET_CCW();
     rotor_offset_abs = GET_ROTOR_OFFSET_ABS();
@@ -95,10 +95,13 @@ void setup()
 void loop()
 {
     // Uncomment to test open-loop park function
-    // testParkOpenLoop(0.0, 2.0, 0.08, false);
-    // updateRawRotorAngle();
-    // SystemSerial->println(readRotorAngle());    
-    
+    while (0)
+    {
+        testParkOpenLoop(0.0, 2.0, 0.08, false);
+        updateRawRotorAngle();
+        SystemSerial->println(readRotorAngle());    
+    }
+
 #ifdef LED_H
     // Update LED effects
     updateLEDStatus();
@@ -155,7 +158,7 @@ void loop()
         }
     }
 
-    // Position controller
+    // Position controller (Comment fot endless drive)
     if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
     {
         last_position_control_time = current_time;
