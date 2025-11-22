@@ -191,6 +191,7 @@ void loop()
     { 
         last_debug_time = current_time;
 
+        SystemSerial->print("Returns:\t");
         SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
         SystemSerial->print("\t");
         SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
