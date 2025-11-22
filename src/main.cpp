@@ -7,8 +7,15 @@
 #include "led.h"
 #include "scurve.h"
 
+// Control mode enumeration
+enum ControlMode_t {
+    POSITION_CONTROL_ONLY = 0,
+    POSITION_CONTROL_WITH_SCURVE = 1
+};
+
 uint32_t last_find_time;
 float abs_angle, abs_angle_with_offset, calibration_angle;
+ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 
 void setup() 
 {
@@ -23,7 +30,8 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);
+    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);   // motor 1 configuration
+    saveMotorDataToEEPROM(0.0f, 0.0f, 0.0f, false);         // motor 2 configuration
 #endif
 
 #ifdef ENCODER_H
@@ -99,24 +107,51 @@ void loop()
     // Get current time
     uint32_t current_time = micros();
 
-    // Update position setpoint for debugging
+    // Update position setpoint and control mode from serial
     if (SystemSerial->available())
     {
-        if (SystemSerial->find('#'))
+        char cmd = SystemSerial->read();
+        
+        // Mode selection commands
+        if (cmd == 'M' || cmd == 'm') 
         {
-            // #ifdef POSITION_CONTROL_ONLY
-                // position_pid.setSetpoint(SystemSerial->parseInt());  // Read position setpoint from serial
-            // #endif
-
-            // #ifdef POSITION_CONTROL_WITH_SCURVE
-                float new_setpoint = SystemSerial->parseFloat();
-                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
+            int mode = SystemSerial->parseInt();
+            if (mode == 0) 
+            {
+                control_mode = POSITION_CONTROL_ONLY;
+                SystemSerial->println("Mode: Position Control Only");
+            } 
+            else if (mode == 1) 
+            {
+                control_mode = POSITION_CONTROL_WITH_SCURVE;
+                SystemSerial->println("Mode: Position Control with S-Curve");
+            }
+        }
+        // Position setpoint command
+        else if (cmd == '#') 
+        {
+            float new_setpoint = SystemSerial->parseFloat();
+            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            
+            if (control_mode == POSITION_CONTROL_ONLY) 
+            {
+                // Direct position control without S-curve
+                position_pid.setpoint = new_setpoint;
+                SystemSerial->print("Direct setpoint: ");
+                SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+            } 
+            else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+            {
+                // Position control with S-curve profile
                 if (new_setpoint != position_pid.setpoint) 
                 {
                     scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                    start_scurve_time = micros(); // Record the start time in microseconds
+                    start_scurve_time = micros();
+                    SystemSerial->print("S-Curve setpoint: ");
+                    SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
                 }
-            // #endif
+            }
         }
     }
 
@@ -125,14 +160,17 @@ void loop()
     {
         last_position_control_time = current_time;
 
-        // #ifdef POSITION_CONTROL_ONLY
-            // positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        // #endif
-
-        // #ifdef POSITION_CONTROL_WITH_SCURVE
+        if (control_mode == POSITION_CONTROL_ONLY) 
+        {
+            // Direct position control
+            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+        }
+        else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+        {
+            // Position control with S-curve profile
             position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
             positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        // #endif
+        }
     }
     
     // SVPWM controller
