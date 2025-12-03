@@ -6,8 +6,9 @@
 #include "eeprom_utils.h"
 #include "led.h"
 #include "scurve.h"
+#include "protocol.h"
 
-// Control mode enumeration
+// Control mode enumeration (legacy)
 enum ControlMode_t {
     POSITION_CONTROL_ONLY = 0,
     POSITION_CONTROL_WITH_SCURVE = 1
@@ -17,10 +18,18 @@ uint32_t last_find_time;
 float abs_angle, abs_angle_with_offset, calibration_angle;
 ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 
+// Protocol variables
+BinaryPacket rx_packet;
+bool binary_mode_enabled = true;  // Enable binary protocol by default
+
 void setup() 
 {
 #ifdef SYSTEM_H
     systemInit(SERIAL_SYSTEM);   // Initialize the system with RS232 pins
+#endif
+
+#ifdef PROTOCOL_H
+    protocolInit();  // Initialize binary protocol
 #endif
 
 #ifdef LED_H
@@ -110,50 +119,135 @@ void loop()
     // Get current time
     uint32_t current_time = micros();
 
-    // Update position setpoint and control mode from serial
+    // Handle incoming serial communication (Hybrid Protocol)
     if (SystemSerial->available())
     {
-        char cmd = SystemSerial->read();
-        
-        // Mode selection commands
-        if (cmd == 'M' || cmd == 'm') 
+        // Check if it's a binary packet or ASCII command
+        if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
         {
-            // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
-            int mode = SystemSerial->parseInt();
-            if (mode == 0) 
+            // Binary protocol path
+            if (receivePacket(SystemSerial, &rx_packet, PROTOCOL_TIMEOUT_MS))
             {
-                control_mode = POSITION_CONTROL_ONLY;
-                SystemSerial->println("Mode: Position Control Only");
-            } 
-            else if (mode == 1) 
+                // Process packet based on type
+                switch (rx_packet.packet_type)
+                {
+                    case PKT_CMD_SET_GOAL:
+                    {
+                        float target_pos;
+                        uint16_t duration_ms;
+                        uint8_t mode;
+                        
+                        PayloadSetGoal* goal_payload = (PayloadSetGoal*)rx_packet.payload;
+                        
+                        if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
+                        {
+                            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                            
+                            if (mode == MODE_DIRECT_POSITION)
+                            {
+                                // Direct position control
+                                control_mode = POSITION_CONTROL_ONLY;
+                                position_pid.setpoint = target_pos;
+                            }
+                            else if (mode == MODE_SCURVE_PROFILE)
+                            {
+                                // S-Curve profile control
+                                control_mode = POSITION_CONTROL_WITH_SCURVE;
+                                scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                                start_scurve_time = micros();
+                            }
+                            
+                            // Send status feedback immediately
+                            int32_t pos_feedback = (int32_t)(current_pos * 100.0f);  // degrees * 100
+                            uint8_t status_flags = computeStatusFlags(
+                                abs(current_pos - target_pos) > 1.0f,  // is_moving
+                                abs(current_pos - target_pos) <= 1.0f,  // at_goal
+                                false  // no error
+                            );
+                            sendStatusFeedback(SystemSerial, pos_feedback, 0, status_flags);
+                        }
+                        else
+                        {
+                            // Invalid payload
+                            sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_SET_GOAL);
+                        }
+                        break;
+                    }
+                    
+                    case PKT_CMD_PING:
+                    {
+                        // Simple ping response
+                        int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
+                        sendStatusFeedback(SystemSerial, pos_feedback, 0, 0);
+                        break;
+                    }
+                    
+                    default:
+                    {
+                        // Unknown command
+                        sendErrorFeedback(SystemSerial, ERR_UNKNOWN_COMMAND, rx_packet.packet_type);
+                        break;
+                    }
+                }
+            }
+            else
             {
-                control_mode = POSITION_CONTROL_WITH_SCURVE;
-                SystemSerial->println("Mode: Position Control with S-Curve");
+                // CRC failed or timeout
+                sendErrorFeedback(SystemSerial, ERR_CRC_FAILED);
             }
         }
-        // Position setpoint command
-        else if (cmd == '#') 
+        else
         {
-            float new_setpoint = SystemSerial->parseFloat();
-            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            // Legacy ASCII protocol path
+            char cmd = SystemSerial->read();
             
-            if (control_mode == POSITION_CONTROL_ONLY) 
+            // Mode selection commands
+            if (cmd == 'M' || cmd == 'm') 
             {
-                // Direct position control without S-curve
-                position_pid.setpoint = new_setpoint;
-                SystemSerial->print("Direct setpoint: ");
-                SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
-            } 
-            else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-            {
-                // Position control with S-curve profile
-                if (new_setpoint != position_pid.setpoint) 
+                // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
+                int mode = SystemSerial->parseInt();
+                if (mode == 0) 
                 {
-                    scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                    start_scurve_time = micros();
-                    SystemSerial->print("S-Curve setpoint: ");
-                    SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                    control_mode = POSITION_CONTROL_ONLY;
+                    SystemSerial->println("Mode: Position Control Only");
+                } 
+                else if (mode == 1) 
+                {
+                    control_mode = POSITION_CONTROL_WITH_SCURVE;
+                    SystemSerial->println("Mode: Position Control with S-Curve");
                 }
+            }
+            // Position setpoint command
+            else if (cmd == '#') 
+            {
+                float new_setpoint = SystemSerial->parseFloat();
+                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                
+                if (control_mode == POSITION_CONTROL_ONLY) 
+                {
+                    // Direct position control without S-curve
+                    position_pid.setpoint = new_setpoint;
+                    SystemSerial->print("Direct setpoint: ");
+                    SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                } 
+                else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+                {
+                    // Position control with S-curve profile
+                    if (new_setpoint != position_pid.setpoint) 
+                    {
+                        scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                        start_scurve_time = micros();
+                        SystemSerial->print("S-Curve setpoint: ");
+                        SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                    }
+                }
+            }
+            // Toggle binary protocol mode
+            else if (cmd == 'B' || cmd == 'b')
+            {
+                binary_mode_enabled = !binary_mode_enabled;
+                SystemSerial->print("Binary mode: ");
+                SystemSerial->println(binary_mode_enabled ? "ENABLED" : "DISABLED");
             }
         }
     }
