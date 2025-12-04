@@ -183,6 +183,22 @@ def send_ping(port: serial.Serial) -> bool:
     return True
 
 
+def send_start_command(port: serial.Serial) -> bool:
+    """
+    Send ASCII start command to begin motor operation
+    
+    Args:
+        port: Serial port object
+        
+    Returns:
+        True if sent successfully
+    """
+    port.write(b'S')
+    print(f"[TX] Start Command (ASCII 'S')")
+    time.sleep(0.1)  # Wait for motor to start
+    return True
+
+
 def receive_packet(port: serial.Serial, timeout: float = 0.1) -> Optional[Tuple[int, bytes]]:
     """
     Receive and parse a binary packet
@@ -286,7 +302,7 @@ def parse_error_feedback(payload: bytes) -> dict:
 def main():
     """Main test function"""
     # Configure serial port
-    PORT = 'COM3'  # Change to your port
+    PORT = 'COM44'  # Change to your port
     BAUDRATE = 921600
     
     print("=" * 60)
@@ -299,6 +315,12 @@ def main():
         time.sleep(0.5)  # Wait for connection
         
         print(f"Connected to {PORT} @ {BAUDRATE} baud\n")
+        
+        # Send start command to begin motor operation
+        print("\n--- Sending Start Command ---")
+        send_start_command(port)
+        print("Motor should now be running...\n")
+        time.sleep(3.0)  # Wait for motor to initialize
         
         # Test 1: Ping
         print("\n--- Test 1: Ping ---")

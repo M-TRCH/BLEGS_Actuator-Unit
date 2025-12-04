@@ -59,8 +59,9 @@ void setup()
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-    // Wait for start button press
-    while (!SW_START_PRESSING)
+    // Wait for start button press or serial start command
+    bool start_requested = false;
+    while (!start_requested)
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
@@ -84,6 +85,25 @@ void setup()
         SystemSerial->print(computeOffsetAngleIK(calibration_angle, abs_angle), SERIAL1_DECIMAL_PLACES);
         SystemSerial->print("\t\tAngle w offset : ");
         SystemSerial->println(abs_angle_with_offset, SERIAL1_DECIMAL_PLACES);
+        
+        // Check for button press
+        if (SW_START_PRESSING)
+        {
+            start_requested = true;
+        }
+        
+        // Check for serial start command (ASCII: 'S' or 's')
+        if (SystemSerial->available())
+        {
+            char cmd = SystemSerial->peek();  // Peek without consuming
+            if (cmd == 'S' || cmd == 's')
+            {
+                SystemSerial->read();  // Consume the character
+                SystemSerial->println("Start command received via serial");
+                start_requested = true;
+            }
+        }
+        
         delay(10);
     }
     
@@ -110,7 +130,7 @@ void loop()
         updateRawRotorAngle();
         SystemSerial->println(readRotorAngle());    
     }
-
+    
 #ifdef LED_H
     // Update LED effects
     updateLEDStatus();
@@ -283,14 +303,14 @@ void loop()
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
-    // Debug information
+    // Debug information (disable by default)
     if (current_time - last_debug_time >= DEBUG_PERIOD_US)
     { 
         last_debug_time = current_time;
 
-        SystemSerial->print("Returns:\t");
-        SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
-        SystemSerial->print("\t");
-        SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
+        // SystemSerial->print("Returns:\t");
+        // SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
+        // SystemSerial->print("\t");
+        // SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
     }
 }
