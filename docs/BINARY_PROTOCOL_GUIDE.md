@@ -39,6 +39,7 @@ pip install pyserial
 ยังคงใช้งานได้เหมือนเดิม:
 
 ```
+S               # เริ่มการทำงานของมอเตอร์ (Start Command)
 M0              # เปลี่ยนเป็น Direct Position Control
 M1              # เปลี่ยนเป็น S-Curve Control
 #-45.5          # ตั้งค่าตำแหน่งเป้าหมาย -45.5 degrees
@@ -201,21 +202,25 @@ python test_protocol.py
 ============================================================
 High-Speed Binary Protocol - Test Client
 ============================================================
-Connected to COM3 @ 921600 baud
+Connected to COM44 @ 921600 baud
+
+--- Sending Start Command ---
+[TX] Start Command (ASCII 'S')
+Motor should now be running...
 
 --- Test 1: Ping ---
 [TX] Ping
-     Packet: fe ee 03 00 fc ff
+     Packet: fe ee 03 00 01 40
 [RX] Packet Type: 0x81
-     Position: -45.23°
+     Position: -1.27°
      Current: 0 mA
      Flags: 0x00
 
 --- Test 2: Direct Position Command ---
 [TX] Direct Position: -45.0°
-     Packet: fe ee 01 05 00 b8 e8 ff ff 3a 7c
+     Packet: fe ee 01 05 00 6c ee ff ff 77 40
 [RX] Status Feedback:
-     Position: -45.20°
+     Position: -1.25°
      Moving: True
      At Goal: False
 ```
@@ -225,10 +230,21 @@ Connected to COM3 @ 921600 baud
 1. เปิด Serial Monitor @ 921,600 baud
 2. ส่งคำสั่ง:
    ```
+   S          # Start motor (เริ่มการทำงาน)
    B          # Disable binary mode
    M1         # S-Curve mode
    #45.0      # Move to 45 degrees
    ```
+
+### 3. Auto-Start via Python
+
+```python
+import serial
+port = serial.Serial('COM44', 921600)
+port.write(b'S')  # Send start command
+time.sleep(2.0)   # Wait for motor initialization
+# Now motor is ready for binary protocol commands
+```
 
 ---
 
@@ -398,5 +414,6 @@ if result:
 ---
 
 **สร้างโดย:** M-TRCH  
-**วันที่:** 2025-12-03  
-**เวอร์ชัน:** 1.0
+**วันที่:** 2025-12-04  
+**เวอร์ชัน:** 1.1  
+**Last Update:** Serial Start Command Support

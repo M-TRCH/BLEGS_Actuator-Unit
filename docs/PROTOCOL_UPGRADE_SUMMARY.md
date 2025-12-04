@@ -28,6 +28,7 @@
 - ✅ **Dynamic Payload** - รองรับ Direct Position และ S-Curve Profile
 - ✅ **Auto Feedback** - มอเตอร์ส่งสถานะกลับทันทีหลังได้รับคำสั่ง
 - ✅ **Error Reporting** - รายงานข้อผิดพลาดแบบ structured
+- ✅ **Serial Start Command** - เริ่มมอเตอร์ผ่าน ASCII 'S' (ไม่ต้องกดปุ่ม)
 
 ### 🔄 Backward Compatibility
 - ✅ **ASCII Commands ยังใช้ได้** - `M0`, `M1`, `#<value>`
@@ -56,6 +57,7 @@
 
 | Command | Description |
 |---------|-------------|
+| `S` | เริ่มการทำงานของมอเตอร์ (Start Command) |
 | `M0` | เปลี่ยนเป็น Direct Position Control |
 | `M1` | เปลี่ยนเป็น S-Curve Profile Control |
 | `#-45.5` | ตั้งค่าตำแหน่งเป้าหมาย -45.5° |
@@ -76,20 +78,33 @@ python test_protocol.py
 ============================================================
 High-Speed Binary Protocol - Test Client
 ============================================================
-Connected to COM3 @ 921600 baud
+Connected to COM44 @ 921600 baud
+
+--- Sending Start Command ---
+[TX] Start Command (ASCII 'S')
+Motor should now be running...
 
 --- Test 1: Ping ---
 [TX] Ping
-     Packet: fe ee 03 00 fc ff
-[RX] Position: -45.23°, Current: 0 mA, Flags: 0x00
+     Packet: fe ee 03 00 01 40
+[RX] Packet Type: 0x81
+     Position: -1.27°
+     Current: 0 mA
+     Flags: 0x00
 
 --- Test 2: Direct Position Command ---
 [TX] Direct Position: -45.0°
-[RX] Position: -45.20°, Moving: True, At Goal: False
+     Packet: fe ee 01 05 00 6c ee ff ff 77 40
+[RX] Status Feedback:
+     Position: -1.25°
+     Moving: True
+     At Goal: False
 
 --- Test 3: S-Curve Position Command ---
 [TX] S-Curve Position: 0.0° in 1000ms
-[RX] Position: -45.10°
+     Packet: fe ee 01 07 01 00 00 00 00 e8 03 58 47
+[RX] Status Feedback:
+     Position: -6.15°
 ```
 
 ### 2. ทดสอบด้วย Serial Monitor
@@ -286,9 +301,10 @@ if result:
 ---
 
 **สร้างโดย:** M-TRCH  
-**วันที่:** 2025-12-03  
+**วันที่:** 2025-12-04  
 **Build Status:** ✅ SUCCESS  
-**Version:** 1.0.0
+**Version:** 1.1.0  
+**Last Update:** Serial Start Command Added
 
 ---
 
