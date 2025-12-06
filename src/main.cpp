@@ -22,6 +22,24 @@ ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 BinaryPacket rx_packet;
 bool binary_mode_enabled = true;  // Enable binary protocol by default
 
+// Command queue to prevent motor jerking
+#define CMD_QUEUE_SIZE 4
+struct CommandQueue {
+    float target_positions[CMD_QUEUE_SIZE];
+    uint8_t modes[CMD_QUEUE_SIZE];
+    uint8_t write_idx;
+    uint8_t read_idx;
+    uint8_t count;
+} cmd_queue = {0};
+
+// Rate limiting for setpoint updates
+uint32_t last_setpoint_update_time = 0;
+#define MIN_SETPOINT_UPDATE_INTERVAL_US 2000  // 2ms minimum (500 Hz max)
+
+// Target tracking
+float last_target_position = 0.0f;
+#define POSITION_DEADBAND 0.5f  // degrees - ignore small changes
+
 void setup() 
 {
 #ifdef SYSTEM_H
@@ -140,13 +158,14 @@ void loop()
     uint32_t current_time = micros();
 
     // Handle incoming serial communication (Hybrid Protocol)
-    if (SystemSerial->available())
+    // Process only if enough data available to avoid blocking
+    if (SystemSerial->available() >= 4)  // At least header + type + len
     {
         // Check if it's a binary packet or ASCII command
         if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
         {
-            // Binary protocol path
-            if (receivePacket(SystemSerial, &rx_packet, PROTOCOL_TIMEOUT_MS))
+            // Binary protocol path - with non-blocking check
+            if (receivePacket(SystemSerial, &rx_packet, 5))  // Reduced timeout to 5ms
             {
                 // Process packet based on type
                 switch (rx_packet.packet_type)
@@ -161,30 +180,27 @@ void loop()
                         
                         if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
                         {
+                            // Add to queue instead of processing immediately
+                            if (cmd_queue.count < CMD_QUEUE_SIZE)
+                            {
+                                cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
+                                cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
+                                cmd_queue.count++;
+                            }
+                            // If queue full, overwrite oldest command (sliding window)
+                            else
+                            {
+                                cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
+                                cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
+                                cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
+                            }
+                            
+                            // Quick ACK without detailed status
                             float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                            
-                            if (mode == MODE_DIRECT_POSITION)
-                            {
-                                // Direct position control
-                                control_mode = POSITION_CONTROL_ONLY;
-                                position_pid.setpoint = target_pos;
-                            }
-                            else if (mode == MODE_SCURVE_PROFILE)
-                            {
-                                // S-Curve profile control
-                                control_mode = POSITION_CONTROL_WITH_SCURVE;
-                                scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                                start_scurve_time = micros();
-                            }
-                            
-                            // Send status feedback immediately
-                            int32_t pos_feedback = (int32_t)(current_pos * 100.0f);  // degrees * 100
-                            uint8_t status_flags = computeStatusFlags(
-                                abs(current_pos - target_pos) > 1.0f,  // is_moving
-                                abs(current_pos - target_pos) <= 1.0f,  // at_goal
-                                false  // no error
-                            );
-                            sendStatusFeedback(SystemSerial, pos_feedback, 0, status_flags);
+                            int32_t pos_feedback = (int32_t)(current_pos * 100.0f);
+                            sendStatusFeedback(SystemSerial, pos_feedback, 0, 0x01);  // Moving flag
                         }
                         else
                         {
@@ -272,7 +288,40 @@ void loop()
         }
     }
 
-    // Position controller (Comment fot endless drive)
+    // Process command queue with rate limiting
+    if (cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
+    {
+        last_setpoint_update_time = current_time;
+        
+        // Get command from queue
+        float target_pos = cmd_queue.target_positions[cmd_queue.read_idx];
+        uint8_t mode = cmd_queue.modes[cmd_queue.read_idx];
+        cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
+        cmd_queue.count--;
+        
+        // Only update if position changed significantly
+        if (abs(target_pos - last_target_position) > POSITION_DEADBAND)
+        {
+            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            
+            if (mode == MODE_DIRECT_POSITION)
+            {
+                control_mode = POSITION_CONTROL_ONLY;
+                position_pid.setpoint = target_pos;
+            }
+            else if (mode == MODE_SCURVE_PROFILE)
+            {
+                // Only replan if not already moving to this target
+                control_mode = POSITION_CONTROL_WITH_SCURVE;
+                scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                start_scurve_time = current_time;
+            }
+            
+            last_target_position = target_pos;
+        }
+    }
+
+    // Position controller (Comment for endless drive)
     if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
     {
         last_position_control_time = current_time;
