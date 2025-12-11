@@ -129,7 +129,7 @@ void setup()
     // Commutation test voltage (24V supply: Vmax = 13.86V)
     // Recommended: ±2.0 (slow/safe) | ±5.0 (normal) | ±8.0 (fast) | ±10.0 (very fast) | ±13.0 (max/danger)
     vd_cmd = 0.0;  
-    vq_cmd = -8.0;  // Normal speed 
+    vq_cmd = -5.0;  // Normal speed 
     
     // Start after button release
     SystemSerial->println("Starting...");   
