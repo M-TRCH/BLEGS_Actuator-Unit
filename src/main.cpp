@@ -43,7 +43,7 @@ float last_target_position = 0.0f;
 void setup() 
 {
 #ifdef SYSTEM_H
-    systemInit(SERIAL_SYSTEM);   // Initialize the system with RS232 pins
+    systemInit(SERIAL_SYSTEM, 2000);    // Initialize the system with 2s wait time
 #endif
 
 #ifdef PROTOCOL_H
@@ -57,8 +57,9 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);   // motor 1 configuration
-    saveMotorDataToEEPROM(486.0f, 325.0f, 709.3f, false);     // motor 2 configuration
+    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);       // motor 1 configuration
+    saveMotorDataToEEPROM(486.0f, 325.0f, 709.3f, false);       // motor 2 configuration
+    saveMotorDataToEEPROM(343.0f, 271.0f, 0.0f, false);         // motor 3 configuration
 #endif
 
 #ifdef ENCODER_H
@@ -125,12 +126,12 @@ void setup()
         delay(10);
     }
     
-    // Set default vd and vq for commutation test
+    // Commutation test voltage (24V supply: Vmax = 13.86V)
+    // Recommended: ±2.0 (slow/safe) | ±5.0 (normal) | ±8.0 (fast) | ±10.0 (very fast) | ±13.0 (max/danger)
     vd_cmd = 0.0;  
-    vq_cmd = -8.0; 
-
+    vq_cmd = -8.0;  // Normal speed 
+    
     // Start after button release
-    delay(1500); // Debounce delay
     SystemSerial->println("Starting...");   
     setLEDStatus(LED_STATUS_RUNNING);
 
@@ -141,6 +142,11 @@ void setup()
 
 void loop()
 {
+#ifdef LED_H
+    // Update LED effects
+    updateLEDStatus();
+#endif
+
     // Uncomment to test open-loop park function
     while (0)
     {
@@ -149,180 +155,184 @@ void loop()
         SystemSerial->println(readRotorAngle());    
     }
     
-#ifdef LED_H
-    // Update LED effects
-    updateLEDStatus();
-#endif
-
     // Get current time
     uint32_t current_time = micros();
 
-    // Handle incoming serial communication (Hybrid Protocol)
-    // Process only if enough data available to avoid blocking
-    if (SystemSerial->available() >= 4)  // At least header + type + len
+    // Set endless_drive_mode to true for continuous rotation
+    static bool endless_drive_mode = true; 
+
+    if (endless_drive_mode)
     {
-        // Check if it's a binary packet or ASCII command
-        if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
+
+    }
+    else 
+    {
+        // Handle incoming serial communication (Hybrid Protocol)
+        // Process only if enough data available to avoid blocking
+        if (SystemSerial->available() >= 4)  // At least header + type + len
         {
-            // Binary protocol path - with non-blocking check
-            if (receivePacket(SystemSerial, &rx_packet, 5))  // Reduced timeout to 5ms
+            // Check if it's a binary packet or ASCII command
+            if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
             {
-                // Process packet based on type
-                switch (rx_packet.packet_type)
+                // Binary protocol path - with non-blocking check
+                if (receivePacket(SystemSerial, &rx_packet, 5))  // Reduced timeout to 5ms
                 {
-                    case PKT_CMD_SET_GOAL:
+                    // Process packet based on type
+                    switch (rx_packet.packet_type)
                     {
-                        float target_pos;
-                        uint16_t duration_ms;
-                        uint8_t mode;
-                        
-                        PayloadSetGoal* goal_payload = (PayloadSetGoal*)rx_packet.payload;
-                        
-                        if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
+                        case PKT_CMD_SET_GOAL:
                         {
-                            // Add to queue instead of processing immediately
-                            if (cmd_queue.count < CMD_QUEUE_SIZE)
+                            float target_pos;
+                            uint16_t duration_ms;
+                            uint8_t mode;
+                            
+                            PayloadSetGoal* goal_payload = (PayloadSetGoal*)rx_packet.payload;
+                            
+                            if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
                             {
-                                cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
-                                cmd_queue.modes[cmd_queue.write_idx] = mode;
-                                cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
-                                cmd_queue.count++;
+                                // Add to queue instead of processing immediately
+                                if (cmd_queue.count < CMD_QUEUE_SIZE)
+                                {
+                                    cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
+                                    cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                    cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
+                                    cmd_queue.count++;
+                                }
+                                // If queue full, overwrite oldest command (sliding window)
+                                else
+                                {
+                                    cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
+                                    cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
+                                    cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                    cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
+                                }
+                                
+                                // Quick ACK without detailed status
+                                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                                int32_t pos_feedback = (int32_t)(current_pos * 100.0f);
+                                sendStatusFeedback(SystemSerial, pos_feedback, 0, 0x01);  // Moving flag
                             }
-                            // If queue full, overwrite oldest command (sliding window)
                             else
                             {
-                                cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
-                                cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
-                                cmd_queue.modes[cmd_queue.write_idx] = mode;
-                                cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
+                                // Invalid payload
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_SET_GOAL);
                             }
-                            
-                            // Quick ACK without detailed status
-                            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                            int32_t pos_feedback = (int32_t)(current_pos * 100.0f);
-                            sendStatusFeedback(SystemSerial, pos_feedback, 0, 0x01);  // Moving flag
+                            break;
                         }
-                        else
+                        
+                        case PKT_CMD_PING:
                         {
-                            // Invalid payload
-                            sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_SET_GOAL);
+                            // Simple ping response
+                            int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
+                            sendStatusFeedback(SystemSerial, pos_feedback, 0, 0);
+                            break;
                         }
-                        break;
+                        
+                        default:
+                        {
+                            // Unknown command
+                            sendErrorFeedback(SystemSerial, ERR_UNKNOWN_COMMAND, rx_packet.packet_type);
+                            break;
+                        }
                     }
-                    
-                    case PKT_CMD_PING:
-                    {
-                        // Simple ping response
-                        int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
-                        sendStatusFeedback(SystemSerial, pos_feedback, 0, 0);
-                        break;
-                    }
-                    
-                    default:
-                    {
-                        // Unknown command
-                        sendErrorFeedback(SystemSerial, ERR_UNKNOWN_COMMAND, rx_packet.packet_type);
-                        break;
-                    }
+                }
+                else
+                {
+                    // CRC failed or timeout
+                    sendErrorFeedback(SystemSerial, ERR_CRC_FAILED);
                 }
             }
             else
             {
-                // CRC failed or timeout
-                sendErrorFeedback(SystemSerial, ERR_CRC_FAILED);
-            }
-        }
-        else
-        {
-            // Legacy ASCII protocol path
-            char cmd = SystemSerial->read();
-            
-            // Mode selection commands
-            if (cmd == 'M' || cmd == 'm') 
-            {
-                // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
-                int mode = SystemSerial->parseInt();
-                if (mode == 0) 
-                {
-                    control_mode = POSITION_CONTROL_ONLY;
-                    SystemSerial->println("Mode: Position Control Only");
-                } 
-                else if (mode == 1) 
-                {
-                    control_mode = POSITION_CONTROL_WITH_SCURVE;
-                    SystemSerial->println("Mode: Position Control with S-Curve");
-                }
-            }
-            // Position setpoint command
-            else if (cmd == '#') 
-            {
-                float new_setpoint = SystemSerial->parseFloat();
-                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                // Legacy ASCII protocol path
+                char cmd = SystemSerial->read();
                 
-                if (control_mode == POSITION_CONTROL_ONLY) 
+                // Mode selection commands
+                if (cmd == 'M' || cmd == 'm') 
                 {
-                    // Direct position control without S-curve
-                    position_pid.setpoint = new_setpoint;
-                    SystemSerial->print("Direct setpoint: ");
-                    SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
-                } 
-                else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-                {
-                    // Position control with S-curve profile
-                    if (new_setpoint != position_pid.setpoint) 
+                    // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
+                    int mode = SystemSerial->parseInt();
+                    if (mode == 0) 
                     {
-                        scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                        start_scurve_time = micros();
-                        SystemSerial->print("S-Curve setpoint: ");
-                        SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                        control_mode = POSITION_CONTROL_ONLY;
+                        SystemSerial->println("Mode: Position Control Only");
+                    } 
+                    else if (mode == 1) 
+                    {
+                        control_mode = POSITION_CONTROL_WITH_SCURVE;
+                        SystemSerial->println("Mode: Position Control with S-Curve");
                     }
                 }
-            }
-            // Toggle binary protocol mode
-            else if (cmd == 'B' || cmd == 'b')
-            {
-                binary_mode_enabled = !binary_mode_enabled;
-                SystemSerial->print("Binary mode: ");
-                SystemSerial->println(binary_mode_enabled ? "ENABLED" : "DISABLED");
+                // Position setpoint command
+                else if (cmd == '#') 
+                {
+                    float new_setpoint = SystemSerial->parseFloat();
+                    float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                    
+                    if (control_mode == POSITION_CONTROL_ONLY) 
+                    {
+                        // Direct position control without S-curve
+                        position_pid.setpoint = new_setpoint;
+                        SystemSerial->print("Direct setpoint: ");
+                        SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                    } 
+                    else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+                    {
+                        // Position control with S-curve profile
+                        if (new_setpoint != position_pid.setpoint) 
+                        {
+                            scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                            start_scurve_time = micros();
+                            SystemSerial->print("S-Curve setpoint: ");
+                            SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
+                        }
+                    }
+                }
+                // Toggle binary protocol mode
+                else if (cmd == 'B' || cmd == 'b')
+                {
+                    binary_mode_enabled = !binary_mode_enabled;
+                    SystemSerial->print("Binary mode: ");
+                    SystemSerial->println(binary_mode_enabled ? "ENABLED" : "DISABLED");
+                }
             }
         }
-    }
 
-    // Process command queue with rate limiting
-    if (cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
-    {
-        last_setpoint_update_time = current_time;
-        
-        // Get command from queue
-        float target_pos = cmd_queue.target_positions[cmd_queue.read_idx];
-        uint8_t mode = cmd_queue.modes[cmd_queue.read_idx];
-        cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
-        cmd_queue.count--;
-        
-        // Only update if position changed significantly
-        if (abs(target_pos - last_target_position) > POSITION_DEADBAND)
+        // Process command queue with rate limiting
+        if (cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
         {
-            float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+            last_setpoint_update_time = current_time;
             
-            if (mode == MODE_DIRECT_POSITION)
-            {
-                control_mode = POSITION_CONTROL_ONLY;
-                position_pid.setpoint = target_pos;
-            }
-            else if (mode == MODE_SCURVE_PROFILE)
-            {
-                // Only replan if not already moving to this target
-                control_mode = POSITION_CONTROL_WITH_SCURVE;
-                scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                start_scurve_time = current_time;
-            }
+            // Get command from queue
+            float target_pos = cmd_queue.target_positions[cmd_queue.read_idx];
+            uint8_t mode = cmd_queue.modes[cmd_queue.read_idx];
+            cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
+            cmd_queue.count--;
             
-            last_target_position = target_pos;
+            // Only update if position changed significantly
+            if (abs(target_pos - last_target_position) > POSITION_DEADBAND)
+            {
+                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+                
+                if (mode == MODE_DIRECT_POSITION)
+                {
+                    control_mode = POSITION_CONTROL_ONLY;
+                    position_pid.setpoint = target_pos;
+                }
+                else if (mode == MODE_SCURVE_PROFILE)
+                {
+                    // Only replan if not already moving to this target
+                    control_mode = POSITION_CONTROL_WITH_SCURVE;
+                    scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
+                    start_scurve_time = current_time;
+                }
+                
+                last_target_position = target_pos;
+            }
         }
-    }
 
-    // Position controller (Comment for endless drive)
-    if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
+        // Position controller
+        if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
     {
         last_position_control_time = current_time;
 
@@ -338,7 +348,8 @@ void loop()
             positionControl(readRotorAbsoluteAngle(), &vq_cmd);
         }
     }
-    
+    }
+
     // SVPWM controller
     if (current_time - last_svpwm_time >= SVPWM_PERIOD_US)
     {
@@ -357,9 +368,8 @@ void loop()
     { 
         last_debug_time = current_time;
 
-        // SystemSerial->print("Returns:\t");
-        // SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
-        // SystemSerial->print("\t");
-        // SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
+        SystemSerial->print("\t");
+        SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
     }
 }

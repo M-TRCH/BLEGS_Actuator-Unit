@@ -5,7 +5,7 @@
 #include "system.h"
 
 // System constants
-#define VDC     12.0f // DC bus voltage, used for SVPWM calculations
+#define VDC     24.0f // DC bus voltage, used for SVPWM calculations
 
 // Function prototypes
 void setPWMdutyCycle(float dutyA=0, float dutyB=0, float dutyC=0);

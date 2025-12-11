@@ -53,6 +53,6 @@ extern HardwareSerial Serial3;          // Fixed RS485 Serial3
 #define SW_CALC_PRESSING   (digitalRead(SW_CALC_PIN) == LOW)
 #define SW_START_PRESSING  (digitalRead(SW_START_PIN) == LOW)
 
-void systemInit(SerialOutputType serial_output = SERIAL_SYSTEM);
+void systemInit(SerialOutputType serial_output = SERIAL_SYSTEM, int wait_ms = 0);
 
 #endif // SYSTEM_H
