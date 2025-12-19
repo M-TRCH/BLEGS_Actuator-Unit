@@ -57,9 +57,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(803.0f, 664.0f, 629.1f, false);       // motor 1 configuration
-    saveMotorDataToEEPROM(486.0f, 325.0f, 709.3f, false);       // motor 2 configuration
-    saveMotorDataToEEPROM(343.0f, 271.0f, 0.0f, false);         // motor 3 configuration
+    saveMotorDataToEEPROM(157.0f, 47.0f, 0.0f, false);          // motor FL-1 configuration (19/12/25)
 #endif
 
 #ifdef ENCODER_H
@@ -68,7 +66,7 @@ void setup()
 
 #ifdef MOTOR_CONTROL_H
     // Motor alignment    
-    findConstOffset(false, 2.0f, 0.05f, 0.5f, CCW);  // true for active calibration 
+    findConstOffset(false, 4.0f, 0.05f, 0.5f, CCW);  // true for active calibration 
     const_rotor_offset_cw = GET_ROTOR_OFFSET_CW();
     const_rotor_offset_ccw = GET_ROTOR_OFFSET_CCW();
     rotor_offset_abs = GET_ROTOR_OFFSET_ABS();
@@ -159,8 +157,7 @@ void loop()
     uint32_t current_time = micros();
 
     // Set endless_drive_mode to true for continuous rotation
-    static bool endless_drive_mode = true; 
-
+    static bool endless_drive_mode = false; 
     if (endless_drive_mode)
     {
 
