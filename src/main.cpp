@@ -361,10 +361,9 @@ void loop()
     }
 
     // Debug information (disable by default)
-    if (current_time - last_debug_time >= DEBUG_PERIOD_US)
+    if (false && current_time - last_debug_time >= DEBUG_PERIOD_US)
     { 
         last_debug_time = current_time;
-
         SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
         SystemSerial->print("\t");
         SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
