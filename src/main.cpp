@@ -330,21 +330,21 @@ void loop()
 
         // Position controller
         if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
-    {
-        last_position_control_time = current_time;
+        {
+            last_position_control_time = current_time;
 
-        if (control_mode == POSITION_CONTROL_ONLY) 
-        {
-            // Direct position control
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+            if (control_mode == POSITION_CONTROL_ONLY) 
+            {
+                // Direct position control
+                positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+            }
+            else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+            {
+                // Position control with S-curve profile
+                position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
+                positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+            }
         }
-        else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-        {
-            // Position control with S-curve profile
-            position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-            positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-        }
-    }
     }
 
     // SVPWM controller
@@ -361,11 +361,11 @@ void loop()
     }
 
     // Debug information (disable by default)
-    if (false && current_time - last_debug_time >= DEBUG_PERIOD_US)
-    { 
-        last_debug_time = current_time;
-        SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
-        SystemSerial->print("\t");
-        SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
-    }
+    // if (current_time - last_debug_time >= DEBUG_PERIOD_US)
+    // { 
+    //     last_debug_time = current_time;
+    //     SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
+    //     SystemSerial->print("\t");
+    //     SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
+    // }
 }

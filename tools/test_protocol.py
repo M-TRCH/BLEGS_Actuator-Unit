@@ -302,7 +302,7 @@ def parse_error_feedback(payload: bytes) -> dict:
 def main():
     """Main test function"""
     # Configure serial port
-    PORT = 'COM44'  # Change to your port
+    PORT = 'COM9'  # Change to your port
     BAUDRATE = 921600
     
     print("=" * 60)
