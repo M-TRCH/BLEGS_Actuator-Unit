@@ -24,6 +24,7 @@ enum PacketType : uint8_t {
     PKT_CMD_SET_GOAL        = 0x01,     // Command: Set position goal (PC -> Motor)
     PKT_CMD_SET_CONFIG      = 0x02,     // Command: Set configuration (PC -> Motor)
     PKT_CMD_PING            = 0x03,     // Command: Ping/health check
+    PKT_CMD_EMERGENCY_STOP  = 0x04,     // Command: Emergency stop (permanent until power cycle)
     
     PKT_FB_STATUS           = 0x81,     // Feedback: Status response (Motor -> PC)
     PKT_FB_CONFIG           = 0x82,     // Feedback: Configuration response
@@ -44,7 +45,8 @@ enum StatusFlags : uint8_t {
     STATUS_AT_GOAL          = (1 << 2), // Bit 2: At goal position
     STATUS_OVERHEAT         = (1 << 3), // Bit 3: Overheating
     STATUS_OVERCURRENT      = (1 << 4), // Bit 4: Overcurrent detected
-    STATUS_ENCODER_ERROR    = (1 << 5)  // Bit 5: Encoder error
+    STATUS_ENCODER_ERROR    = (1 << 5), // Bit 5: Encoder error
+    STATUS_EMERGENCY_STOPPED = (1 << 6) // Bit 6: Emergency stop activated
 };
 
 // Error Codes

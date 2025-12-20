@@ -23,6 +23,7 @@ ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 // Protocol variables
 BinaryPacket rx_packet;
 bool binary_mode_enabled = true;  // Enable binary protocol by default
+bool emergency_stop_active = false;  // Emergency stop flag (permanent until power cycle)
 
 // Command queue to prevent motor jerking
 #define CMD_QUEUE_SIZE 4
@@ -230,7 +231,29 @@ void loop()
                             int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
                             currentUpdate();
                             int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0);
+                            uint8_t flags = emergency_stop_active ? 0x40 : 0;  // Set emergency stop flag if active
+                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, flags);
+                            break;
+                        }
+                        
+                        case PKT_CMD_EMERGENCY_STOP:
+                        {
+                            // Emergency stop - permanent until power cycle
+                            emergency_stop_active = true;
+                            
+                            // Stop motor immediately
+                            vd_cmd = 0.0f;
+                            vq_cmd = 0.0f;
+                            setPWMdutyCycle();  // Set all PWM to zero
+                            
+                            // Send acknowledgment with emergency stop flag
+                            int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
+                            currentUpdate();
+                            int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
+                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x40);  // 0x40 = STATUS_EMERGENCY_STOPPED
+                            
+                            SystemSerial->println("\n*** EMERGENCY STOP ACTIVATED ***");
+                            SystemSerial->println("Motor disabled. Power cycle required to restart.");
                             break;
                         }
                         
@@ -305,7 +328,7 @@ void loop()
         }
 
         // Process command queue with rate limiting
-        if (cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
+        if (!emergency_stop_active && cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
         {
             last_setpoint_update_time = current_time;
             
@@ -342,16 +365,19 @@ void loop()
         {
             last_position_control_time = current_time;
 
-            if (control_mode == POSITION_CONTROL_ONLY) 
+            if (!emergency_stop_active)
             {
-                // Direct position control
-                positionControl(readRotorAbsoluteAngle(), &vq_cmd);
-            }
-            else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-            {
-                // Position control with S-curve profile
-                position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-                positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+                if (control_mode == POSITION_CONTROL_ONLY) 
+                {
+                    // Direct position control
+                    positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+                }
+                else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
+                {
+                    // Position control with S-curve profile
+                    position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
+                    positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+                }
             }
         }
     }
@@ -365,8 +391,16 @@ void loop()
         updateRawRotorAngle();
         updateMultiTurnTracking();  
 
-        // apply SVPWM control
-        svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
+        // Apply SVPWM control only if emergency stop is not active
+        if (!emergency_stop_active)
+        {
+            svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
+        }
+        else
+        {
+            // Keep PWM at zero during emergency stop
+            setPWMdutyCycle();
+        }
     }
 
     // Debug (disable by default)

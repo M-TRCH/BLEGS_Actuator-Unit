@@ -23,6 +23,7 @@ class PacketType(IntEnum):
     PKT_CMD_SET_GOAL = 0x01
     PKT_CMD_SET_CONFIG = 0x02
     PKT_CMD_PING = 0x03
+    PKT_CMD_EMERGENCY_STOP = 0x04
     PKT_FB_STATUS = 0x81
     PKT_FB_CONFIG = 0x82
     PKT_FB_ERROR = 0x83
@@ -41,6 +42,7 @@ class StatusFlags(IntEnum):
     STATUS_OVERHEAT = (1 << 3)
     STATUS_OVERCURRENT = (1 << 4)
     STATUS_ENCODER_ERROR = (1 << 5)
+    STATUS_EMERGENCY_STOPPED = (1 << 6)
 
 class ErrorCode(IntEnum):
     """Error code enumeration"""
@@ -199,6 +201,37 @@ def send_start_command(port: serial.Serial) -> bool:
     return True
 
 
+def send_emergency_stop(port: serial.Serial) -> bool:
+    """
+    Send emergency stop command
+    
+    Args:
+        port: Serial port object
+        
+    Returns:
+        True if sent successfully
+    """
+    # Build packet
+    header = bytes([HEADER_1, HEADER_2])
+    pkt_type = bytes([PacketType.PKT_CMD_EMERGENCY_STOP])
+    payload = b''
+    payload_len = bytes([0])
+    
+    # Calculate CRC
+    crc_data = pkt_type + payload_len
+    crc = calculate_crc16(crc_data)
+    crc_bytes = struct.pack('<H', crc)
+    
+    # Assemble and send packet
+    packet = header + pkt_type + payload_len + crc_bytes
+    port.write(packet)
+    
+    print(f"[TX] Emergency Stop")
+    print(f"     Packet: {packet.hex(' ')}")
+    
+    return True
+
+
 def receive_packet(port: serial.Serial, timeout: float = 0.1) -> Optional[Tuple[int, bytes]]:
     """
     Receive and parse a binary packet
@@ -273,7 +306,8 @@ def parse_status_feedback(payload: bytes) -> dict:
         'flags': status_flags,
         'is_moving': bool(status_flags & StatusFlags.STATUS_MOVING),
         'at_goal': bool(status_flags & StatusFlags.STATUS_AT_GOAL),
-        'error': bool(status_flags & StatusFlags.STATUS_ERROR)
+        'error': bool(status_flags & StatusFlags.STATUS_ERROR),
+        'emergency_stopped': bool(status_flags & StatusFlags.STATUS_EMERGENCY_STOPPED)
     }
 
 
@@ -387,6 +421,42 @@ def main():
                     status = parse_status_feedback(payload)
                     print(f"[RX] ID:{status['motor_id']} Target:{pos:6.2f}° Pos:{status['position_deg']:6.2f}° I:{status['current_ma']}mA")
             time.sleep(1.5)  # Wait for motor to reach target position
+        
+        # Test 5: Emergency Stop
+        print("\n--- Test 5: Emergency Stop ---")
+        print("⚠️  This will PERMANENTLY stop the motor until power cycle!")
+        print("Sending emergency stop command...")
+        send_emergency_stop(port)
+        time.sleep(0.05)
+        
+        result = receive_packet(port)
+        if result:
+            pkt_type, payload = result
+            if pkt_type == PacketType.PKT_FB_STATUS:
+                status = parse_status_feedback(payload)
+                print(f"[RX] Emergency Stop Response:")
+                print(f"     Motor ID: {status['motor_id']}")
+                print(f"     Position: {status['position_deg']:.2f}°")
+                print(f"     Current: {status['current_ma']} mA")
+                print(f"     Emergency Stopped: {status['emergency_stopped']}")
+                print(f"     Flags: 0x{status['flags']:02X}")
+        
+        # Verify motor is stopped by sending ping
+        print("\nVerifying motor is stopped (Ping)...")
+        time.sleep(0.5)
+        send_ping(port)
+        time.sleep(0.05)
+        
+        result = receive_packet(port)
+        if result:
+            pkt_type, payload = result
+            if pkt_type == PacketType.PKT_FB_STATUS:
+                status = parse_status_feedback(payload)
+                if status['emergency_stopped']:
+                    print("[✓] Motor confirmed in EMERGENCY STOP state")
+                    print("    Power cycle required to restart")
+                else:
+                    print("[✗] Warning: Emergency stop flag not set!")
         
         port.close()
         print("\n" + "=" * 60)
