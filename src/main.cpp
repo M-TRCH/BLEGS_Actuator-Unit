@@ -84,9 +84,8 @@ void setup()
     setPWMdutyCycle();  // reset PWM duty cycle to zero
 #endif
 
-    // Wait for start button press or serial start command
-    bool start_requested = false;
-    while (!start_requested)
+    // Calibration verification loop
+    while (0)
     {
         updateRawRotorAngle();  
         updateMultiTurnTracking();
@@ -110,21 +109,48 @@ void setup()
         SystemSerial->print(computeOffsetAngleIK(calibration_angle, abs_angle), SERIAL1_DECIMAL_PLACES);
         SystemSerial->print("\t\tAngle w offset : ");
         SystemSerial->println(abs_angle_with_offset, SERIAL1_DECIMAL_PLACES);
-        
+    }
+
+    // Wait for start button press or serial start command
+    bool start_requested = false;
+    while (!start_requested)
+    {
         // Check for button press
         if (SW_START_PRESSING)
         {
             start_requested = true;
         }
         
-        // Check for serial start command (ASCII: 'S' or 's')
-        if (SystemSerial->available())
+        // Check for serial start command (Binary or ASCII)
+        if (SystemSerial->available() >= 4)
         {
-            char cmd = SystemSerial->peek();  // Peek without consuming
+            // Check if it's a binary packet
+            if (isBinaryPacketAvailable(SystemSerial))
+            {
+                BinaryPacket start_packet;
+                if (receivePacket(SystemSerial, &start_packet, 5))
+                {
+                    // Accept PING as start signal during initialization
+                    if (start_packet.packet_type == PKT_CMD_PING)
+                    {
+                        SystemSerial->println("Start command received via binary protocol (PING)");
+                        start_requested = true;
+                        
+                        // Send response
+                        int32_t pos_feedback = (int32_t)(abs_angle_with_offset * 100.0f);
+                        sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, 0, 0);
+                    }
+                }
+            }
+        }
+        else if (SystemSerial->available())
+        {
+            // Check for ASCII start command ('S' or 's')
+            char cmd = SystemSerial->peek();
             if (cmd == 'S' || cmd == 's')
             {
                 SystemSerial->read();  // Consume the character
-                SystemSerial->println("Start command received via serial");
+                SystemSerial->println("Start command received via serial (ASCII)");
                 start_requested = true;
             }
         }
@@ -142,6 +168,9 @@ void setup()
     setLEDStatus(LED_STATUS_RUNNING);
 
     // Initialize position control S-curve
+    updateRawRotorAngle();  
+    updateMultiTurnTracking();
+    abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
     scurve.plan(abs_angle_with_offset, calibration_angle * GEAR_RATIO, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
     start_scurve_time = micros(); // Record the start time in microseconds
 }

@@ -352,11 +352,34 @@ def main():
         
         print(f"Connected to {PORT} @ {BAUDRATE} baud\n")
         
-        # Send start command to begin motor operation
-        print("\n--- Sending Start Command ---")
-        send_start_command(port)
-        print("Motor should now be running...\n")
-        time.sleep(5.0)  # Wait for motor to initialize
+        # Test 0: Start Motor (Binary Protocol)
+        print("\n--- Test 0: Start Motor (Binary Protocol) ---")
+        print("Sending PING to start motor operation...")
+        send_ping(port)
+        time.sleep(0.1)
+        
+        result = receive_packet(port, timeout=1.0)
+        if result:
+            pkt_type, payload = result
+            print(f"[RX] Packet Type: 0x{pkt_type:02X}")
+            if pkt_type == PacketType.PKT_FB_STATUS:
+                status = parse_status_feedback(payload)
+                print(f"     Motor ID: {status['motor_id']}")
+                print(f"     Position: {status['position_deg']:.2f}°")
+                print(f"     Status: Motor started successfully")
+            print("Motor should now be running...\n")
+            time.sleep(4.0)  # Wait for motor to initialize
+        else:
+            print("[✗] No response received. Motor did not start.")
+            print("    Please check:")
+            print("    - Motor power is ON")
+            print("    - Correct COM port is selected")
+            print("    - Firmware is running properly")
+            print("\n" + "=" * 60)
+            print("Test aborted - Motor not responding")
+            print("=" * 60)
+            port.close()
+            return  # Exit early, skip remaining tests
         
         # Test 1: Ping
         print("\n--- Test 1: Ping ---")
@@ -441,8 +464,9 @@ def main():
                 print(f"     Emergency Stopped: {status['emergency_stopped']}")
                 print(f"     Flags: 0x{status['flags']:02X}")
         
-        # Verify motor is stopped by sending ping
-        print("\nVerifying motor is stopped (Ping)...")
+        # Test 6: Verify Emergency Stop
+        print("\n--- Test 6: Verify Emergency Stop State ---")
+        print("Verifying motor is stopped (Ping)...")
         time.sleep(0.5)
         send_ping(port)
         time.sleep(0.05)
