@@ -39,12 +39,14 @@ pip install pyserial
 ยังคงใช้งานได้เหมือนเดิม:
 
 ```
-S               # เริ่มการทำงานของมอเตอร์ (Start Command)
+S               # เริ่มการทำงานของมอเตอร์ (Start Command - ASCII fallback)
 M0              # เปลี่ยนเป็น Direct Position Control
 M1              # เปลี่ยนเป็น S-Curve Control
 #-45.5          # ตั้งค่าตำแหน่งเป้าหมาย -45.5 degrees
 B               # Toggle Binary Protocol ON/OFF
 ```
+
+**หมายเหตุ:** แนะนำให้ใช้ Binary Protocol (PING) สำหรับการเริ่มมอเตอร์แทน ASCII 'S'
 
 ### 2. Binary Protocol (High-Speed Mode)
 
@@ -63,6 +65,7 @@ B               # Toggle Binary Protocol ON/OFF
 |----|-----------|-------------|
 | `0x01` | PC → Motor | CMD_SET_GOAL (ตั้งค่าตำแหน่งเป้าหมาย) |
 | `0x03` | PC → Motor | CMD_PING (ตรวจสอบสถานะ) |
+| `0x04` | PC → Motor | CMD_EMERGENCY_STOP (หยุดฉุกเฉิน - ถาวรจนกว่าจะ power cycle) |
 | `0x81` | Motor → PC | FB_STATUS (รายงานสถานะปัจจุบัน) |
 | `0x83` | Motor → PC | FB_ERROR (รายงานข้อผิดพลาด) |
 
@@ -124,13 +127,40 @@ FE EE 01 07 01 94 11 00 00 E8 03 [CRC_L] [CRC_H]
 
 ### CMD_PING (0x03)
 
-ใช้ตรวจสอบสถานะและความเร็วของการตอบสนอง
+ใช้ตรวจสอบสถานะและความเร็วของการตอบสนอง  
+**หมายเหตุ:** ในขั้นตอน initialization สามารถใช้ PING เป็นสัญญาณเริ่มมอเตอร์แทน ASCII 'S' ได้
 
 **Payload:** ไม่มี (length = 0)
 
 ```
 FE EE 03 00 [CRC_L] [CRC_H]
 ```
+
+**Response:** FB_STATUS พร้อมข้อมูล Motor ID, ตำแหน่ง, กระแส และ status flags
+
+### CMD_EMERGENCY_STOP (0x04)
+
+⚠️ **คำสั่งหยุดฉุกเฉิน - ใช้เมื่อมอเตอร์ทำงานผิดปกติร้ายแรง**
+
+เมื่อได้รับคำสั่งนี้:
+- หยุด PWM ทันที (vd = 0, vq = 0)
+- ตั้งค่า emergency_stop_active = true
+- ปิดการรับคำสั่งควบคุมทั้งหมด
+- **ต้อง power cycle (เปิด-ปิดไฟ) เพื่อรีสตาร์ทระบบ**
+
+**Payload:** ไม่มี (length = 0)
+
+```python
+# Python example
+send_emergency_stop(port)
+```
+
+**Packet:**
+```
+FE EE 04 00 [CRC_L] [CRC_H]
+```
+
+**Response:** FB_STATUS พร้อม STATUS_EMERGENCY_STOPPED flag (0x40)
 
 ---
 
@@ -142,11 +172,11 @@ FE EE 03 00 [CRC_L] [CRC_H]
 
 **Payload Structure:**
 ```
-┌─────────────────┬─────────────────┬──────────────┐
-│ Actual Position │ Actual Current  │ Status Flags │
-│ (int32, deg*100)│  (int16, mA)    │  (uint8)     │
-│    4 bytes      │    2 bytes      │   1 byte     │
-└─────────────────┴─────────────────┴──────────────┘
+┌──────────┬─────────────────┬─────────────────┬──────────────┐
+│ Motor ID │ Actual Position │ Actual Current  │ Status Flags │
+│ (uint8)  │ (int32, deg*100)│  (int16, mA)    │  (uint8)     │
+│  1 byte  │    4 bytes      │    2 bytes      │   1 byte     │
+└──────────┴─────────────────┴─────────────────┴──────────────┘
 ```
 
 **Status Flags (Bitfield):**
@@ -156,14 +186,16 @@ FE EE 03 00 [CRC_L] [CRC_H]
 - Bit 3: `STATUS_OVERHEAT` - อุณหภูมิสูงเกินไป
 - Bit 4: `STATUS_OVERCURRENT` - กระแสสูงเกินไป
 - Bit 5: `STATUS_ENCODER_ERROR` - Encoder มีปัญหา
+- Bit 6: `STATUS_EMERGENCY_STOPPED` - อยู่ในสถานะหยุดฉุกเฉิน (ต้อง power cycle)
 
 **Example Response:**
 ```
-FE EE 81 07 94 11 00 00 00 00 04 [CRC_L] [CRC_H]
-         │  └──────────┘ └───┘ └─
-         │  Position: 45.00°    Status: 0x04 (AT_GOAL)
-         │  Current: 0 mA
-         └─ Payload Length: 7 bytes
+FE EE 81 08 01 94 11 00 00 D2 04 04 [CRC_L] [CRC_H]
+         │  │  └──────────┘ └───┘ └─
+         │  │  Position: 45.00°    Status: 0x04 (AT_GOAL)
+         │  │  Current: 1234 mA
+         │  └─ Motor ID: 1
+         └─ Payload Length: 8 bytes
 ```
 
 ### FB_ERROR (0x83)
@@ -202,25 +234,34 @@ python test_protocol.py
 ============================================================
 High-Speed Binary Protocol - Test Client
 ============================================================
-Connected to COM44 @ 921600 baud
+Connected to COM9 @ 921600 baud
 
---- Sending Start Command ---
-[TX] Start Command (ASCII 'S')
+--- Test 0: Start Motor (Binary Protocol) ---
+Sending PING to start motor operation...
+[TX] Ping
+     Packet: fe ee 03 00 01 40
+[RX] Packet Type: 0x81
+     Motor ID: 1
+     Position: -720.00°
+     Status: Motor started successfully
 Motor should now be running...
 
 --- Test 1: Ping ---
 [TX] Ping
      Packet: fe ee 03 00 01 40
 [RX] Packet Type: 0x81
-     Position: -1.27°
-     Current: 0 mA
+     Motor ID: 1
+     Position: -720.12°
+     Current: 145 mA
      Flags: 0x00
 
 --- Test 2: Direct Position Command ---
-[TX] Direct Position: -45.0°
-     Packet: fe ee 01 05 00 6c ee ff ff 77 40
+[TX] Direct Position: -710.0°
+     Packet: fe ee 01 05 00 38 2a ff ff [CRC_L] [CRC_H]
 [RX] Status Feedback:
-     Position: -1.25°
+     Motor ID: 1
+     Position: -720.10°
+     Current: 156 mA
      Moving: True
      At Goal: False
 ```
@@ -236,15 +277,28 @@ Motor should now be running...
    #45.0      # Move to 45 degrees
    ```
 
-### 3. Auto-Start via Python
+### 3. Auto-Start via Binary Protocol (Recommended)
 
 ```python
 import serial
-port = serial.Serial('COM44', 921600)
-port.write(b'S')  # Send start command
-time.sleep(2.0)   # Wait for motor initialization
-# Now motor is ready for binary protocol commands
+import time
+from test_protocol import send_ping, receive_packet
+
+port = serial.Serial('COM9', 921600)
+time.sleep(0.5)
+
+# Send PING to start motor (Binary Protocol)
+send_ping(port)
+result = receive_packet(port, timeout=1.0)
+if result:
+    print("Motor started successfully")
+    time.sleep(4.0)  # Wait for motor initialization
+    # Now motor is ready for binary protocol commands
+else:
+    print("Motor did not respond - check power and connections")
 ```
+
+**หมายเหตุ:** ยังสามารถใช้ ASCII 'S' ได้เหมือนเดิม แต่แนะนำให้ใช้ Binary PING เพื่อความสอดคล้อง
 
 ---
 
@@ -414,6 +468,6 @@ if result:
 ---
 
 **สร้างโดย:** M-TRCH  
-**วันที่:** 2025-12-04  
-**เวอร์ชัน:** 1.1  
-**Last Update:** Serial Start Command Support
+**วันที่:** 2025-12-03  
+**เวอร์ชัน:** 1.2  
+**Last Update:** Motor ID, Current Sensing, Emergency Stop, Binary Start Command
