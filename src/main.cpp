@@ -2,6 +2,7 @@
 #include "system.h"
 #include "svpwm.h"
 #include "encoder.h"
+#include "current.h"
 #include "motor_control.h"
 #include "eeprom_utils.h"
 #include "led.h"
@@ -9,7 +10,8 @@
 #include "protocol.h"
 
 // Control mode enumeration (legacy)
-enum ControlMode_t {
+enum ControlMode_t 
+{
     POSITION_CONTROL_ONLY = 0,
     POSITION_CONTROL_WITH_SCURVE = 1
 };
@@ -24,7 +26,8 @@ bool binary_mode_enabled = true;  // Enable binary protocol by default
 
 // Command queue to prevent motor jerking
 #define CMD_QUEUE_SIZE 4
-struct CommandQueue {
+struct CommandQueue 
+{
     float target_positions[CMD_QUEUE_SIZE];
     uint8_t modes[CMD_QUEUE_SIZE];
     uint8_t write_idx;
@@ -62,6 +65,10 @@ void setup()
 
 #ifdef ENCODER_H
     encoderInit();  // Initialize the encoder
+#endif
+
+#ifdef CURRENT_H
+    currentInit();  // Initialize current sensing
 #endif
 
 #ifdef MOTOR_CONTROL_H
@@ -157,7 +164,7 @@ void loop()
     uint32_t current_time = micros();
 
     // Set endless_drive_mode to true for continuous rotation
-    static bool endless_drive_mode = false; 
+    static bool endless_drive_mode = true; 
     if (endless_drive_mode)
     {
 
@@ -360,12 +367,16 @@ void loop()
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
-    // Debug information (disable by default)
-    // if (current_time - last_debug_time >= DEBUG_PERIOD_US)
-    // { 
-    //     last_debug_time = current_time;
-    //     SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
-    //     SystemSerial->print("\t");
-    //     SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
-    // }
+    // Debug (disable by default)
+    if ((current_time - last_debug_time >= DEBUG_PERIOD_US) && true)
+    { 
+        last_debug_time = current_time;
+        // SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
+        // SystemSerial->print("\t");
+        // SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
+        
+        currentUpdate();
+        float dc_instant = currentEstimateDC();
+        SystemSerial->println(dc_instant, 3);
+    }
 }
