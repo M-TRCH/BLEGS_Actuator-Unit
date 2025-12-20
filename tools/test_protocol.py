@@ -258,14 +258,16 @@ def parse_status_feedback(payload: bytes) -> dict:
     Returns:
         Dictionary with parsed data
     """
-    if len(payload) < 7:
+    if len(payload) < 8:
         return None
     
-    actual_pos_raw = struct.unpack('<i', payload[0:4])[0]
-    actual_current = struct.unpack('<h', payload[4:6])[0]
-    status_flags = payload[6]
+    motor_id = payload[0]
+    actual_pos_raw = struct.unpack('<i', payload[1:5])[0]
+    actual_current = struct.unpack('<h', payload[5:7])[0]
+    status_flags = payload[7]
     
     return {
+        'motor_id': motor_id,
         'position_deg': actual_pos_raw / 100.0,
         'current_ma': actual_current,
         'flags': status_flags,
@@ -320,26 +322,29 @@ def main():
         print("\n--- Sending Start Command ---")
         send_start_command(port)
         print("Motor should now be running...\n")
-        time.sleep(3.0)  # Wait for motor to initialize
+        time.sleep(5.0)  # Wait for motor to initialize
         
         # Test 1: Ping
         print("\n--- Test 1: Ping ---")
         send_ping(port)
         time.sleep(0.05)
         
+        current_position = 0.0  # Default position
         result = receive_packet(port)
         if result:
             pkt_type, payload = result
             print(f"[RX] Packet Type: 0x{pkt_type:02X}")
             if pkt_type == PacketType.PKT_FB_STATUS:
                 status = parse_status_feedback(payload)
+                current_position = status['position_deg']  # Store current position
+                print(f"     Motor ID: {status['motor_id']}")
                 print(f"     Position: {status['position_deg']:.2f}°")
                 print(f"     Current: {status['current_ma']} mA")
                 print(f"     Flags: 0x{status['flags']:02X}")
         
         # Test 2: Direct Position Command
         print("\n--- Test 2: Direct Position Command ---")
-        send_direct_position(port, -45.0)
+        send_direct_position(port, current_position + 10.0)
         time.sleep(0.05)
         
         result = receive_packet(port)
@@ -348,13 +353,15 @@ def main():
             if pkt_type == PacketType.PKT_FB_STATUS:
                 status = parse_status_feedback(payload)
                 print(f"[RX] Status Feedback:")
+                print(f"     Motor ID: {status['motor_id']}")
                 print(f"     Position: {status['position_deg']:.2f}°")
+                print(f"     Current: {status['current_ma']} mA")
                 print(f"     Moving: {status['is_moving']}")
                 print(f"     At Goal: {status['at_goal']}")
         
         # Test 3: S-Curve Position Command
         print("\n--- Test 3: S-Curve Position Command ---")
-        send_scurve_position(port, 0.0, 1000)
+        send_scurve_position(port, current_position - 10.0, 1000)
         time.sleep(0.05)
         
         result = receive_packet(port)
@@ -363,11 +370,13 @@ def main():
             if pkt_type == PacketType.PKT_FB_STATUS:
                 status = parse_status_feedback(payload)
                 print(f"[RX] Status Feedback:")
+                print(f"     Motor ID: {status['motor_id']}")
                 print(f"     Position: {status['position_deg']:.2f}°")
+                print(f"     Current: {status['current_ma']} mA")
         
         # Test 4: Multiple position commands
         print("\n--- Test 4: Sequence of Positions ---")
-        positions = [45.0, -45.0, 0.0]
+        positions = [current_position + 20.0, current_position - 20.0, current_position]
         for pos in positions:
             send_scurve_position(port, pos, 500)
             time.sleep(0.05)
@@ -376,7 +385,8 @@ def main():
                 pkt_type, payload = result
                 if pkt_type == PacketType.PKT_FB_STATUS:
                     status = parse_status_feedback(payload)
-                    print(f"[RX] Target: {pos:6.2f}°, Current: {status['position_deg']:6.2f}°")
+                    print(f"[RX] ID:{status['motor_id']} Target:{pos:6.2f}° Pos:{status['position_deg']:6.2f}° I:{status['current_ma']}mA")
+            time.sleep(1.5)  # Wait for motor to reach target position
         
         port.close()
         print("\n" + "=" * 60)

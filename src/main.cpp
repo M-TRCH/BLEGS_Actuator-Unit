@@ -60,7 +60,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(157.0f, 47.0f, 0.0f, 1, false);   // motor FL-1 configuration (19/12/25)
+    saveMotorDataToEEPROM(157.0f, 47.0f, 999.0f, 1, false);   // motor FL-1 configuration (19/12/25)
 #endif
 
 #ifdef ENCODER_H
