@@ -473,9 +473,9 @@ print(f"CRC: {packet[-2]:02x} {packet[-1]:02x}")
 
 ## 📚 เอกสารเพิ่มเติม
 
-- **Binary Protocol**: ดูที่ `docs/BINARY_PROTOCOL_GUIDE.md`
-- **Motor Control**: ดูที่ `docs/MOTOR_CONTROL_GUIDE.md`
-- **Project Structure**: ดูที่ `PROJECT_ORGANIZATION.md`
+- **Binary Protocol**: ดูที่ `docs/technical/PROTOCOL.md`
+- **User Guide**: ดูที่ `docs/getting-started/USER_GUIDE.md`
+- **Hardware Setup**: ดูที่ `docs/guides/HARDWARE_SETUP.md`
 
 ---
 

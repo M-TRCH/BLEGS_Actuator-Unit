@@ -23,6 +23,7 @@
 - **Power Supply**: 24V DC regulated
 - **Control Method**: Space Vector PWM (SVPWM)
 - **PWM Frequency**: 10 kHz
+- **Pole Pairs**: 14
 
 ### Test Parameters
 - **vd_cmd**: 0.0 V (constant, no field weakening)
@@ -350,9 +351,8 @@ Test #5: vq = -13.0V
 ## 📚 References
 
 ### Related Documents
-- `MOTOR_CONTROL_GUIDE.md` - Motor control implementation
-- `BINARY_PROTOCOL_GUIDE.md` - Communication protocol
-- `PROJECT_ORGANIZATION.md` - Project structure
+- `docs/getting-started/USER_GUIDE.md` - Motor specifications and usage guide
+- `docs/technical/PROTOCOL.md` - Communication protocol specification
 
 ### Implementation Files
 - `src/main.cpp` - Main control loop

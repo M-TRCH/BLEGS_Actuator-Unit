@@ -1,102 +1,204 @@
-# 📚 Documentation
+# 📚 BLEGS Actuator Unit - Documentation
 
-เอกสารประกอบสำหรับโปรเจค BLEGS Actuator Unit
+ยินดีต้อนรับสู่ศูนย์รวมเอกสารสำหรับ BLEGS Actuator Unit
 
-## 📖 Available Documents
+---
 
-### 1. [Binary Protocol Guide](BINARY_PROTOCOL_GUIDE.md)
-คู่มือการใช้งาน High-Speed Binary Communication Protocol
+## 🎯 เริ่มต้นที่นี่
 
-**เนื้อหา:**
-- Protocol overview และ packet structures
-- Command และ feedback packet definitions
+### สำหรับผู้ใช้ใหม่
+1. **[Quick Start Guide](getting-started/QUICK_START.md)** - เริ่มต้นใช้งานใน 10 นาที
+2. **[User Guide](getting-started/USER_GUIDE.md)** - คู่มือการใช้งานพื้นฐาน
+3. **[Hardware Setup](guides/HARDWARE_SETUP.md)** - การติดตั้ง hardware
+
+### สำหรับนักพัฒนา
+1. **[Binary Protocol](technical/PROTOCOL.md)** - Protocol specification
+2. **[API Reference](api-reference/README.md)** - C++ และ Python API
+3. **[Commutation Tests](technical/COMMUTATION_TEST_RESULTS.md)** - ผลการทดสอบมอเตอร์
+
+### สำหรับการแก้ปัญหา
+1. **[Troubleshooting Guide](guides/TROUBLESHOOTING.md)** - วิธีแก้ปัญหาทั่วไป
+
+---
+
+## 📂 โครงสร้างเอกสาร
+
+```
+docs/
+│
+├── 📁 getting-started/          # เอกสารสำหรับเริ่มต้น
+│   ├── QUICK_START.md           # เริ่มต้นใช้งาน (10 นาที)
+│   └── USER_GUIDE.md            # คู่มือผู้ใช้งานพื้นฐาน
+│
+├── 📁 technical/                # เอกสารทางเทคนิค
+│   ├── PROTOCOL.md              # Binary Protocol Specification
+│   └── COMMUTATION_TEST_RESULTS.md  # ผลการทดสอบ
+│
+├── 📁 api-reference/            # API Documentation
+│   └── README.md                # API Overview
+│
+└── 📁 guides/                   # คู่มือเฉพาะเรื่อง
+    ├── HARDWARE_SETUP.md        # การติดตั้ง hardware
+    └── TROUBLESHOOTING.md       # แก้ไขปัญหา
+```
+
+---
+
+## 📖 คู่มือตามหัวข้อ
+
+### 🚀 Getting Started
+
+| เอกสาร | คำอธิบาย | เวลา | ระดับ |
+|--------|----------|------|-------|
+| [Quick Start](getting-started/QUICK_START.md) | เริ่มต้นใช้งานอย่างรวดเร็ว | 10 นาที | 🟢 Beginner |
+| [User Guide](getting-started/USER_GUIDE.md) | คู่มือการใช้งานทั้งหมด | 30 นาที | 🟢 Beginner |
+
+---
+
+### 🔧 Hardware & Setup
+
+| เอกสาร | คำอธิบาย | ระดับ |
+|--------|----------|-------|
+| [Hardware Setup](guides/HARDWARE_SETUP.md) | Pinout, wiring, power | 🟡 Intermediate |
+| [Troubleshooting](guides/TROUBLESHOOTING.md) | แก้ไขปัญหาต่างๆ | 🟢 Beginner |
+
+---
+
+### 📡 Communication Protocol
+
+| เอกสาร | คำอธิบาย | ระดับ |
+|--------|----------|-------|
+| [Binary Protocol](technical/PROTOCOL.md) | Protocol specification ฉบับสมบูรณ์ | 🟡 Intermediate |
+| [Protocol Upgrade Summary](PROTOCOL_UPGRADE_SUMMARY.md) | สรุปการอัพเกรด | 🟢 Beginner |
+
+**เนื้อหาครอบคลุม:**
+- Packet structure และ format
+- Command และ feedback definitions
 - CRC-16 integrity checking
-- Python และ C++ API reference
-- Timing analysis และ performance metrics
-- Troubleshooting guide
-
-**เหมาะสำหรับ:**
-- การพัฒนา PC-side control software
-- การเข้าใจ protocol specification
-- Debug communication issues
+- Python และ C++ API examples
+- Timing analysis
 
 ---
 
-### 2. [Protocol Upgrade Summary](PROTOCOL_UPGRADE_SUMMARY.md)
-สรุปการอัพเกรด protocol จาก ASCII เป็น hybrid mode
+### ⚙️ Motor Control
 
-**เนื้อหา:**
-- ไฟล์ที่เพิ่มเข้ามา
-- Features และ improvements
-- Performance comparison (ASCII vs Binary)
-- Build information และ memory usage
-- Usage examples
-- Future extensions
+| เอกสาร | คำอธิบาย | ระดับ |
+|--------|----------|-------|
+| [Motor Control Guide](MOTOR_CONTROL_GUIDE.md) | ทฤษฎีและการใช้งาน | 🔴 Advanced |
+| [Commutation Test Results](technical/COMMUTATION_TEST_RESULTS.md) | ผลการทดสอบ | 🟡 Intermediate |
 
-**เหมาะสำหรับ:**
-- ทำความเข้าใจการเปลี่ยนแปลงที่เกิดขึ้น
-- Migration guide
-- Quick reference
-
----
-
-### 3. [Motor Control Guide](MOTOR_CONTROL_GUIDE.md)
-คู่มือเกี่ยวกับการควบคุมมอเตอร์ BLDC และ SVPWM
-
-**เนื้อหา:**
-- SVPWM (Space Vector Pulse Width Modulation)
+**เนื้อหาครอบคลุม:**
+- Space Vector PWM (SVPWM)
 - Field-Oriented Control (FOC)
 - Park/Clarke transformations
 - PID position control
 - S-Curve motion planning
-- Encoder calibration
-
-**เหมาะสำหรับ:**
-- เข้าใจหลักการทำงานของ motor control
-- Tuning PID parameters
-- Advanced control algorithms
 
 ---
 
-## 🎯 Quick Navigation
+## 🎓 Learning Paths
 
-### สำหรับการเริ่มต้น
-1. อ่าน [README หลัก](../README.md) สำหรับ project overview
-2. ดู [Protocol Upgrade Summary](PROTOCOL_UPGRADE_SUMMARY.md) สำหรับ quick start
-3. ทดสอบด้วย [Python script](../tools/test_protocol.py)
+### Path 1: ผู้ใช้งานทั่วไป (2-3 ชั่วโมง)
+```
+1. Quick Start Guide (10 min)
+   ↓
+2. User Guide (30 min)
+   ↓
+3. Hardware Setup (1 hr)
+   ↓
+4. Troubleshooting (เมื่อมีปัญหา)
+```
 
-### สำหรับการพัฒนา Protocol
-1. [Binary Protocol Guide](BINARY_PROTOCOL_GUIDE.md) - Full specification
-2. [Python API Reference](BINARY_PROTOCOL_GUIDE.md#-api-reference)
-3. [C++ API Reference](BINARY_PROTOCOL_GUIDE.md#-api-reference)
+### Path 2: นักพัฒนา Software (5-6 ชั่วโมง)
+```
+1. Quick Start Guide (10 min)
+   ↓
+2. Binary Protocol (2 hr)
+   ↓
+3. API Reference (1 hr)
+   ↓
+4. ทดลองเขียน control software (2+ hr)
+```
 
-### สำหรับการ Tuning มอเตอร์
-1. [Motor Control Guide](MOTOR_CONTROL_GUIDE.md)
-2. Configuration files: `include/motor_conf.h`
-3. PID parameters: `include/pid_controller.h`
+### Path 3: Motor Control Engineer (10+ ชั่วโมง)
+```
+1. Quick Start Guide (10 min)
+   ↓
+2. Motor Control Guide (4 hr)
+   ↓
+3. Commutation Test Results (1 hr)
+   ↓
+4. ทดลองปรับแต่ง parameters (2+ hr)
+```
+
+---
+
+## 🔍 Quick Reference
+
+### ASCII Commands
+```
+S           # Start motor
+M0          # Direct Position mode
+M1          # S-Curve mode
+#<value>    # Set target position
+B           # Toggle Binary Protocol
+```
+
+### LED Status
+```
+🟡 Yellow   → Initializing
+🟢 Green    → Ready
+🔵 Blue     → Running
+🔴 Red      → Error
+```
 
 ---
 
-## 📝 Document Version
+## 📊 Technical Specifications
 
-| Document | Version | Last Updated |
-|----------|---------|--------------|
-| Binary Protocol Guide | 1.0 | 2025-12-03 |
-| Protocol Upgrade Summary | 1.0 | 2025-12-03 |
-| Motor Control Guide | 1.0 | [Original] |
+- **MCU:** STM32G431CBU6 (170MHz, 32KB RAM, 128KB Flash)
+- **Encoder:** AS5047P (14-bit, ±0.022° accuracy)
+- **Communication:** UART @ 921,600 baud
+- **Control Loop:** 5 kHz position control
+- **Protocol Latency:** ~264 μs round-trip
+
+---
+
+## 🛠️ Common Tasks
+
+### ทดสอบการสื่อสาร
+```bash
+# ASCII mode
+pio device monitor --baud 921600
+
+# Binary mode
+cd tools
+python test_protocol.py
+```
+
+### Build Firmware
+```bash
+pio run
+pio run --target upload
+```
 
 ---
 
-## 🔄 Updates & Contributions
+## 🔗 External Resources
 
-เอกสารเหล่านี้จะได้รับการอัพเดตเมื่อมีการเพิ่มฟีเจอร์ใหม่หรือพบปัญหา
-
-หากพบข้อผิดพลาดหรือต้องการเพิ่มเติม:
-1. สร้าง issue ในโปรเจค
-2. แก้ไขและ submit pull request
-3. ติดต่อผู้พัฒนา
+- [PlatformIO Docs](https://docs.platformio.org/)
+- [STM32 Reference Manual](https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+- [AS5047P Datasheet](https://ams.com/as5047p)
 
 ---
+
+**🎉 เริ่มต้นด้วย [Quick Start Guide](getting-started/QUICK_START.md)**
+
+---
+
+**Maintained by:** M-TRCH  
+**Last Updated:** December 20, 2025  
+**Documentation Version:** 1.1
 
 **Maintained by:** M-TRCH  
 **Last Review:** December 3, 2025

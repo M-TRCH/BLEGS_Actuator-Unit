@@ -71,10 +71,11 @@ BLEGS_Actuator-Unit/
 ├── lib/              # Libraries
 │   ├── AS5047P/      # Encoder library
 │   └── scurve_profile/
-├── docs/             # Documentation
-│   ├── BINARY_PROTOCOL_GUIDE.md
-│   ├── PROTOCOL_UPGRADE_SUMMARY.md
-│   └── MOTOR_CONTROL_GUIDE.md
+├── docs/             # 📚 Documentation (organized)
+│   ├── getting-started/  # Quick start & user guide
+│   ├── technical/        # Protocol & test results
+│   ├── guides/           # Hardware & troubleshooting
+│   └── api-reference/    # C++ & Python API
 ├── tools/            # Utilities & test scripts
 │   └── test_protocol.py
 └── platformio.ini    # Build configuration
@@ -82,9 +83,67 @@ BLEGS_Actuator-Unit/
 
 ## 📖 Documentation
 
-- **[Binary Protocol Guide](docs/BINARY_PROTOCOL_GUIDE.md)** - Complete protocol specification
-- **[Protocol Upgrade Summary](docs/PROTOCOL_UPGRADE_SUMMARY.md)** - Implementation overview
-- **[Motor Control Guide](docs/MOTOR_CONTROL_GUIDE.md)** - SVPWM and FOC documentation
+**⭐ Start here:** [docs/README.md](docs/README.md) - Complete documentation index
+
+### 📂 Documentation Structure
+
+```
+docs/
+├── README.md                         # ⭐ Main documentation hub
+├── getting-started/
+│   ├── QUICK_START.md                # 10-minute setup guide
+│   └── USER_GUIDE.md                 # Complete user manual
+├── technical/
+│   ├── PROTOCOL.md                   # Binary Protocol specification
+│   └── COMMUTATION_TEST_RESULTS.md   # Motor test results
+├── api-reference/
+│   └── README.md                     # C++ & Python API
+└── guides/
+    ├── HARDWARE_SETUP.md             # Hardware wiring & pinout
+    └── TROUBLESHOOTING.md            # Problem solving guide
+```
+
+### 📚 Documentation by Category
+
+#### 🚀 Getting Started
+- [Quick Start Guide](docs/getting-started/QUICK_START.md) - Get started in 10 minutes
+- [User Guide](docs/getting-started/USER_GUIDE.md) - Complete usage manual
+
+#### 🔧 Hardware & Setup
+- [Hardware Setup](docs/guides/HARDWARE_SETUP.md) - Pinout, wiring, connections
+- [Troubleshooting](docs/guides/TROUBLESHOOTING.md) - Fix common issues
+
+#### 📡 Protocol & Technical
+- [Binary Protocol](docs/technical/PROTOCOL.md) - Protocol specification
+- [ComTechnical Specifications
+
+### Performance Metrics
+- **Control Loop**: 5 kHz position control
+- **PWM Frequency**: 10 kHz SVPWM (configurable)
+- **Communication**: 264 μs round-trip (binary protocol)
+- **Position Accuracy**: < 0.1° with encoder feedback
+
+### Hardware Specs
+- **MCU**: STM32G431CBU6 (170MHz ARM Cortex-M4, 32KB RAM, 128KB Flash)
+- **Encoder**: AS5047P (14-bit magnetic absolute position)
+- **Serial**: 921,600 baud, 8-N-1
+- **Gear Ratio**: 8:1
+- **Motor**: BLDC with 14 pole pairs
+
+#### ASCII Commands
+```
+S           # Start motor
+M0          # Direct position control mode
+M1          # S-Curve motion planning mode
+#<value>    # Set target position (degrees)
+B           # Toggle binary protocol ON/OFF
+```
+
+#### Build Commands
+```bash
+pio run                    # Build firmware
+pio run --target upload    # Build and upload to board
+```
 
 ## 🛠️ Development
 
