@@ -60,7 +60,7 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(157.0f, 47.0f, 0.0f, false);          // motor FL-1 configuration (19/12/25)
+    saveMotorDataToEEPROM(157.0f, 47.0f, 0.0f, 1, false);   // motor FL-1 configuration (19/12/25)
 #endif
 
 #ifdef ENCODER_H
@@ -147,10 +147,8 @@ void setup()
 
 void loop()
 {
-#ifdef LED_H
     // Update LED effects
     updateLEDStatus();
-#endif
 
     // Uncomment to test open-loop park function
     while (0)
@@ -164,7 +162,7 @@ void loop()
     uint32_t current_time = micros();
 
     // Set endless_drive_mode to true for continuous rotation
-    static bool endless_drive_mode = true; 
+    static bool endless_drive_mode = false; 
     if (endless_drive_mode)
     {
 
@@ -214,7 +212,9 @@ void loop()
                                 // Quick ACK without detailed status
                                 float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
                                 int32_t pos_feedback = (int32_t)(current_pos * 100.0f);
-                                sendStatusFeedback(SystemSerial, pos_feedback, 0, 0x01);  // Moving flag
+                                currentUpdate();
+                                int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
+                                sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x01);  // Moving flag
                             }
                             else
                             {
@@ -228,7 +228,9 @@ void loop()
                         {
                             // Simple ping response
                             int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
-                            sendStatusFeedback(SystemSerial, pos_feedback, 0, 0);
+                            currentUpdate();
+                            int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
+                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0);
                             break;
                         }
                         
@@ -368,13 +370,12 @@ void loop()
     }
 
     // Debug (disable by default)
-    if ((current_time - last_debug_time >= DEBUG_PERIOD_US) && true)
+    if ((current_time - last_debug_time >= DEBUG_PERIOD_US) && false)
     { 
         last_debug_time = current_time;
         // SystemSerial->print(position_pid.setpoint, SERIAL1_DECIMAL_PLACES);
         // SystemSerial->print("\t");
         // SystemSerial->println(readRotorAbsoluteAngle(), SERIAL1_DECIMAL_PLACES);
-        
         currentUpdate();
         float dc_instant = currentEstimateDC();
         SystemSerial->println(dc_instant, 3);

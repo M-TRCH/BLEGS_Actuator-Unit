@@ -198,11 +198,12 @@ void sendPacket(HardwareSerial* serial, const BinaryPacket* pkt) {
 /**
  * @brief Send a status feedback packet
  * @param serial Pointer to HardwareSerial object
+ * @param motor_id Motor ID
  * @param pos Current position (degrees * 100 or encoder ticks)
  * @param current Current in mA
  * @param flags Status flags
  */
-void sendStatusFeedback(HardwareSerial* serial, int32_t pos, int16_t current, uint8_t flags) {
+void sendStatusFeedback(HardwareSerial* serial, uint8_t motor_id, int32_t pos, int16_t current, uint8_t flags) {
     BinaryPacket pkt;
     
     // Set header
@@ -214,6 +215,7 @@ void sendStatusFeedback(HardwareSerial* serial, int32_t pos, int16_t current, ui
     
     // Build payload
     PayloadStatus* status = (PayloadStatus*)pkt.payload;
+    status->motor_id = motor_id;
     status->actual_pos = pos;
     status->actual_current = current;
     status->status_flags = flags;

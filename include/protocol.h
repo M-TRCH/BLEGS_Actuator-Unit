@@ -88,6 +88,7 @@ struct __attribute__((packed)) PayloadSetGoal {
 
 // Payload structure for FB_STATUS
 struct __attribute__((packed)) PayloadStatus {
+    uint8_t motor_id;               // Motor ID (0-255)
     int32_t actual_pos;             // Current position (encoder ticks or degrees*100)
     int16_t actual_current;         // Current in mA (0 if not available)
     uint8_t status_flags;           // StatusFlags bitfield
@@ -172,7 +173,7 @@ void sendPacket(HardwareSerial* serial, const BinaryPacket* pkt);
  * @param current Current in mA
  * @param flags Status flags
  */
-void sendStatusFeedback(HardwareSerial* serial, int32_t pos, int16_t current, uint8_t flags);
+void sendStatusFeedback(HardwareSerial* serial, uint8_t motor_id, int32_t pos, int16_t current, uint8_t flags);
 
 /**
  * @brief Send an error feedback packet
