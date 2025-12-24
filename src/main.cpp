@@ -68,6 +68,7 @@ void setup()
     saveMotorDataToEEPROM(622.0f,    535.0f,    999.0f,     5, false);  // motor RL-5 configuration (24/12/25)
     saveMotorDataToEEPROM(477.0f,    452.0f,    999.0f,     6, false);  // motor RL-6 configuration (24/12/25)
     saveMotorDataToEEPROM(727.0f,    648.0f,    999.0f,     7, false);  // motor RR-7 configuration (24/12/25)
+    saveMotorDataToEEPROM(786.0f,    680.0f,    999.0f,     8, false);  // motor RR-8 configuration (24/12/25)
 #endif
 
 #ifdef ENCODER_H
