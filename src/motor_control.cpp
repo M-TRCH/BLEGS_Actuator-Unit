@@ -14,7 +14,7 @@ unsigned long last_debug_time = 0;               // Last debug time in microseco
 // Kp = 0.04 (Proportional gain), Ki = 0.02 (Integral gain), Kd = 0.0 (Derivative gain)
 // integral_limit = 4000.0 (Anti-windup limit), output_limit = 20.0 (Output saturation)
 // tolerance = 0.5 (Deadband/error threshold for zero integral)
-PIDController position_pid(0.04f, 0.02f, 0.0f, 4000.0f, 13.0f, 0.5f);
+PIDController position_pid(0.04f, 0.02f, 0.0f, 2000.0f, 10.0f, 0.5f);
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active

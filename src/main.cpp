@@ -38,7 +38,7 @@ struct CommandQueue
 
 // Rate limiting for setpoint updates
 uint32_t last_setpoint_update_time = 0;
-#define MIN_SETPOINT_UPDATE_INTERVAL_US 2000  // 2ms minimum (500 Hz max)
+#define MIN_SETPOINT_UPDATE_INTERVAL_US 500  // 0.5ms minimum (2000 Hz max) - faster response
 
 // Target tracking
 float last_target_position = 0.0f;
@@ -386,10 +386,14 @@ void loop()
                 }
                 else if (mode == MODE_SCURVE_PROFILE)
                 {
-                    // Only replan if not already moving to this target
+                    // S-Curve profile motion
                     control_mode = POSITION_CONTROL_WITH_SCURVE;
-                    scurve.plan(current_pos, target_pos, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                    start_scurve_time = current_time;
+                    // Calculate velocity based on distance and default acceleration
+                    float distance = abs(target_pos - current_pos);
+                    float v_max = fmax(distance * 2.0f, 1000.0f);  // Adaptive velocity
+                    float a_max = 180000.0f;  // Max acceleration
+                    scurve.plan(current_pos, target_pos, v_max, a_max, 1000.0f, a_max);
+                    start_scurve_time = micros();  // Use micros() for accurate timing
                 }
                 
                 last_target_position = target_pos;
@@ -406,13 +410,14 @@ void loop()
                 if (control_mode == POSITION_CONTROL_ONLY) 
                 {
                     // Direct position control
-                    positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
                 }
                 else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
                 {
                     // Position control with S-curve profile
-                    position_pid.setpoint = scurve.getPosition((current_time - start_scurve_time) / 1e6f);
-                    positionControl(readRotorAbsoluteAngle(), &vq_cmd);
+                    float elapsed_time = (float)(current_time - start_scurve_time) / 1000000.0f;
+                    position_pid.setpoint = scurve.getPosition(elapsed_time);
+                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
                 }
             }
         }

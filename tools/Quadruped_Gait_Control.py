@@ -21,9 +21,15 @@ import time
 import threading
 import struct
 import traceback
+import sys
+import os
 from enum import IntEnum
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+
+# Windows keyboard input
+if sys.platform == 'win32':
+    import msvcrt
 
 # ============================================================================
 # PROTOCOL CONSTANTS (v1.2)
@@ -125,7 +131,7 @@ GAIT_STEP_FORWARD = 60.0   # mm
 # CONTROL PARAMETERS
 # ============================================================================
 
-CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION
+CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
 UPDATE_RATE = 100  # Hz (10ms per update)
 TRAJECTORY_STEPS = 60  # Number of steps in one gait cycle
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
@@ -133,10 +139,10 @@ GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 # --- Single Motor Mode ---
 SINGLE_MOTOR_MODE = True  # Set to True to enable single motor testing
 SINGLE_MOTOR_OSCILLATION = 30.0  # Oscillation amplitude in degrees
-SINGLE_MOTOR_PERIOD = 2.0  # Oscillation period in seconds
+SINGLE_MOTOR_PERIOD = 0.6  # Oscillation period in seconds (600ms)
 
 # --- Visualization Parameters ---
-ENABLE_VISUALIZATION = True
+ENABLE_VISUALIZATION = False
 PLOT_UPDATE_RATE = 10  # Hz
 
 # ============================================================================
@@ -347,8 +353,24 @@ class BinaryMotorController:
                 # Build and send packet
                 packet = build_packet(PacketType.PKT_CMD_SET_GOAL, payload)
                 self.serial.write(packet)
+                self.serial.flush()  # Ensure data is sent immediately
                 self.stats_tx_count += 1
                 self.current_setpoint = angle_deg
+                
+                # Try to read feedback response (non-blocking)
+                # Wait a short time for response
+                time.sleep(0.001)  # 1ms wait for response
+                if self.serial.in_waiting >= 12:  # Minimum packet size
+                    result = self._read_packet()
+                    if result:
+                        pkt_type, payload_data = result
+                        if pkt_type == PacketType.PKT_FB_STATUS and len(payload_data) >= 8:
+                            position_raw = struct.unpack('<i', payload_data[1:5])[0]
+                            current_raw = struct.unpack('<h', payload_data[5:7])[0]
+                            status_flags = payload_data[7]
+                            self.current_position = (position_raw / 100.0) / GEAR_RATIO
+                            self.current_current = current_raw
+                            self.current_flags = status_flags
             
             return True
             
@@ -381,8 +403,23 @@ class BinaryMotorController:
                 
                 packet = build_packet(PacketType.PKT_CMD_SET_GOAL, payload)
                 self.serial.write(packet)
+                self.serial.flush()  # Ensure data is sent immediately
                 self.stats_tx_count += 1
                 self.current_setpoint = angle_deg
+                
+                # Try to read feedback response (non-blocking)
+                time.sleep(0.001)  # 1ms wait for response
+                if self.serial.in_waiting >= 12:
+                    result = self._read_packet()
+                    if result:
+                        pkt_type, payload_data = result
+                        if pkt_type == PacketType.PKT_FB_STATUS and len(payload_data) >= 8:
+                            position_raw = struct.unpack('<i', payload_data[1:5])[0]
+                            current_raw = struct.unpack('<h', payload_data[5:7])[0]
+                            status_flags = payload_data[7]
+                            self.current_position = (position_raw / 100.0) / GEAR_RATIO
+                            self.current_current = current_raw
+                            self.current_flags = status_flags
             
             return True
             
@@ -860,6 +897,22 @@ def emergency_stop_all():
 # SINGLE MOTOR CONTROL
 # ============================================================================
 
+def check_keyboard_input():
+    """
+    Check for keyboard input (non-blocking)
+    Returns the key pressed or None
+    """
+    if sys.platform == 'win32':
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            # Handle special keys
+            if key == b'\xe0' or key == b'\x00':
+                msvcrt.getch()  # Consume the second byte
+                return None
+            return key.decode('utf-8', errors='ignore').lower()
+    return None
+
+
 def run_single_motor_mode(controller):
     """
     Run single motor oscillation test
@@ -891,29 +944,63 @@ def run_single_motor_mode(controller):
     initial_pos = controller.current_position
     print(f"  Initial position: {initial_pos:.2f}°")
     
-    # Move to center position first
-    center_pos = 0.0
-    print(f"\n🏠 Moving to center position ({center_pos}°)...")
-    controller.set_position_scurve(center_pos, 2000)
-    time.sleep(2.5)
+    # Use initial position as center (relative movement)
+    center_pos = initial_pos
+    print(f"\n🏠 Using current position as center ({center_pos:.2f}°)")
+    print(f"  Oscillation range: {center_pos - SINGLE_MOTOR_OSCILLATION:.1f}° to {center_pos + SINGLE_MOTOR_OSCILLATION:.1f}°")
+    
+    # Small delay for stabilization
+    time.sleep(0.5)
     
     print("\n⏸️  Single motor control ready (PAUSED)")
-    print("  Press [SPACE] to start oscillation")
+    print("  Press [SPACE] to start/pause oscillation")
     print("  Press [E] for emergency stop")
-    print("  Press Ctrl+C to exit")
+    print("  Press [Q] to quit")
     print("="*70)
     
     gait_paused = True
     start_time = time.time()
+    last_status_time = 0
+    running = True
     
     try:
-        while True:
+        while running:
+            # Check keyboard input
+            key = check_keyboard_input()
+            if key:
+                if key == ' ':
+                    # Before resuming, get current motor position via PING
+                    with control_lock:
+                        was_paused = gait_paused
+                    
+                    if was_paused:
+                        # About to resume - query current position
+                        ping_result = controller.send_ping()
+                        if ping_result:
+                            center_pos = ping_result['position']
+                            print(f"\n▶️  Resuming from position: {center_pos:.2f}°")
+                            print(f"  New oscillation range: {center_pos - SINGLE_MOTOR_OSCILLATION:.1f}° to {center_pos + SINGLE_MOTOR_OSCILLATION:.1f}°")
+                        else:
+                            print("\n⚠️  Failed to get current position, using last known")
+                        start_time = time.time()  # Reset start time for smooth oscillation
+                    
+                    toggle_gait_control()
+                elif key == 'e':
+                    controller.send_emergency_stop()
+                    with control_lock:
+                        gait_paused = True
+                    print("\n⚠️  Emergency stop activated!")
+                elif key == 'q':
+                    print("\n⏹️  Quit requested...")
+                    running = False
+                    continue
+            
             # Check if paused
             with control_lock:
                 is_paused = gait_paused
             
             if is_paused:
-                time.sleep(0.05)
+                time.sleep(0.01)  # Short sleep when paused
                 continue
             
             loop_start = time.perf_counter()
@@ -933,9 +1020,11 @@ def run_single_motor_mode(controller):
             # Read feedback
             feedback = controller.read_feedback()
             
-            # Print status periodically
-            cycle = int(elapsed / SINGLE_MOTOR_PERIOD)
-            if int(elapsed * 10) % 10 == 0:  # Every second
+            # Print status periodically (every second)
+            current_time = time.time()
+            if current_time - last_status_time >= 1.0:
+                last_status_time = current_time
+                cycle = int(elapsed / SINGLE_MOTOR_PERIOD)
                 current_pos = controller.current_position
                 error = target_angle - current_pos
                 print(f"  🔄 Cycle {cycle}: Target={target_angle:+6.1f}° | "
@@ -997,20 +1086,23 @@ def run_single_motor_with_visualization(controller):
     initial_pos = controller.current_position
     print(f"  Initial position: {initial_pos:.2f}°")
     
-    # Move to center position
-    center_pos = 0.0
-    print(f"\n🏠 Moving to center position ({center_pos}°)...")
-    controller.set_position_scurve(center_pos, 2000)
-    time.sleep(2.5)
+    # Use initial position as center (relative movement)
+    center_pos = initial_pos
+    print(f"\n🏠 Using current position as center ({center_pos:.2f}°)")
+    print(f"  Oscillation range: {center_pos - SINGLE_MOTOR_OSCILLATION:.1f}° to {center_pos + SINGLE_MOTOR_OSCILLATION:.1f}°")
+    
+    # Small delay for stabilization
+    time.sleep(0.5)
     
     # Create visualization
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
     fig.suptitle(f'Single Motor Test - Motor ID {controller.motor_id}', 
                  fontsize=14, weight='bold')
     
-    # Position plot
+    # Position plot - use center_pos as reference
     ax1.set_xlim(0, 10)
-    ax1.set_ylim(-SINGLE_MOTOR_OSCILLATION * 1.5, SINGLE_MOTOR_OSCILLATION * 1.5)
+    ax1.set_ylim(center_pos - SINGLE_MOTOR_OSCILLATION * 1.5, 
+                 center_pos + SINGLE_MOTOR_OSCILLATION * 1.5)
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Position (°)')
     ax1.set_title('Motor Position')
@@ -1049,8 +1141,22 @@ def run_single_motor_with_visualization(controller):
     start_time = None
     
     def on_key_press(event):
-        nonlocal start_time
+        nonlocal start_time, center_pos
         if event.key == ' ':
+            # Before resuming, get current motor position via PING
+            if gait_paused:
+                # About to resume - query current position
+                ping_result = controller.send_ping()
+                if ping_result:
+                    center_pos = ping_result['position']
+                    print(f"\n▶️  Resuming from position: {center_pos:.2f}°")
+                    print(f"  New oscillation range: {center_pos - SINGLE_MOTOR_OSCILLATION:.1f}° to {center_pos + SINGLE_MOTOR_OSCILLATION:.1f}°")
+                    # Update Y-axis limits
+                    ax1.set_ylim(center_pos - SINGLE_MOTOR_OSCILLATION * 1.5, 
+                                 center_pos + SINGLE_MOTOR_OSCILLATION * 1.5)
+                else:
+                    print("\n⚠️  Failed to get current position, using last known")
+            
             toggle_gait_control()
             if not gait_paused:
                 start_time = time.time()
