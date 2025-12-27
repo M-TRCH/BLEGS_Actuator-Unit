@@ -137,7 +137,7 @@ TRAJECTORY_STEPS = 60  # Number of steps in one gait cycle
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---
-SINGLE_MOTOR_MODE = True  # Set to True to enable single motor testing
+SINGLE_MOTOR_MODE = False  # Set to True to enable single motor testing
 SINGLE_MOTOR_OSCILLATION = 30.0  # Oscillation amplitude in degrees
 SINGLE_MOTOR_PERIOD = 0.6  # Oscillation period in seconds (600ms)
 
@@ -1573,22 +1573,46 @@ def main():
     
     # --- Step 7: Main Gait Loop ---
     print(f"\n⏸️  Gait control ready (PAUSED)")
-    print("  Press [SPACE] in visualization window to start")
+    if ENABLE_VISUALIZATION:
+        print("  Press [SPACE] in visualization window to start")
+    else:
+        print("  Press [SPACE] to start/pause")
     print("  Press [E] for emergency stop")
-    print("  Press Ctrl+C to exit")
+    if not ENABLE_VISUALIZATION:
+        print("  Press [Q] to quit")
+    else:
+        print("  Press Ctrl+C to exit")
     print("="*70)
     
     cycle_count = 0
     frame = 0
+    last_status_time = 0
+    running = True
     
     try:
-        while plot_running:
+        while running and plot_running:
+            # Check keyboard input (for non-visualization mode)
+            if not ENABLE_VISUALIZATION:
+                key = check_keyboard_input()
+                if key:
+                    if key == ' ':
+                        toggle_gait_control()
+                    elif key == 'e':
+                        emergency_stop_all()
+                        with control_lock:
+                            gait_paused = True
+                        print("\n⚠️  Emergency stop activated!")
+                    elif key == 'q':
+                        print("\n⏹️  Quit requested...")
+                        running = False
+                        continue
+            
             # Check if paused
             with control_lock:
                 is_paused = gait_paused
             
             if is_paused:
-                time.sleep(0.05)
+                time.sleep(0.01)  # Short sleep when paused
                 continue
             
             loop_start = time.perf_counter()
@@ -1672,11 +1696,18 @@ def main():
             # Update frame counter
             frame = (frame + 1) % TRAJECTORY_STEPS
             
-            # Print status every cycle
+            # Print status every cycle (or periodically in non-viz mode)
             if frame == 0:
                 cycle_count += 1
                 if cycle_count % 5 == 0:
                     print(f"  🔄 Gait Cycle #{cycle_count}")
+            
+            # Print periodic status in terminal mode
+            if not ENABLE_VISUALIZATION:
+                current_time = time.time()
+                if current_time - last_status_time >= 2.0:  # Every 2 seconds
+                    last_status_time = current_time
+                    print(f"  🔄 Gait running - Cycle #{cycle_count}, Frame {frame}/{TRAJECTORY_STEPS}")
             
             # Timing control
             elapsed = time.perf_counter() - loop_start
