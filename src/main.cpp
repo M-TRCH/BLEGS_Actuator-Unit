@@ -61,14 +61,14 @@ void setup()
 
 #ifdef EEPROM_UTILS_H
     initEEPROM();   // Initialize EEPROM system
-    saveMotorDataToEEPROM(157.0f,     47.0f,    999.0f,     1, false);  // motor FL-1 configuration (19/12/25)
-    saveMotorDataToEEPROM(174.0f,   3600.0f,    999.0f,     2, false);  // motor FL-2 configuration (23/12/25)
-    saveMotorDataToEEPROM(589.0f,    527.0f,    999.0f,     3, false);  // motor FR-3 configuration (23/12/25)
-    saveMotorDataToEEPROM(102.0f,   1164.0f,    999.0f,     4, false);  // motor FR-4 configuration (23/12/25)
-    saveMotorDataToEEPROM(622.0f,    535.0f,    999.0f,     5, false);  // motor RL-5 configuration (24/12/25)
-    saveMotorDataToEEPROM(477.0f,    452.0f,    999.0f,     6, false);  // motor RL-6 configuration (24/12/25)
-    saveMotorDataToEEPROM(727.0f,    648.0f,    999.0f,     7, false);  // motor RR-7 configuration (24/12/25)
-    saveMotorDataToEEPROM(786.0f,    680.0f,    999.0f,     8, false);  // motor RR-8 configuration (24/12/25)
+    saveMotorDataToEEPROM(157.0f,     47.0f,    577.0f,     1, false);  // motor FL-1 (OK)
+    saveMotorDataToEEPROM(174.0f,   3600.0f,    564.0f,     2, false);  // motor FL-2 (OK)
+    saveMotorDataToEEPROM(589.0f,    527.0f,    837.0f,     3, false);  // motor FR-3 (OK) 
+    saveMotorDataToEEPROM(102.0f,   1164.0f,    705.0f,     4, false);  // motor FR-4 (OK)
+    saveMotorDataToEEPROM(622.0f,    535.0f,    999.0f,     5, false);  // motor RL-5 
+    saveMotorDataToEEPROM(477.0f,    452.0f,    999.0f,     6, false);  // motor RL-6 
+    saveMotorDataToEEPROM(727.0f,    648.0f,    999.0f,     7, false);  // motor RR-7 
+    saveMotorDataToEEPROM(786.0f,    680.0f,    999.0f,     8, false);  // motor RR-8 
 #endif
 
 #ifdef ENCODER_H
@@ -92,6 +92,7 @@ void setup()
 #endif
 
     // Calibration verification loop
+    calibration_angle = -90.0f; // both motor = -90.0f
     while (0)
     {
         updateRawRotorAngle();  
@@ -99,8 +100,7 @@ void setup()
 
         abs_angle = readRotorAbsoluteAngle(WITHOUT_ABS_OFFSET);
         abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-        calibration_angle = -90.0f; // both motor = -90.0f
-
+        
         // Check if angle is within calibration range (±5 degrees tolerance)
         float angle_error = abs(abs_angle_with_offset - (calibration_angle * GEAR_RATIO));
         if (angle_error <= 20.0f)
