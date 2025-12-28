@@ -140,10 +140,10 @@ GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 SINGLE_MOTOR_MODE = False  # Set to True to enable single motor testing
 SINGLE_MOTOR_OSCILLATION = 30.0  # Oscillation amplitude in degrees
 SINGLE_MOTOR_PERIOD = 0.6  # Oscillation period in seconds (600ms)
-
+ 
 # --- Visualization Parameters ---
 ENABLE_VISUALIZATION = False
-PLOT_UPDATE_RATE = 10  # Hz
+PLOT_UPDATE_RATE = 10  # Hz 
 
 # ============================================================================
 # GLOBAL VARIABLES

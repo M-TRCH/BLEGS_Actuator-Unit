@@ -65,10 +65,10 @@ void setup()
     saveMotorDataToEEPROM(174.0f,   3600.0f,    564.0f,     2, false);  // motor FL-2 (OK)
     saveMotorDataToEEPROM(589.0f,    527.0f,    837.0f,     3, false);  // motor FR-3 (OK) 
     saveMotorDataToEEPROM(102.0f,   1164.0f,    705.0f,     4, false);  // motor FR-4 (OK)
-    saveMotorDataToEEPROM(622.0f,    535.0f,    999.0f,     5, false);  // motor RL-5 
-    saveMotorDataToEEPROM(477.0f,    452.0f,    999.0f,     6, false);  // motor RL-6 
-    saveMotorDataToEEPROM(727.0f,    648.0f,    999.0f,     7, false);  // motor RR-7 
-    saveMotorDataToEEPROM(786.0f,    680.0f,    999.0f,     8, false);  // motor RR-8 
+    saveMotorDataToEEPROM(622.0f,    535.0f,    685.0f,     5, false);  // motor RL-5 (OK) 
+    saveMotorDataToEEPROM(477.0f,    452.0f,    827.0f,     6, false);  // motor RL-6 (OK) 
+    saveMotorDataToEEPROM(727.0f,    648.0f,    737.0f,     7, false);  // motor RR-7 (OK)
+    saveMotorDataToEEPROM(786.0f,    680.0f,    762.0f,     8, false);  // motor RR-8 (OK) 
 #endif
 
 #ifdef ENCODER_H
