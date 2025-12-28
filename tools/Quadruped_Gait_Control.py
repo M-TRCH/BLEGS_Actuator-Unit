@@ -124,16 +124,16 @@ DEFAULT_STANCE_HEIGHT = -200.0  # mm (negative = down)
 DEFAULT_STANCE_OFFSET_X = 0.0   # mm
 
 # --- Motion Parameters ---
-GAIT_LIFT_HEIGHT = 30.0    # mm
-GAIT_STEP_FORWARD = 60.0   # mm
+GAIT_LIFT_HEIGHT = 15.0    # mm (ยกขาต่ำลง)
+GAIT_STEP_FORWARD = 30.0   # mm (ก้าวสั้นลง)
 
 # ============================================================================
 # CONTROL PARAMETERS
 # ============================================================================
 
 CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
-UPDATE_RATE = 100  # Hz (10ms per update)
-TRAJECTORY_STEPS = 60  # Number of steps in one gait cycle
+UPDATE_RATE = 50  # Hz (20ms per update)
+TRAJECTORY_STEPS = 30  # Number of steps in one gait cycle (เดินเร็วขึ้น)
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---
@@ -1040,9 +1040,9 @@ def run_single_motor_mode(controller):
         print("\n\n⏹️  Single motor test stopped by user")
     
     finally:
-        # Return to center
-        print("\n🏠 Returning to center position...")
-        controller.set_position_scurve(center_pos, 2000)
+        # Return to init position
+        print("\n🏠 Returning to init position (-90°)...")
+        controller.set_position_scurve(MOTOR_INIT_ANGLE, 2000)
         time.sleep(2.5)
         
         # Print statistics
@@ -1244,9 +1244,9 @@ def run_single_motor_with_visualization(controller):
     except KeyboardInterrupt:
         pass
     finally:
-        # Return to center
-        print("\n🏠 Returning to center position...")
-        controller.set_position_scurve(center_pos, 2000)
+        # Return to init position
+        print("\n🏠 Returning to init position (-90°)...")
+        controller.set_position_scurve(MOTOR_INIT_ANGLE, 2000)
         time.sleep(2.5)
         
         # Print statistics
@@ -1726,15 +1726,14 @@ def main():
         # Stop visualization
         plot_running = False
         
-        # Return to home position
-        print("\n🏠 Returning to home position...")
+        # Return to init position (-90°)
+        print("\n🏠 Returning to init position (-90°)...")
         try:
             for leg_id in leg_motors.keys():
-                if leg_id in home_angles_all:
-                    motor_a = leg_motors[leg_id]['A']
-                    motor_b = leg_motors[leg_id]['B']
-                    motor_a.set_position_scurve(np.rad2deg(home_angles_all[leg_id][0]), 3000)
-                    motor_b.set_position_scurve(np.rad2deg(home_angles_all[leg_id][1]), 3000)
+                motor_a = leg_motors[leg_id]['A']
+                motor_b = leg_motors[leg_id]['B']
+                motor_a.set_position_scurve(MOTOR_INIT_ANGLE, 3000)
+                motor_b.set_position_scurve(MOTOR_INIT_ANGLE, 3000)
             time.sleep(3.5)
         except:
             pass
