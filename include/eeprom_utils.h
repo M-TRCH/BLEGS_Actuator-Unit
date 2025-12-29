@@ -17,12 +17,15 @@ typedef struct {
     float rotor_offset_ccw;             // Rotor offset counter-clockwise (degrees)
     float rotor_offset_absolute;        // Absolute rotor offset (degrees)
     
+    // Motor identification
+    uint8_t motor_id;                   // Motor ID (0-255)
+    
     // Status flags
     bool is_calibrated;                 // Motor calibration status
     bool is_first_boot;                 // First boot flag
     
-    // Reserved space for future expansion (56 bytes)
-    uint8_t reserved[56];               // Reserved for future features
+    // Reserved space for future expansion (55 bytes)
+    uint8_t reserved[55];               // Reserved for future features
     
     // Data integrity
     uint32_t checksum;                  // CRC32 checksum for validation
@@ -55,9 +58,11 @@ void printEEPROMConfig();
 #define SET_ROTOR_OFFSET_ABS(val)   (eepromMotorConfig.rotor_offset_absolute = (val))
 #define IS_MOTOR_CALIBRATED()       (eepromMotorConfig.is_calibrated)
 #define SET_MOTOR_CALIBRATED(val)   (eepromMotorConfig.is_calibrated = (val))
+#define GET_MOTOR_ID()              (eepromMotorConfig.motor_id)
+#define SET_MOTOR_ID(val)           (eepromMotorConfig.motor_id = (val))
 
 // Legacy compatibility functions (kept for backward compatibility)
-void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, bool active = true);
+void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, uint8_t motorId, bool active = true);
 void loadMotorDataFromEEPROM(float &cwOffset, float &ccwOffset, float &absOffset, bool debug = false);
 
 #endif // EEPROM_UTILS_H

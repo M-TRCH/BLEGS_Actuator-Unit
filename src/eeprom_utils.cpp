@@ -23,6 +23,9 @@ void setupDefaultConfig()
     eepromMotorConfig_default.rotor_offset_ccw = 0.0f;
     eepromMotorConfig_default.rotor_offset_absolute = 0.0f;
     
+    // Default motor identification
+    eepromMotorConfig_default.motor_id = 0;
+    
     // Default status flags
     eepromMotorConfig_default.is_calibrated = false;
     eepromMotorConfig_default.is_first_boot = true;
@@ -237,7 +240,7 @@ void printEEPROMConfig()
 /**
  * @brief Save motor calibration data (legacy compatibility)
  */
-void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, bool active) 
+void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, uint8_t motorId, bool active) 
 {
     if (active)
     {
@@ -245,6 +248,7 @@ void saveMotorDataToEEPROM(float cwOffset, float ccwOffset, float absOffset, boo
         SET_ROTOR_OFFSET_CW(cwOffset);
         SET_ROTOR_OFFSET_CCW(ccwOffset);
         SET_ROTOR_OFFSET_ABS(absOffset);
+        SET_MOTOR_ID(motorId);
         SET_MOTOR_CALIBRATED(true);
         
         // Save configuration

@@ -15,7 +15,7 @@ static HardwareSerial SystemSerial_RS232(RS232_RX1_PIN, RS232_TX1_PIN);     // S
  *              and resolution for SVPWM.
  * @param       serial_output  Select System Serial output type (SERIAL_SYSTEM or SERIAL_RS232)
  */
-void systemInit(SerialOutputType serial_output) 
+void systemInit(SerialOutputType serial_output, int wait_ms) 
 {
     // Select and initialize SystemSerial based on the output type
     switch (serial_output) 
@@ -53,4 +53,10 @@ void systemInit(SerialOutputType serial_output)
     analogReadResolution(ANALOG_READ_RESOLUTION);   // Set ADC resolution to 12 bits for current sensing
     analogWriteFrequency(SVPWM_FREQUENCY);          // Set PWM frequency to 20 kHz for SVPWM
     analogWriteResolution(SVPWM_RESOLUTION);        // Set PWM resolution to 12 bits for SVPWM
+
+    // Optional wait time for stabilization
+    if (wait_ms > 0)
+    {
+        delay(wait_ms);
+    }
 }
