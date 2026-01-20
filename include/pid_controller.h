@@ -27,7 +27,7 @@ public:
         previous_error = 0;
     }
 
-    // Compute PID output
+    // Compute PID output with back-calculation anti-windup
     float compute(float measured, float dt) 
     {
         float error = setpoint - measured;
@@ -37,29 +37,48 @@ public:
         {
             error = 0;
             integral = 0;
-        } 
-        else 
-        {
-            integral += error * dt;
         }
 
-        // Limit integral value
-        if (integral_limit > 0) 
-        {
-            if (integral > integral_limit) integral = integral_limit;
-            else if (integral < -integral_limit) integral = -integral_limit;
-        }
-
+        // Calculate P and D terms
+        float P_term = Kp * error;
         float derivative = (error - previous_error) / dt;
+        float D_term = Kd * derivative;
         previous_error = error;
-        float output = Kp * error + Ki * integral + Kd * derivative;
 
-        // Limit output value
+        // Calculate unsaturated output (with current integral)
+        float I_term = Ki * integral;
+        float output_unsaturated = P_term + I_term + D_term;
+
+        // Saturate output
+        float output = output_unsaturated;
         if (output_limit > 0) 
         {
             if (output > output_limit) output = output_limit;
             else if (output < -output_limit) output = -output_limit;
         }
+
+        // Back-calculation anti-windup:
+        // Only integrate if NOT saturated, OR if error helps desaturate
+        // (error sign opposite to output sign means it's helping to come back)
+        bool is_saturated = (output != output_unsaturated);
+        bool error_helps_desaturate = (error * output_unsaturated < 0);
+
+        if (!is_saturated || error_helps_desaturate) 
+        {
+            // Safe to integrate
+            if (fabs(error) > tolerance)  // Don't integrate if within deadband
+            {
+                integral += error * dt;
+            }
+            
+            // Apply integral limit as secondary protection
+            if (integral_limit > 0) 
+            {
+                if (integral > integral_limit) integral = integral_limit;
+                else if (integral < -integral_limit) integral = -integral_limit;
+            }
+        }
+        // If saturated and error is making it worse, don't integrate (freeze integral)
 
         return output;
     }
