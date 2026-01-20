@@ -23,16 +23,16 @@ CONFIG_BAUDRATE = 921600          # Baudrate (default: 921600)
 CONFIG_MOTOR = "A"                # Motor to control: "A" or "B"
 
 # Playback Configuration
-CONFIG_RATE_HZ = 30.0             # Playback rate in Hz (e.g., 30, 50, 100)
+CONFIG_RATE_HZ = 10.0             # Playback rate in Hz (e.g., 30, 50, 100)
 CONFIG_MODE = "direct"            # Control mode: "direct" or "scurve"
-CONFIG_LOOP = False               # True = loop continuously, False = run once
+CONFIG_LOOP = True               # True = loop continuously, False = run once
 CONFIG_VERBOSE = True             # True = detailed output, False = progress bar
 
 # Gait Parameters
 CONFIG_STEP_LENGTH = 50.0         # Step length in mm (forward/backward)
 CONFIG_LIFT_HEIGHT = 15.0         # Foot lift height in mm
 CONFIG_STANCE_HEIGHT = -200.0     # Stance height in mm (negative = down)
-CONFIG_NUM_POINTS = 30            # Number of trajectory points per cycle
+CONFIG_NUM_POINTS = 20            # Number of trajectory points per cycle
 CONFIG_REVERSE = False            # True = backward gait, False = forward gait
 
 # Initialization
@@ -868,12 +868,16 @@ Examples:
                         help=f'Control mode (default: {CONFIG_MODE})')
     parser.add_argument('--baudrate', type=int, default=CONFIG_BAUDRATE,
                         help=f'Serial baudrate (default: {CONFIG_BAUDRATE})')
-    parser.add_argument('--loop', action='store_true', default=CONFIG_LOOP,
-                        help='Loop trajectory continuously')
-    parser.add_argument('--verbose', action='store_true', default=CONFIG_VERBOSE,
-                        help='Print detailed debug information')
-    parser.add_argument('--no-start', action='store_true', default=CONFIG_SKIP_START,
-                        help='Skip sending start command (motor already running)')
+    # Boolean flags - use BooleanOptionalAction so CONFIG defaults work properly
+    # Usage: --loop (enable) or --no-loop (disable), default from CONFIG
+    parser.add_argument('--loop', action=argparse.BooleanOptionalAction, default=CONFIG_LOOP,
+                        help=f'Loop trajectory continuously (default: {CONFIG_LOOP})')
+    parser.add_argument('--verbose', action=argparse.BooleanOptionalAction, default=CONFIG_VERBOSE,
+                        help=f'Print detailed debug information (default: {CONFIG_VERBOSE})')
+    parser.add_argument('--no-start', action=argparse.BooleanOptionalAction, default=CONFIG_SKIP_START,
+                        help=f'Skip sending start command (default: {CONFIG_SKIP_START})')
+    parser.add_argument('--reverse', action=argparse.BooleanOptionalAction, default=CONFIG_REVERSE,
+                        help=f'Reverse (backward) gait (default: {CONFIG_REVERSE})')
     
     # Gait parameters - defaults from CONFIG
     parser.add_argument('--step', type=float, default=CONFIG_STEP_LENGTH,
@@ -884,8 +888,6 @@ Examples:
                         help=f'Stance height in mm (default: {CONFIG_STANCE_HEIGHT})')
     parser.add_argument('--points', type=int, default=CONFIG_NUM_POINTS,
                         help=f'Number of trajectory points (default: {CONFIG_NUM_POINTS})')
-    parser.add_argument('--reverse', action='store_true', default=CONFIG_REVERSE,
-                        help='Reverse (backward) gait')
     parser.add_argument('--init-wait', type=float, default=CONFIG_INIT_WAIT,
                         help=f'Wait time for motor to reach start position (default: {CONFIG_INIT_WAIT}s)')
     
