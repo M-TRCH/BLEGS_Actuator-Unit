@@ -6,10 +6,42 @@ Uses correct Binary Protocol v1.2 with proper feedback parsing
 
 Author: M-TRCH
 Date: 2026-01-20
-Version: 2.0
+Version: 2.1
 
 Based on Quadruped_Gait_Control_No_EF.py protocol implementation
 """
+
+# ============================================================================
+# ▼▼▼ RUN CONFIGURATION - EDIT THESE VALUES ▼▼▼
+# ============================================================================
+
+# Serial Port Configuration
+CONFIG_PORT = "COM3"              # Serial port (e.g., "COM3", "/dev/ttyUSB0")
+CONFIG_BAUDRATE = 921600          # Baudrate (default: 921600)
+
+# Motor Selection
+CONFIG_MOTOR = "A"                # Motor to control: "A" or "B"
+
+# Playback Configuration
+CONFIG_RATE_HZ = 30.0             # Playback rate in Hz (e.g., 30, 50, 100)
+CONFIG_MODE = "direct"            # Control mode: "direct" or "scurve"
+CONFIG_LOOP = False               # True = loop continuously, False = run once
+CONFIG_VERBOSE = True             # True = detailed output, False = progress bar
+
+# Gait Parameters
+CONFIG_STEP_LENGTH = 50.0         # Step length in mm (forward/backward)
+CONFIG_LIFT_HEIGHT = 15.0         # Foot lift height in mm
+CONFIG_STANCE_HEIGHT = -200.0     # Stance height in mm (negative = down)
+CONFIG_NUM_POINTS = 30            # Number of trajectory points per cycle
+CONFIG_REVERSE = False            # True = backward gait, False = forward gait
+
+# Initialization
+CONFIG_INIT_WAIT = 3.0            # Wait time for motor to reach start (seconds)
+CONFIG_SKIP_START = False         # True = skip PING (motor already running)
+
+# ============================================================================
+# ▲▲▲ END OF CONFIGURATION ▲▲▲
+# ============================================================================
 
 import struct
 import serial
@@ -824,36 +856,38 @@ Examples:
         """
     )
     
-    parser.add_argument('port', nargs='?', help='Serial port (e.g., COM3 or /dev/ttyUSB0)')
+    # All arguments now default to CONFIG values from top of file
+    parser.add_argument('port', nargs='?', default=CONFIG_PORT,
+                        help=f'Serial port (default: {CONFIG_PORT})')
     parser.add_argument('--list-ports', action='store_true', help='List available COM ports')
-    parser.add_argument('--motor', choices=['A', 'B'], default='A',
-                        help='Motor to control: A or B (default: A)')
-    parser.add_argument('--rate', type=float, default=50.0,
-                        help='Playback rate in Hz (default: 50)')
-    parser.add_argument('--mode', choices=['direct', 'scurve'], default='direct',
-                        help='Control mode (default: direct)')
-    parser.add_argument('--baudrate', type=int, default=921600,
-                        help='Serial baudrate (default: 921600)')
-    parser.add_argument('--loop', action='store_true',
+    parser.add_argument('--motor', choices=['A', 'B'], default=CONFIG_MOTOR,
+                        help=f'Motor to control: A or B (default: {CONFIG_MOTOR})')
+    parser.add_argument('--rate', type=float, default=CONFIG_RATE_HZ,
+                        help=f'Playback rate in Hz (default: {CONFIG_RATE_HZ})')
+    parser.add_argument('--mode', choices=['direct', 'scurve'], default=CONFIG_MODE,
+                        help=f'Control mode (default: {CONFIG_MODE})')
+    parser.add_argument('--baudrate', type=int, default=CONFIG_BAUDRATE,
+                        help=f'Serial baudrate (default: {CONFIG_BAUDRATE})')
+    parser.add_argument('--loop', action='store_true', default=CONFIG_LOOP,
                         help='Loop trajectory continuously')
-    parser.add_argument('--verbose', action='store_true',
+    parser.add_argument('--verbose', action='store_true', default=CONFIG_VERBOSE,
                         help='Print detailed debug information')
-    parser.add_argument('--no-start', action='store_true',
+    parser.add_argument('--no-start', action='store_true', default=CONFIG_SKIP_START,
                         help='Skip sending start command (motor already running)')
     
-    # Gait parameters
-    parser.add_argument('--step', type=float, default=GAIT_STEP_FORWARD,
-                        help=f'Step length in mm (default: {GAIT_STEP_FORWARD})')
-    parser.add_argument('--lift', type=float, default=GAIT_LIFT_HEIGHT,
-                        help=f'Lift height in mm (default: {GAIT_LIFT_HEIGHT})')
-    parser.add_argument('--height', type=float, default=DEFAULT_STANCE_HEIGHT,
-                        help=f'Stance height in mm (default: {DEFAULT_STANCE_HEIGHT})')
-    parser.add_argument('--points', type=int, default=30,
-                        help='Number of trajectory points (default: 30)')
-    parser.add_argument('--reverse', action='store_true',
+    # Gait parameters - defaults from CONFIG
+    parser.add_argument('--step', type=float, default=CONFIG_STEP_LENGTH,
+                        help=f'Step length in mm (default: {CONFIG_STEP_LENGTH})')
+    parser.add_argument('--lift', type=float, default=CONFIG_LIFT_HEIGHT,
+                        help=f'Lift height in mm (default: {CONFIG_LIFT_HEIGHT})')
+    parser.add_argument('--height', type=float, default=CONFIG_STANCE_HEIGHT,
+                        help=f'Stance height in mm (default: {CONFIG_STANCE_HEIGHT})')
+    parser.add_argument('--points', type=int, default=CONFIG_NUM_POINTS,
+                        help=f'Number of trajectory points (default: {CONFIG_NUM_POINTS})')
+    parser.add_argument('--reverse', action='store_true', default=CONFIG_REVERSE,
                         help='Reverse (backward) gait')
-    parser.add_argument('--init-wait', type=float, default=3.0,
-                        help='Wait time for motor to reach start position (default: 3.0s)')
+    parser.add_argument('--init-wait', type=float, default=CONFIG_INIT_WAIT,
+                        help=f'Wait time for motor to reach start position (default: {CONFIG_INIT_WAIT}s)')
     
     args = parser.parse_args()
     
@@ -863,10 +897,23 @@ Examples:
         return 0
     
     # Check port argument
-    if not args.port:
-        print("Error: Serial port required. Use --list-ports to see available ports.")
-        parser.print_help()
+    if not args.port or args.port == "":
+        print("Error: Serial port required.")
+        print(f"  - Edit CONFIG_PORT at top of this file, or")
+        print(f"  - Use: python {__file__} COM3")
+        print(f"  - Use --list-ports to see available ports.")
         return 1
+    
+    # Print current configuration
+    print(f"\n{'='*60}")
+    print(f"Configuration (edit at top of file to change defaults)")
+    print(f"{'='*60}")
+    print(f"  Port:       {args.port} @ {args.baudrate} baud")
+    print(f"  Motor:      {args.motor}")
+    print(f"  Rate:       {args.rate} Hz")
+    print(f"  Mode:       {args.mode}")
+    print(f"  Loop:       {args.loop}")
+    print(f"  Verbose:    {args.verbose}")
     
     # Generate trajectory
     print(f"\n{'='*60}")
