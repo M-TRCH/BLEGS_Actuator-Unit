@@ -409,15 +409,16 @@ void loop()
             {
                 if (control_mode == POSITION_CONTROL_ONLY) 
                 {
-                    // Direct position control
-                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
+                    // Direct position control (no velocity feedforward)
+                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd, 0.0f);
                 }
                 else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
                 {
-                    // Position control with S-curve profile
+                    // Position control with S-curve profile and velocity feedforward
                     float elapsed_time = (float)(current_time - start_scurve_time) / 1000000.0f;
                     position_pid.setpoint = scurve.getPosition(elapsed_time);
-                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
+                    float velocity_ff = scurve.getVelocity(elapsed_time);
+                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd, velocity_ff);
                 }
             }
         }

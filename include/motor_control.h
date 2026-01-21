@@ -35,6 +35,11 @@ extern PIDController position_pid;                  // Position PID controller
 void findConstOffset(bool active, float v_mag, float step_angle, float step_offset, bool ccw = true);
 float findRotorOffset(float v_mag, float step_angle, bool ccw = true, float revolution = 1.0f);
 void svpwmControl(float vd_ref = 0.0f, float vq_ref = 0.0f, float angle_rad = 0.0f);
-void positionControl(float measured, float *output);
+void positionControl(float measured, float *output, float velocity_ff = 0.0f);
+
+// Velocity feedforward gain (degrees/s -> voltage)
+// Estimated from motor constants: Kv_ff = 1 / (Ke * gear_ratio)
+// where Ke = speed constant in rad/s/V
+#define VELOCITY_FF_GAIN 0.002f  // Tune this value based on motor response
 
 #endif // MOTOR_CONTROL_H

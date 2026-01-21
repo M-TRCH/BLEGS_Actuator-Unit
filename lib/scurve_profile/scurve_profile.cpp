@@ -69,3 +69,27 @@ float ScurveProfile::getPosition(float t)
         return q0 + dir * (d_acc + vmax * Tv + vmax * td - 0.5f * amax * td * td);
     }
 }
+
+/* @brief   Get the velocity at time t (trapezoidal profile)
+ * @param   t       Time in seconds
+ * @return  Velocity in units of q/s (degrees/second)
+ */
+float ScurveProfile::getVelocity(float t) 
+{
+    float dir = (q1 > q0) ? 1.0f : -1.0f;
+
+    if (t < 0) return 0.0f;
+    if (t > totalTime) return 0.0f;
+
+    if (t < Ta) {
+        // Acceleration phase: v = a * t
+        return dir * amax * t;
+    } else if (t < (Ta + Tv)) {
+        // Constant velocity phase
+        return dir * vmax;
+    } else {
+        // Deceleration phase: v = vmax - a * (t - Ta - Tv)
+        float td = t - (Ta + Tv);
+        return dir * (vmax - amax * td);
+    }
+}

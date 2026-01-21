@@ -129,12 +129,24 @@ void svpwmControl(float vd_ref, float vq_ref, float angle_rad)
     applySVPWM(vd_ref, vq_ref, angle_rad); // Apply SVPWM with rotor angle in radians
 }
 
-/* @brief   Position control using PID
- * @param   measured   The measured position
- * @param   output     Pointer to the output voltage
+/* @brief   Position control using PID with velocity feedforward
+ * @param   measured     The measured position
+ * @param   output       Pointer to the output voltage
+ * @param   velocity_ff  Velocity feedforward (degrees/second)
  */
-void positionControl(float measured, float *output)
+void positionControl(float measured, float *output, float velocity_ff)
 {
-    *output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
+    // PID feedback control
+    float pid_output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
+    
+    // Velocity feedforward: convert velocity (deg/s) to voltage
+    float ff_output = velocity_ff * VELOCITY_FF_GAIN;
+    
+    // Combined output: PID + Feedforward
+    *output = pid_output + ff_output;
+    
+    // Apply output limit (same as PID output limit)
+    if (*output > position_pid.output_limit) *output = position_pid.output_limit;
+    else if (*output < -position_pid.output_limit) *output = -position_pid.output_limit;
 }
 
