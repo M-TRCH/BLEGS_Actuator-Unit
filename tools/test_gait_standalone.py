@@ -23,17 +23,18 @@ CONFIG_BAUDRATE = 921600          # Baudrate (default: 921600)
 CONFIG_MOTOR = "A"                # Motor to control: "A" or "B"
 
 # Playback Configuration
-CONFIG_RATE_HZ = 10.0             # Playback rate in Hz (e.g., 30, 50, 100)
+CONFIG_RATE_HZ = 50.0             # Playback rate in Hz (matches Quadruped: UPDATE_RATE=50)
 CONFIG_MODE = "direct"            # Control mode: "direct" or "scurve"
-CONFIG_LOOP = True               # True = loop continuously, False = run once
-CONFIG_VERBOSE = True             # True = detailed output, False = progress bar
+CONFIG_LOOP = True                # True = loop continuously, False = run once
+CONFIG_VERBOSE = False            # True = detailed output, False = progress bar
 
-# Gait Parameters
-CONFIG_STEP_LENGTH = 50.0         # Step length in mm (forward/backward)
-CONFIG_LIFT_HEIGHT = 15.0         # Foot lift height in mm
-CONFIG_STANCE_HEIGHT = -200.0     # Stance height in mm (negative = down)
-CONFIG_NUM_POINTS = 20            # Number of trajectory points per cycle
+# Gait Parameters (matches Quadruped_Gait_Control_No_EF.py)
+CONFIG_STEP_LENGTH = 50.0         # Step length in mm (GAIT_STEP_FORWARD)
+CONFIG_LIFT_HEIGHT = 15.0         # Foot lift height in mm (GAIT_LIFT_HEIGHT)
+CONFIG_STANCE_HEIGHT = -200.0     # Stance height in mm (DEFAULT_STANCE_HEIGHT)
+CONFIG_NUM_POINTS = 20            # Number of trajectory points (TRAJECTORY_STEPS)
 CONFIG_REVERSE = False            # True = backward gait, False = forward gait
+CONFIG_STANCE_RATIO = 0.65        # Stance phase ratio (SMOOTH_TROT_STANCE_RATIO)
 
 # Initialization
 CONFIG_INIT_WAIT = 3.0            # Wait time for motor to reach start (seconds)
@@ -430,6 +431,9 @@ def generate_elliptical_trajectory(
     """
     Generate elliptical foot trajectory for trot gait
     
+    The trajectory is designed to loop seamlessly - the last point transitions
+    smoothly back to the first point.
+    
     Args:
         step_forward: Forward step length in mm
         lift_height: Foot lift height in mm
@@ -451,12 +455,16 @@ def generate_elliptical_trajectory(
     
     for i in range(num_steps):
         if i < swing_steps:
-            # Swing phase - elliptical arc
+            # Swing phase - elliptical arc (0 to π)
+            # Use (i / swing_steps) to go from 0 to just before π
+            # The swing ends at the point before stance begins
             t = math.pi * i / swing_steps
         else:
-            # Stance phase - linear on ground
-            stance_progress = (i - swing_steps) / stance_steps
-            t = math.pi + math.pi * stance_progress
+            # Stance phase - linear on ground (π to 2π)
+            # Map stance_steps points from π to 2π (exclusive of 2π for seamless loop)
+            # stance_progress goes from 0/stance_steps to (stance_steps-1)/stance_steps
+            stance_idx = i - swing_steps
+            t = math.pi + math.pi * (stance_idx + 1) / stance_steps
         
         # X position (forward/backward)
         px = direction * (-step_forward * math.cos(t))
@@ -522,6 +530,11 @@ def trajectory_to_motor_angles(trajectory: List[Tuple[float, float]], motor_sele
     
     if max_jump > 100:  # More than 100 degrees jump is suspicious
         print(f"Warning: Large angle jump detected at step {max_jump_idx}: {max_jump:.1f} degrees")
+    
+    # Check wrap-around continuity (last -> first for looping)
+    wrap_jump = abs(motor_angles[0] - motor_angles[-1])
+    if wrap_jump > 50:  # More than 50 degrees at wrap-around
+        print(f"Warning: Wrap-around discontinuity: {wrap_jump:.1f}° (last={motor_angles[-1]:.1f}° -> first={motor_angles[0]:.1f}°)")
     
     return motor_angles
 
@@ -811,8 +824,8 @@ def playback_trajectory(
             if not loop:
                 break
             
-            print("Looping...\n")
-            time.sleep(0.5)
+            # Seamless loop - no delay, continue immediately
+            # The trajectory should be designed to wrap smoothly
             
     except KeyboardInterrupt:
         print("\n\nPlayback stopped by user")
@@ -888,6 +901,8 @@ Examples:
                         help=f'Stance height in mm (default: {CONFIG_STANCE_HEIGHT})')
     parser.add_argument('--points', type=int, default=CONFIG_NUM_POINTS,
                         help=f'Number of trajectory points (default: {CONFIG_NUM_POINTS})')
+    parser.add_argument('--stance-ratio', type=float, default=CONFIG_STANCE_RATIO,
+                        help=f'Stance phase ratio 0.0-1.0 (default: {CONFIG_STANCE_RATIO})')
     parser.add_argument('--init-wait', type=float, default=CONFIG_INIT_WAIT,
                         help=f'Wait time for motor to reach start position (default: {CONFIG_INIT_WAIT}s)')
     
@@ -925,6 +940,7 @@ Examples:
     print(f"Lift height:   {args.lift:.1f} mm")
     print(f"Stance height: {args.height:.1f} mm")
     print(f"Points:        {args.points}")
+    print(f"Stance ratio:  {args.stance_ratio:.0%}")
     print(f"Direction:     {'Backward' if args.reverse else 'Forward'}")
     print(f"Motor:         {args.motor}")
     
@@ -933,6 +949,7 @@ Examples:
         step_forward=args.step,
         lift_height=args.lift,
         num_steps=args.points,
+        stance_ratio=args.stance_ratio,
         home_y=args.height,
         reverse=args.reverse
     )
@@ -946,6 +963,7 @@ Examples:
     
     print(f"\nMotor {args.motor} shaft angles:")
     print(f"  Range: {min(motor_angles):.2f}° to {max(motor_angles):.2f}°")
+    print(f"  Wrap-around jump: {abs(motor_angles[0] - motor_angles[-1]):.2f}° (last->first)")
     
     # Open serial port
     try:
