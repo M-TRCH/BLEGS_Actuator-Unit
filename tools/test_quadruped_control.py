@@ -74,9 +74,9 @@ class ErrorCode(IntEnum):
 # ============================================================================
 
 BAUD_RATE = 921600
-SERIAL_TIMEOUT = 0.05  # 50ms timeout for discovery
-FAST_TIMEOUT = 0.002   # 2ms timeout for high-speed operation
-PING_RETRIES = 3       # Number of PING retries during discovery
+SERIAL_TIMEOUT = 0.1   # 100ms timeout for discovery (increased for stability)
+FAST_TIMEOUT = 0.005   # 5ms timeout for high-speed operation
+PING_RETRIES = 5       # Number of PING retries during discovery (increased)
 
 # ============================================================================
 # ROBOT CONFIGURATION
@@ -212,6 +212,39 @@ def build_packet(pkt_type: int, payload: bytes = b'') -> bytes:
     
     return header + type_byte + payload_len + payload + crc_bytes
 
+def open_serial_with_timeout(port, baudrate, timeout, open_timeout=3.0):
+    """
+    Open serial port with a timeout to prevent blocking.
+    Returns serial object or None if failed.
+    """
+    result = {'serial': None, 'error': None}
+    
+    def try_open():
+        try:
+            result['serial'] = serial.Serial(
+                port=port,
+                baudrate=baudrate,
+                timeout=timeout,
+                write_timeout=timeout,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+        except Exception as e:
+            result['error'] = str(e)
+    
+    # Run in thread with timeout
+    thread = threading.Thread(target=try_open, daemon=True)
+    thread.start()
+    thread.join(timeout=open_timeout)
+    
+    if thread.is_alive():
+        # Thread still running = blocked
+        result['error'] = f"Timeout opening port (>{open_timeout}s)"
+        return None, result['error']
+    
+    return result['serial'], result['error']
+
 # ============================================================================
 # MOTOR CONTROLLER CLASS
 # ============================================================================
@@ -233,27 +266,45 @@ class BinaryMotorController:
         self.stats_rx_count = 0
         self.stats_errors = 0
     
-    def connect(self, timeout=SERIAL_TIMEOUT):
-        """Connect to motor via serial port"""
+    def connect(self, timeout=SERIAL_TIMEOUT, open_timeout=3.0):
+        """Connect to motor via serial port with timeout protection"""
         try:
-            self.serial = serial.Serial(
+            print(f"      📂 Opening serial port (timeout={open_timeout}s)...")
+            
+            # Use helper function with timeout protection
+            self.serial, error = open_serial_with_timeout(
                 port=self.port,
                 baudrate=BAUD_RATE,
                 timeout=timeout,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
+                open_timeout=open_timeout
             )
-            time.sleep(0.1)
             
-            # Flush buffers
+            if self.serial is None:
+                print(f"      ❌ Failed to open: {error}")
+                self.is_connected = False
+                return False
+            
+            print(f"      ✓ Port opened, stabilizing...")
+            
+            # Wait for serial port to stabilize
+            time.sleep(0.2)
+            
+            # Flush buffers multiple times to clear any garbage
+            print(f"      ✓ Flushing buffers...")
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
+            time.sleep(0.05)
+            self.serial.reset_input_buffer()
             
             self.is_connected = True
             return True
             
+        except serial.SerialException as e:
+            print(f"      ❌ Serial error: {e}")
+            self.is_connected = False
+            return False
         except Exception as e:
+            print(f"      ❌ Connect exception: {e}")
             self.is_connected = False
             return False
     
@@ -280,13 +331,30 @@ class BinaryMotorController:
             return None
         
         try:
-            # Flush buffers
+            # Flush both buffers before sending
             self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+            
+            # Small delay after flush
+            time.sleep(0.01)
             
             # Build and send PING packet
             packet = build_packet(PacketType.PKT_CMD_PING)
             self.serial.write(packet)
+            self.serial.flush()  # Ensure packet is sent
             self.stats_tx_count += 1
+            
+            # Wait for response with explicit timeout
+            start_wait = time.time()
+            max_wait = self.serial.timeout if self.serial.timeout else 0.1
+            
+            while (time.time() - start_wait) < max_wait:
+                if self.serial.in_waiting >= 2:  # At least header bytes
+                    break
+                time.sleep(0.005)
+            
+            if self.serial.in_waiting < 2:
+                return None  # No response
             
             # Read response
             response = self._read_packet()
@@ -312,6 +380,7 @@ class BinaryMotorController:
             return None
             
         except Exception as e:
+            print(f"      [DEBUG] send_ping exception: {e}")
             return None
     
     def start_motor(self) -> bool:
@@ -447,9 +516,19 @@ class BinaryMotorController:
         Returns (pkt_type, payload) or None
         """
         try:
-            # Read header
+            # Safety check - ensure there's data waiting
+            if self.serial.in_waiting < 2:
+                return None
+            
+            # Read header with timeout check
             header = self.serial.read(2)
-            if len(header) != 2 or header[0] != HEADER_1 or header[1] != HEADER_2:
+            if len(header) != 2:
+                return None
+            
+            if header[0] != HEADER_1 or header[1] != HEADER_2:
+                # Invalid header - flush remaining data
+                if self.serial.in_waiting > 0:
+                    self.serial.reset_input_buffer()
                 return None
             
             # Read packet type and length
@@ -459,6 +538,11 @@ class BinaryMotorController:
             
             pkt_type = meta[0]
             payload_len = meta[1]
+            
+            # Sanity check payload length
+            if payload_len > 128:  # Max reasonable payload
+                self.serial.reset_input_buffer()
+                return None
             
             # Read payload
             payload = self.serial.read(payload_len)
@@ -484,6 +568,7 @@ class BinaryMotorController:
             return (pkt_type, payload)
             
         except Exception as e:
+            print(f"      [DEBUG] _read_packet exception: {e}")
             return None
     
     def read_feedback(self) -> dict:
@@ -593,13 +678,16 @@ def discover_motors() -> dict:
             print(f"      ❌ Failed to open {port}")
             continue
         
+        print(f"      🔗 Connected, sending PING...")
+        
         # Try PING multiple times
         motor_info = None
         for attempt in range(PING_RETRIES):
+            print(f"      📡 PING attempt {attempt + 1}/{PING_RETRIES}...")
             motor_info = controller.send_ping()
             if motor_info:
                 break
-            time.sleep(0.05)
+            time.sleep(0.1)  # Increased delay between retries
         
         if motor_info:
             motor_id = motor_info['motor_id']
@@ -610,9 +698,20 @@ def discover_motors() -> dict:
             
             # Store in discovered dictionary
             discovered[motor_id] = controller
+            
+            # Delay for stability after discovery
+            time.sleep(0.2)
         else:
             print(f"      ⚠️  No response (no motor on this port)")
             controller.disconnect()
+        
+        # Small delay between ports for stability
+        time.sleep(0.1)
+    
+    # Wait after discovery complete
+    if discovered:
+        print(f"\n  ⏳ Stabilizing after discovery...")
+        time.sleep(0.5)
     
     print(f"\n  📊 Discovery complete: {len(discovered)} motor(s) found")
     return discovered
@@ -650,6 +749,9 @@ def register_leg_motors(discovered_motors: dict) -> bool:
                 'motor_b_id': motor_b_id
             }
             print(f"    ✅ {leg_id}: Motor A (ID {motor_a_id}) + Motor B (ID {motor_b_id})")
+            
+            # Delay for stability after registration
+            time.sleep(0.1)
         else:
             all_assigned = False
             if not motor_a:
@@ -657,6 +759,11 @@ def register_leg_motors(discovered_motors: dict) -> bool:
             if not motor_b:
                 missing_motors.append(f"{leg_id} Motor B (ID {motor_b_id})")
             print(f"    ❌ {leg_id}: INCOMPLETE - Missing motor(s)")
+    
+    # Wait after registration complete
+    if leg_motors:
+        print(f"\n  ⏳ Stabilizing after registration...")
+        time.sleep(0.5)
     
     if missing_motors:
         print(f"\n  ⚠️  Missing motors:")
@@ -675,22 +782,31 @@ def start_all_motors() -> bool:
     total_count = len(motor_registry)
     
     for motor_id, controller in motor_registry.items():
+        print(f"  🔧 Starting Motor ID {motor_id}...")
+        
         # Switch to fast timeout after discovery
         controller.set_timeout(FAST_TIMEOUT)
+        
+        # Small delay before PING for stability
+        time.sleep(0.1)
         
         # Send PING to start motor
         result = controller.send_ping()
         if result:
             success_count += 1
+            print(f"    ✅ Motor ID {motor_id} started successfully")
         else:
-            print(f"  ❌ Failed to start Motor ID {motor_id}")
+            print(f"    ❌ Failed to start Motor ID {motor_id}")
+        
+        # Delay between starting each motor
+        time.sleep(0.2)
     
     print(f"\n  📊 Started {success_count}/{total_count} motors")
     
     # Wait for motors to initialize
     if success_count > 0:
-        print("  ⏳ Waiting for motor initialization...")
-        time.sleep(2.0)
+        print("  ⏳ Waiting for motor initialization (3 seconds)...")
+        time.sleep(3.0)
     
     return success_count == total_count
 
