@@ -421,10 +421,16 @@ void loop()
                 else if (mode == MODE_SCURVE_FULL)
                 {
                     // S-Curve with explicit parameters from command
+                    // Note: ScurveProfile uses trapezoidal profile with amax_min/amax_max limits
+                    // params.v_max = max velocity (deg/s)
+                    // params.a_max = max acceleration (deg/s²) - already scaled by protocol
+                    // params.j_max = used as amax limit range (not jerk - library is trapezoidal)
                     control_mode = POSITION_CONTROL_WITH_SCURVE;
+                    float amax_min = params.a_max * 0.1f;  // Min acceleration = 10% of max
+                    float amax_max = params.a_max;         // Max acceleration from command
                     scurve.plan(current_pos, target_pos, 
                                 params.v_max, params.a_max, 
-                                params.j_max * 0.01f, params.j_max);  // j_min = 1% of j_max
+                                amax_min, amax_max);
                     start_scurve_time = micros();
                 }
                 
