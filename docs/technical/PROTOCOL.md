@@ -125,6 +125,46 @@ FE EE 01 07 01 94 11 00 00 E8 03 [CRC_L] [CRC_H]
          └──── Payload Length: 7 bytes
 ```
 
+#### Mode 2: S-Curve Full Parameters (NEW)
+
+โหมดนี้ให้ควบคุมพารามิเตอร์ S-Curve ได้เต็มรูปแบบ
+
+```python
+# Python example
+send_scurve_full(port, 45.0, v_max=2000, a_max=5000, j_max=1000)
+```
+
+**Payload Structure:**
+```
+┌──────────────┬────────────────────────────┬────────────┬────────────┬────────────┐
+│ Control Mode │     Target Position        │   V_max    │   A_max    │   J_max    │
+│   (0x02)     │  (int32, degrees * 100)    │ (uint16)   │ (uint16)   │ (uint16)   │
+│   1 byte     │         4 bytes            │  2 bytes   │  2 bytes   │  2 bytes   │
+└──────────────┴────────────────────────────┴────────────┴────────────┴────────────┘
+```
+
+**พารามิเตอร์:**
+| Field | Type | Unit | Description |
+|-------|------|------|-------------|
+| `target_pos` | int32 | degrees × 100 | ตำแหน่งเป้าหมาย |
+| `v_max` | uint16 | degrees/s | ความเร็วสูงสุด |
+| `a_max` | uint16 | degrees/s² ÷ 10 | ความเร่งสูงสุด (หารด้วย 10) |
+| `j_max` | uint16 | degrees/s³ ÷ 100 | Jerk สูงสุด (หารด้วย 100) |
+
+**ตัวอย่าง:**
+- `v_max = 2000` → 2000 deg/s
+- `a_max = 18000` → 180,000 deg/s²
+- `j_max = 1800` → 180,000 deg/s³
+
+**Example Packet:**
+```
+FE EE 01 0B 02 94 11 00 00 D0 07 50 46 08 07 [CRC_L] [CRC_H]
+         │  │  └──────────┘ └───┘ └───┘ └───┘
+         │  │  Target: 45.00° V:2000 A:18000 J:1800
+         │  └─ Control Mode: 0x02 (S-Curve Full)
+         └──── Payload Length: 11 bytes
+```
+
 ### CMD_PING (0x03)
 
 ใช้ตรวจสอบสถานะและความเร็วของการตอบสนอง  

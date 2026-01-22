@@ -50,6 +50,7 @@ class ControlMode(IntEnum):
     """Control mode enumeration"""
     MODE_DIRECT_POSITION = 0x00
     MODE_SCURVE_PROFILE = 0x01
+    MODE_SCURVE_FULL = 0x02  # Full S-Curve with vmax, amax, jmax
 
 class StatusFlags(IntEnum):
     """Status flags bitmask"""
@@ -504,6 +505,60 @@ class BinaryMotorController:
                 
                 # Try to read feedback response (non-blocking)
                 time.sleep(0.001)  # 1ms wait for response
+                if self.serial.in_waiting >= 12:
+                    result = self._read_packet()
+                    if result:
+                        pkt_type, payload_data = result
+                        if pkt_type == PacketType.PKT_FB_STATUS and len(payload_data) >= 8:
+                            position_raw = struct.unpack('<i', payload_data[1:5])[0]
+                            current_raw = struct.unpack('<h', payload_data[5:7])[0]
+                            status_flags = payload_data[7]
+                            self.current_position = (position_raw / 100.0) / GEAR_RATIO
+                            self.current_current = current_raw
+                            self.current_flags = status_flags
+            
+            return True
+            
+        except Exception as e:
+            self.stats_errors += 1
+            return False
+    
+    def set_position_scurve_full(self, angle_deg: float, v_max: int = 2000, 
+                                  a_max: int = 18000, j_max: int = 1800) -> bool:
+        """
+        Set target position using S-Curve profile with full parameters
+        
+        Args:
+            angle_deg: Target angle in robot coordinate (degrees)
+            v_max: Max velocity (degrees/s)
+            a_max: Max acceleration (degrees/s² / 10)
+            j_max: Max jerk (degrees/s³ / 100)
+            
+        Returns:
+            True if command sent successfully
+        """
+        if not self.is_connected:
+            return False
+        
+        try:
+            motor_angle = angle_deg * GEAR_RATIO
+            
+            with self.lock:
+                mode = bytes([ControlMode.MODE_SCURVE_FULL])
+                target_pos = struct.pack('<i', int(motor_angle * 100))
+                v_max_bytes = struct.pack('<H', v_max)
+                a_max_bytes = struct.pack('<H', a_max)
+                j_max_bytes = struct.pack('<H', j_max)
+                payload = mode + target_pos + v_max_bytes + a_max_bytes + j_max_bytes
+                
+                packet = build_packet(PacketType.PKT_CMD_SET_GOAL, payload)
+                self.serial.write(packet)
+                self.serial.flush()
+                self.stats_tx_count += 1
+                self.current_setpoint = angle_deg
+                
+                # Try to read feedback response
+                time.sleep(0.001)
                 if self.serial.in_waiting >= 12:
                     result = self._read_packet()
                     if result:

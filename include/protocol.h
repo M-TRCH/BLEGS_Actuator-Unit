@@ -35,7 +35,8 @@ enum PacketType : uint8_t {
 // Control Mode IDs (used in CMD_SET_GOAL payload)
 enum ControlMode : uint8_t {
     MODE_DIRECT_POSITION    = 0x00,     // Direct position control (PID only)
-    MODE_SCURVE_PROFILE     = 0x01      // S-Curve profile motion
+    MODE_SCURVE_PROFILE     = 0x01,     // S-Curve profile motion (auto-calculated params)
+    MODE_SCURVE_FULL        = 0x02      // S-Curve with full parameters (vmax, amax, jmax)
 };
 
 // Status Flags (bitfield for FB_STATUS)
@@ -79,12 +80,21 @@ struct __attribute__((packed)) PayloadSCurveProfile {
     uint16_t duration_ms;           // Duration in milliseconds
 };
 
+// Full S-Curve profile with all parameters
+struct __attribute__((packed)) PayloadSCurveProfileFull {
+    int32_t target_pos;             // Target position (degrees*100)
+    uint16_t v_max;                 // Max velocity (degrees/s)
+    uint16_t a_max;                 // Max acceleration (degrees/s² / 10)
+    uint16_t j_max;                 // Max jerk (degrees/s³ / 100)
+};
+
 // Union for CMD_SET_GOAL payload variants
 struct __attribute__((packed)) PayloadSetGoal {
     uint8_t control_mode;           // ControlMode enum
     union {
         PayloadDirectPosition direct;
         PayloadSCurveProfile scurve;
+        PayloadSCurveProfileFull scurve_full;
     } data;
 };
 
@@ -107,6 +117,13 @@ struct __attribute__((packed)) PayloadError {
 struct __attribute__((packed)) PayloadSetConfig {
     uint8_t config_id;              // Configuration parameter ID
     float value;                    // Configuration value
+};
+
+// S-Curve parameters structure (for output)
+struct SCurveParams {
+    float v_max;                    // Max velocity (degrees/s)
+    float a_max;                    // Max acceleration (degrees/s²)
+    float j_max;                    // Max jerk (degrees/s³)
 };
 
 // Function prototypes
@@ -195,6 +212,16 @@ void sendErrorFeedback(HardwareSerial* serial, uint8_t error_code, uint8_t last_
  * @return true if payload is valid
  */
 bool processSetGoalPayload(const PayloadSetGoal* payload, float* target_pos, uint16_t* duration_ms, uint8_t* mode);
+
+/**
+ * @brief Process received CMD_SET_GOAL packet with full S-Curve parameters
+ * @param payload Pointer to PayloadSetGoal structure
+ * @param target_pos Output: target position (degrees)
+ * @param mode Output: control mode
+ * @param scurve_params Output: S-Curve parameters (for MODE_SCURVE_FULL)
+ * @return true if payload is valid
+ */
+bool processSetGoalPayloadEx(const PayloadSetGoal* payload, float* target_pos, uint8_t* mode, SCurveParams* scurve_params);
 
 /**
  * @brief Compute status flags based on current system state

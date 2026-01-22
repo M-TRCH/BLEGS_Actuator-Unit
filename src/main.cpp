@@ -31,6 +31,8 @@ struct CommandQueue
 {
     float target_positions[CMD_QUEUE_SIZE];
     uint8_t modes[CMD_QUEUE_SIZE];
+    SCurveParams scurve_params[CMD_QUEUE_SIZE];  // S-Curve parameters for each command
+    uint16_t durations[CMD_QUEUE_SIZE];          // Duration for auto-calc mode
     uint8_t write_idx;
     uint8_t read_idx;
     uint8_t count;
@@ -224,16 +226,23 @@ void loop()
                             float target_pos;
                             uint16_t duration_ms;
                             uint8_t mode;
+                            SCurveParams scurve_params;
                             
                             PayloadSetGoal* goal_payload = (PayloadSetGoal*)rx_packet.payload;
                             
-                            if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
+                            // Use extended processing to get S-Curve parameters
+                            if (processSetGoalPayloadEx(goal_payload, &target_pos, &mode, &scurve_params))
                             {
+                                // Get duration for legacy mode
+                                processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode);
+                                
                                 // Add to queue instead of processing immediately
                                 if (cmd_queue.count < CMD_QUEUE_SIZE)
                                 {
                                     cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
                                     cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                    cmd_queue.scurve_params[cmd_queue.write_idx] = scurve_params;
+                                    cmd_queue.durations[cmd_queue.write_idx] = duration_ms;
                                     cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
                                     cmd_queue.count++;
                                 }
@@ -243,6 +252,8 @@ void loop()
                                     cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
                                     cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
                                     cmd_queue.modes[cmd_queue.write_idx] = mode;
+                                    cmd_queue.scurve_params[cmd_queue.write_idx] = scurve_params;
+                                    cmd_queue.durations[cmd_queue.write_idx] = duration_ms;
                                     cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
                                 }
                                 
@@ -368,9 +379,11 @@ void loop()
         {
             last_setpoint_update_time = current_time;
             
-            // Get command from queue
+            // Get command from queue (with all parameters)
             float target_pos = cmd_queue.target_positions[cmd_queue.read_idx];
             uint8_t mode = cmd_queue.modes[cmd_queue.read_idx];
+            SCurveParams params = cmd_queue.scurve_params[cmd_queue.read_idx];
+            uint16_t duration = cmd_queue.durations[cmd_queue.read_idx];
             cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
             cmd_queue.count--;
             
@@ -386,14 +399,33 @@ void loop()
                 }
                 else if (mode == MODE_SCURVE_PROFILE)
                 {
-                    // S-Curve profile motion
+                    // S-Curve profile motion with auto-calculated parameters
                     control_mode = POSITION_CONTROL_WITH_SCURVE;
-                    // Calculate velocity based on distance and default acceleration
                     float distance = abs(target_pos - current_pos);
-                    float v_max = fmax(distance * 2.0f, 1000.0f);  // Adaptive velocity
-                    float a_max = 180000.0f;  // Max acceleration
+                    
+                    // Calculate v_max from duration if provided
+                    float v_max, a_max;
+                    if (duration > 0) {
+                        // Use duration to calculate velocity
+                        float duration_s = (float)duration / 1000.0f;
+                        v_max = fmax(distance / duration_s * 2.0f, 500.0f);
+                        a_max = v_max / (duration_s * 0.3f);  // 30% of time for accel
+                    } else {
+                        // Adaptive calculation
+                        v_max = fmax(distance * 2.0f, 1000.0f);
+                        a_max = 180000.0f;
+                    }
                     scurve.plan(current_pos, target_pos, v_max, a_max, 1000.0f, a_max);
-                    start_scurve_time = micros();  // Use micros() for accurate timing
+                    start_scurve_time = micros();
+                }
+                else if (mode == MODE_SCURVE_FULL)
+                {
+                    // S-Curve with explicit parameters from command
+                    control_mode = POSITION_CONTROL_WITH_SCURVE;
+                    scurve.plan(current_pos, target_pos, 
+                                params.v_max, params.a_max, 
+                                params.j_max * 0.01f, params.j_max);  // j_min = 1% of j_max
+                    start_scurve_time = micros();
                 }
                 
                 last_target_position = target_pos;
