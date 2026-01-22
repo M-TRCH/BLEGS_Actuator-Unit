@@ -74,9 +74,12 @@ class ErrorCode(IntEnum):
 # ============================================================================
 
 BAUD_RATE = 921600
-SERIAL_TIMEOUT = 0.1   # 100ms timeout for discovery (increased for stability)
-FAST_TIMEOUT = 0.005   # 5ms timeout for high-speed operation
-PING_RETRIES = 5       # Number of PING retries during discovery (increased)
+SERIAL_TIMEOUT = 0.2   # 200ms timeout for discovery (increased for stability)
+FAST_TIMEOUT = 0.01    # 10ms timeout for high-speed operation
+PING_RETRIES = 5       # Number of PING retries during discovery
+
+# Debug mode - set to True to see detailed communication info
+DEBUG_SERIAL = False
 
 # ============================================================================
 # ROBOT CONFIGURATION
@@ -124,8 +127,13 @@ DEFAULT_STANCE_HEIGHT = -200.0  # mm (negative = down)
 DEFAULT_STANCE_OFFSET_X = 0.0   # mm
 
 # --- Motion Parameters ---
-GAIT_LIFT_HEIGHT = 15.0    # mm (ยกขาต่ำลง)
-GAIT_STEP_FORWARD = 30.0   # mm (ก้าวสั้นลง)
+GAIT_LIFT_HEIGHT = 15.0    # mm
+GAIT_STEP_FORWARD = 50.0   # mm (matched with No_EF version)
+
+# Smooth Trot Parameters
+SMOOTH_TROT_LIFT_HEIGHT = 15.0  # mm
+SMOOTH_TROT_STEPS = 30
+SMOOTH_TROT_STANCE_RATIO = 0.65
 
 # ============================================================================
 # CONTROL PARAMETERS
@@ -133,7 +141,7 @@ GAIT_STEP_FORWARD = 30.0   # mm (ก้าวสั้นลง)
 
 CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
 UPDATE_RATE = 50  # Hz (20ms per update)
-TRAJECTORY_STEPS = 30  # Number of steps in one gait cycle (เดินเร็วขึ้น)
+TRAJECTORY_STEPS = 20  # Number of steps in one gait cycle (matched with No_EF version)
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---
@@ -221,15 +229,21 @@ def open_serial_with_timeout(port, baudrate, timeout, open_timeout=3.0):
     
     def try_open():
         try:
-            result['serial'] = serial.Serial(
+            ser = serial.Serial(
                 port=port,
                 baudrate=baudrate,
                 timeout=timeout,
                 write_timeout=timeout,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
+                stopbits=serial.STOPBITS_ONE,
+                dsrdtr=False,  # Disable DSR/DTR flow control
+                rtscts=False   # Disable RTS/CTS flow control
             )
+            # Disable DTR/RTS to prevent MCU reset
+            ser.dtr = False
+            ser.rts = False
+            result['serial'] = ser
         except Exception as e:
             result['error'] = str(e)
     
@@ -284,19 +298,21 @@ class BinaryMotorController:
                 self.is_connected = False
                 return False
             
-            print(f"      ✓ Port opened, stabilizing...")
+            print(f"      ✓ Port opened (DTR/RTS disabled)")
             
-            # Wait for serial port to stabilize
-            time.sleep(0.2)
+            # Wait longer for MCU to be ready (some need boot time)
+            print(f"      ⏳ Waiting for MCU ready (500ms)...")
+            time.sleep(0.5)
             
             # Flush buffers multiple times to clear any garbage
             print(f"      ✓ Flushing buffers...")
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
-            time.sleep(0.05)
+            time.sleep(0.1)
             self.serial.reset_input_buffer()
             
             self.is_connected = True
+            print(f"      ✅ Connection established!")
             return True
             
         except serial.SerialException as e:
@@ -336,25 +352,35 @@ class BinaryMotorController:
             self.serial.reset_output_buffer()
             
             # Small delay after flush
-            time.sleep(0.01)
+            time.sleep(0.02)
             
             # Build and send PING packet
             packet = build_packet(PacketType.PKT_CMD_PING)
-            self.serial.write(packet)
+            bytes_written = self.serial.write(packet)
             self.serial.flush()  # Ensure packet is sent
             self.stats_tx_count += 1
             
-            # Wait for response with explicit timeout
+            # Debug: show packet sent
+            if DEBUG_SERIAL:
+                print(f"        [TX] {bytes_written} bytes: {packet.hex()}")
+            
+            # Wait for response with explicit timeout (longer wait)
             start_wait = time.time()
-            max_wait = self.serial.timeout if self.serial.timeout else 0.1
+            max_wait = max(0.3, self.serial.timeout if self.serial.timeout else 0.3)
             
             while (time.time() - start_wait) < max_wait:
                 if self.serial.in_waiting >= 2:  # At least header bytes
                     break
                 time.sleep(0.005)
             
-            if self.serial.in_waiting < 2:
+            bytes_waiting = self.serial.in_waiting
+            if bytes_waiting < 2:
+                if DEBUG_SERIAL:
+                    print(f"        [RX] No response (0 bytes in {max_wait*1000:.0f}ms)")
                 return None  # No response
+            
+            if DEBUG_SERIAL:
+                print(f"        [RX] {bytes_waiting} bytes waiting")
             
             # Read response
             response = self._read_packet()
@@ -923,32 +949,90 @@ def calculate_fk_positions(theta_A, theta_B, P_A, P_B):
 # TRAJECTORY GENERATION
 # ============================================================================
 
-def generate_elliptical_trajectory(num_steps=60, lift_height=30.0, step_forward=60.0, mirror_x=False):
+def generate_elliptical_trajectory(num_steps=60, lift_height=30.0, step_forward=60.0, mirror_x=False,
+                                   stance_ratio=0.5, home_x=0.0, home_y=None, reverse=False):
     """
-    Generate elliptical walking trajectory for one leg
+    Generate elliptical walking trajectory for one leg with stance + swing phases.
+    The trajectory starts from home position (home_x, home_y) for seamless transition.
+    Stance phase is where foot is on ground moving backward.
+    Swing phase is where foot lifts and moves forward.
     
     Args:
         num_steps: Number of steps in trajectory
         lift_height: Maximum height lift (mm)
         step_forward: Step length (mm)
         mirror_x: If True, reverse X direction (for right side legs)
+        stance_ratio: Ratio of stance phase (0.0-1.0), default 0.5
+        home_x: Home position X offset (mm)
+        home_y: Home position Y height (mm), default DEFAULT_STANCE_HEIGHT
+        reverse: If True, walk backward
         
     Returns:
-        List of (x, y) positions in leg frame
+        List of (x, y) positions in leg frame, starting from near (home_x, home_y)
     """
-    trajectory = []
-    home_y = DEFAULT_STANCE_HEIGHT
+    if home_y is None:
+        home_y = DEFAULT_STANCE_HEIGHT
     
-    a = step_forward
-    b = lift_height
+    trajectory = []
+    
+    # Calculate swing and stance step counts
+    swing_steps = int(num_steps * (1.0 - stance_ratio))
+    stance_steps = num_steps - swing_steps
+    
+    # Ensure at least 1 step each
+    if swing_steps < 1:
+        swing_steps = 1
+        stance_steps = num_steps - 1
+    if stance_steps < 1:
+        stance_steps = 1
+        swing_steps = num_steps - 1
+    
+    direction = -1 if reverse else 1
+    
+    # We want to start from home position (x=0, y=home_y)
+    # In the original trajectory:
+    #   - Swing: t from π to 2π, x goes from +step to -step (forward motion)
+    #   - Stance: t from 0 to π, x goes from -step to +step (backward on ground)
+    # Home (x=0) is at t = π/2 in stance phase
+    # 
+    # To start from home, we shift the trajectory so that:
+    #   - Start at middle of stance phase (t = π/2)
+    #   - Then continue: end of stance → swing → start of stance
+    
+    # Calculate where home position is in the original trajectory
+    # Home is at t = π/2 in stance phase, which is at 50% of stance phase
+    home_stance_index = stance_steps // 2
+    
+    # Reorder: [mid-stance ... end-stance, swing, start-stance ... mid-stance-1]
+    # Build temporary trajectory first, then reorder
+    temp_trajectory = []
     
     for i in range(num_steps):
-        t = 2 * np.pi * i / num_steps
-        px = a * np.cos(t)
+        if i < swing_steps:
+            # Swing phase: foot lifts and moves forward
+            phase_progress = i / swing_steps
+            t = np.pi + np.pi * phase_progress  # π to 2π
+            py = home_y + lift_height * abs(np.sin(t))
+        else:
+            # Stance phase: foot on ground
+            stance_index = i - swing_steps
+            phase_progress = stance_index / stance_steps
+            t = np.pi * phase_progress  # 0 to π
+            py = home_y
+        
+        # X position
+        px = direction * (-step_forward * np.cos(t))
         if mirror_x:
             px = -px
-        py = home_y + b * np.sin(t)
-        trajectory.append((px, py))
+        
+        temp_trajectory.append((px + home_x, py))
+    
+    # Now reorder to start from home position (middle of stance phase)
+    # Stance phase starts at index swing_steps, home is at swing_steps + home_stance_index
+    home_index = swing_steps + home_stance_index
+    
+    # Reorder: start from home_index
+    trajectory = temp_trajectory[home_index:] + temp_trajectory[:home_index]
     
     return trajectory
 
@@ -1008,6 +1092,45 @@ def emergency_stop_all():
     print("\n⚠️  EMERGENCY STOP - ALL MOTORS!")
     for motor_id, controller in motor_registry.items():
         controller.send_emergency_stop()
+
+def smooth_move_to_home_position(leg_motors_dict, home_angles_dict, duration_s=3.0, num_steps=50):
+    """
+    Move all motors from current position to home position using S-Curve profile.
+    This uses the firmware's built-in S-Curve for smooth acceleration/deceleration.
+    
+    Args:
+        leg_motors_dict: Dictionary of {leg_id: {'A': controller, 'B': controller}}
+        home_angles_dict: Dictionary of {leg_id: [theta_A, theta_B] in degrees}
+        duration_s: Total duration for movement (seconds)
+        num_steps: Unused (kept for compatibility)
+    """
+    print(f"\n🏠 Moving to home position using S-Curve...")
+    print(f"    Duration: {duration_s:.1f}s")
+    
+    # Send S-Curve commands to all motors
+    duration_ms = int(duration_s * 1000)
+    
+    for leg_id, motors in leg_motors_dict.items():
+        if leg_id not in home_angles_dict:
+            continue
+        
+        target_A, target_B = home_angles_dict[leg_id]
+        
+        # Send S-Curve position commands
+        motors['A'].set_position_scurve(target_A, duration_ms)
+        motors['B'].set_position_scurve(target_B, duration_ms)
+        
+        # Update visualization state
+        with viz_lock:
+            leg_states[leg_id]['target_angles'] = [np.deg2rad(target_A), np.deg2rad(target_B)]
+        
+        print(f"    {leg_id}: θA={target_A:+.1f}°, θB={target_B:+.1f}° (S-Curve {duration_ms}ms)")
+    
+    # Wait for motors to reach position
+    print(f"\n    ⏳ Waiting for motors to reach home position...")
+    time.sleep(duration_s + 0.5)  # Add margin
+    
+    print(f"    ✅ Home position reached!")
 
 # ============================================================================
 # SINGLE MOTOR CONTROL
@@ -1642,12 +1765,21 @@ def main():
             num_steps=TRAJECTORY_STEPS,
             lift_height=GAIT_LIFT_HEIGHT,
             step_forward=GAIT_STEP_FORWARD,
-            mirror_x=mirror_x
+            mirror_x=mirror_x,
+            stance_ratio=SMOOTH_TROT_STANCE_RATIO,
+            home_x=DEFAULT_STANCE_OFFSET_X,
+            home_y=DEFAULT_STANCE_HEIGHT
         )
+    
+    # Verify trajectory starts from near home position
+    first_waypoint = trajectories['FL'][0]
     print(f"  Generated {TRAJECTORY_STEPS} waypoints per leg")
+    print(f"  Stance ratio: {SMOOTH_TROT_STANCE_RATIO:.0%}")
+    print(f"  First waypoint: ({first_waypoint[0]:.1f}, {first_waypoint[1]:.1f}) mm")
+    print(f"  Home position:  ({DEFAULT_STANCE_OFFSET_X:.1f}, {DEFAULT_STANCE_HEIGHT:.1f}) mm")
     
     # --- Step 6: Initialize Home Position ---
-    print(f"\n🏠 Moving to home position...")
+    print(f"\n🏠 Calculating home position...")
     print(f"  Note: Motors start at {MOTOR_INIT_ANGLE}° (robot angle)")
     prev_solutions = {}
     home_angles_all = {}
@@ -1659,14 +1791,15 @@ def main():
         
         if not np.isnan(home_angles).any():
             prev_solutions[leg_id] = home_angles
-            home_angles_all[leg_id] = home_angles
+            
+            # Store target angles in degrees for smooth movement
+            target_angle_A = np.rad2deg(home_angles[0])
+            target_angle_B = np.rad2deg(home_angles[1])
+            home_angles_all[leg_id] = [target_angle_A, target_angle_B]
             
             # Calculate movement from init angle
             init_angle_A = MOTOR_INIT_ANGLE
             init_angle_B = MOTOR_INIT_ANGLE
-            target_angle_A = np.rad2deg(home_angles[0])
-            target_angle_B = np.rad2deg(home_angles[1])
-            
             delta_A = target_angle_A - init_angle_A
             delta_B = target_angle_B - init_angle_B
             
@@ -1674,18 +1807,12 @@ def main():
                 leg_states[leg_id]['target_angles'] = home_angles.tolist()
                 leg_states[leg_id]['target_pos'] = home_pos.tolist()
             
-            # Send S-Curve command for smooth home movement (3 seconds for safety)
-            motor_a = leg_motors[leg_id]['A']
-            motor_b = leg_motors[leg_id]['B']
-            motor_a.set_position_scurve(target_angle_A, 3000)
-            motor_b.set_position_scurve(target_angle_B, 3000)
-            
             print(f"    {leg_id}: θA={target_angle_A:+.1f}° (Δ{delta_A:+.1f}°), θB={target_angle_B:+.1f}° (Δ{delta_B:+.1f}°)")
         else:
             print(f"    {leg_id}: IK FAILED for home position!")
     
-    print(f"\n  ⏳ Moving to home position (3 seconds)...")
-    time.sleep(3.5)  # Wait for home position (3s movement + margin)
+    # Use smooth interpolation to move to home position (reduces jerk)
+    smooth_move_to_home_position(leg_motors, home_angles_all, duration_s=3.0, num_steps=60)
     
     # --- Step 7: Main Gait Loop ---
     print(f"\n⏸️  Gait control ready (PAUSED)")

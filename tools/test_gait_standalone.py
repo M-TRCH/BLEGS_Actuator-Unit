@@ -16,7 +16,7 @@ Based on Quadruped_Gait_Control_No_EF.py protocol implementation
 # ============================================================================
 
 # Serial Port Configuration
-CONFIG_PORT = "COM3"              # Serial port (e.g., "COM3", "/dev/ttyUSB0")
+CONFIG_PORT = "COM105"              # Serial port (e.g., "COM3", "/dev/ttyUSB0")
 CONFIG_BAUDRATE = 921600          # Baudrate (default: 921600)
 
 # Motor Selection
