@@ -10,11 +10,12 @@ unsigned long last_svpwm_time = 0;               // Last SVPWM time in microseco
 unsigned long last_position_control_time = 0;    // Last position control time in microseconds
 unsigned long last_debug_time = 0;               // Last debug time in microseconds
 // position control variables
-// Position PID controller (Kp, Ki, Kd, integral_limit, output_limit, tolerance)
-// Kp = 0.04 (Proportional gain), Ki = 0.02 (Integral gain), Kd = 0.0 (Derivative gain)
-// integral_limit = 4000.0 (Anti-windup limit), output_limit = 20.0 (Output saturation)
-// tolerance = 0.5 (Deadband/error threshold for zero integral)
-PIDController position_pid(0.08f, 0.03f, 0.0f, 2000.0f, 12.0f, 0.2f);
+// Position PID controller (Kp, Ki, Kd, integral_limit, output_limit, tolerance, error_limit)
+// Kp = 0.08 (Proportional gain), Ki = 0.03 (Integral gain), Kd = 0.0 (Derivative gain)
+// integral_limit = 2000.0 (Anti-windup limit), output_limit = 12.0 (Output saturation)
+// tolerance = 0.2 (Deadband/error threshold for zero integral)
+// error_limit = 150.0 (Maximum error in degrees - prevents motor stall when target is far)
+PIDController position_pid(0.08f, 0.03f, 0.0f, 1000.0f, 8.0f, 0.2f, 50.0f);
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
