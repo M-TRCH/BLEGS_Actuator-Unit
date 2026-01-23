@@ -1,18 +1,26 @@
 """
-Quadruped Gait Control - Full S-Curve Mode
+Quadruped Gait Control - Auto S-Curve Mode
 Author: M-TRCH
-Date: January 22, 2026
+Date: January 23, 2026
 
-This script controls a quadruped robot (4 legs, 8 motors) using Full S-Curve mode.
-All motor commands use MODE_SCURVE_FULL with configurable vmax, amax, jmax parameters.
+This script controls a quadruped robot (4 legs, 8 motors) using Auto S-Curve mode.
+All motor commands use MODE_SCURVE_PROFILE with duration-based parameter calculation.
 
 Features:
-- Full S-Curve trajectory control with explicit parameters
-- Tunable velocity, acceleration, and jerk limits
+- Auto S-Curve trajectory control (firmware calculates v_max, a_max from duration)
+- Simple duration-based control - no need to tune v_max, a_max, j_max
 - Smooth transitions for all movements
 - Automatic motor discovery and registration
 
-Protocol: Binary Protocol v1.2 with MODE_SCURVE_FULL (0x02)
+Protocol: Binary Protocol v1.2 with MODE_SCURVE_PROFILE (0x01)
+
+Firmware Auto S-Curve calculation:
+    if duration > 0:
+        v_max = max(distance / duration_s * 2.0, 500)
+        a_max = v_max / (duration_s * 0.3)
+    else:
+        v_max = max(distance * 2.0, 1000)
+        a_max = 180000
 """
 
 import numpy as np
@@ -50,8 +58,8 @@ class PacketType(IntEnum):
 class ControlMode(IntEnum):
     """Control mode enumeration"""
     MODE_DIRECT_POSITION = 0x00
-    MODE_SCURVE_PROFILE = 0x01
-    MODE_SCURVE_FULL = 0x02  # Full S-Curve with vmax, amax, jmax
+    MODE_SCURVE_PROFILE = 0x01   # Auto S-Curve (firmware calculates params)
+    MODE_SCURVE_FULL = 0x02      # Full S-Curve with vmax, amax, jmax
 
 class StatusFlags(IntEnum):
     """Status flags bitmask"""
@@ -136,39 +144,22 @@ GAIT_STEP_FORWARD = 50.0   # mm
 SMOOTH_TROT_STANCE_RATIO = 0.65
 
 # ============================================================================
-# S-CURVE PARAMETERS (Full Control Mode)
+# AUTO S-CURVE PARAMETERS (Duration-based)
 # ============================================================================
 
-# --- S-Curve Profile Parameters ---
-# These values are for MOTOR SHAFT (after gear ratio)
-# Protocol scaling in firmware: a_max × 10, j_max × 100
-# Tested working values from firmware: v_max=4000, a_max=18000 (→180,000 deg/s²)
-
-# Default parameters for gait control
-# Motor shaft spins 8× faster than robot output
-# START SMOOTH - same as tested single motor values
-SCURVE_GAIT_V_MAX = 500       # Max velocity (degrees/s) - start slow for safety
-SCURVE_GAIT_A_MAX = 2000      # Max acceleration (×10 in firmware) = 20,000 deg/s²
-SCURVE_GAIT_J_MAX = 2000      # Max jerk (×100 in firmware) - not used in trapezoidal
-
-# Parameters for slow/smooth movements (init, home transitions)
-# VERY slow to prevent overcurrent during large angle changes
-SCURVE_SLOW_V_MAX = 500       # Max velocity (degrees/s) - motor shaft (was 1000)
-SCURVE_SLOW_A_MAX = 2000      # Max acceleration (x10) = 20,000 deg/s2 (was 5000)
-SCURVE_SLOW_J_MAX = 2000      # Max jerk (x100) - not used
-
-# Parameters for single motor oscillation test
-# REDUCED to prevent oscillation - motor PID can't track fast movements
-SCURVE_TEST_V_MAX = 500       # Max velocity (degrees/s) - was 2000
-SCURVE_TEST_A_MAX = 2000      # Max acceleration (x10) - was 10000
-SCURVE_TEST_J_MAX = 2000      # Max jerk (x100) - was 10000
+# --- Duration for gait movements (ms) ---
+# Firmware calculates v_max and a_max from this duration
+# Longer duration = slower, smoother movement
+GAIT_DURATION_MS = 100        # Duration per gait step (ms) - 100ms for 10Hz effective rate
+SLOW_DURATION_MS = 8000       # Duration for slow movements (init, home) - 8 seconds (VERY SLOW)
+TEST_DURATION_MS = 200        # Duration for single motor test - 200ms
 
 # ============================================================================
 # CONTROL PARAMETERS
 # ============================================================================
 
-CONTROL_MODE = ControlMode.MODE_SCURVE_FULL  # ใช้ Full S-Curve เท่านั้น!
-UPDATE_RATE = 20  # Hz (50ms per update) - was 50Hz, reduced to let motor settle
+CONTROL_MODE = ControlMode.MODE_SCURVE_PROFILE  # ใช้ Auto S-Curve!
+UPDATE_RATE = 20  # Hz (50ms per update)
 TRAJECTORY_STEPS = 20
 GAIT_TYPE = 'trot'
 
@@ -275,11 +266,11 @@ def open_serial_with_timeout(port, baudrate, timeout, open_timeout=3.0):
     return result['serial'], result['error']
 
 # ============================================================================
-# MOTOR CONTROLLER CLASS (Full S-Curve Mode)
+# MOTOR CONTROLLER CLASS (Auto S-Curve Mode)
 # ============================================================================
 
-class FullSCurveMotorController:
-    """Motor controller using Full S-Curve mode exclusively"""
+class AutoSCurveMotorController:
+    """Motor controller using Auto S-Curve mode (duration-based)"""
     
     def __init__(self, port, motor_id=None):
         self.port = port
@@ -295,16 +286,12 @@ class FullSCurveMotorController:
         self.stats_rx_count = 0
         self.stats_errors = 0
         
-        # Default S-Curve parameters
-        self.default_v_max = SCURVE_GAIT_V_MAX
-        self.default_a_max = SCURVE_GAIT_A_MAX
-        self.default_j_max = SCURVE_GAIT_J_MAX
+        # Default duration for S-Curve
+        self.default_duration_ms = GAIT_DURATION_MS
     
-    def set_scurve_params(self, v_max: int, a_max: int, j_max: int):
-        """Set default S-Curve parameters for this controller"""
-        self.default_v_max = v_max
-        self.default_a_max = a_max
-        self.default_j_max = j_max
+    def set_default_duration(self, duration_ms: int):
+        """Set default duration for S-Curve commands"""
+        self.default_duration_ms = duration_ms
     
     def connect(self, timeout=SERIAL_TIMEOUT, open_timeout=3.0):
         """Connect to motor via serial port with timeout protection"""
@@ -433,16 +420,21 @@ class FullSCurveMotorController:
             time.sleep(0.1)
         return False
     
-    def set_position(self, angle_deg: float, v_max: int = None, 
-                     a_max: int = None, j_max: int = None) -> bool:
+    def set_position(self, angle_deg: float, duration_ms: int = None) -> bool:
         """
-        Set target position using Full S-Curve profile
+        Set target position using Auto S-Curve profile
+        
+        Firmware calculates v_max and a_max from duration:
+            if duration > 0:
+                v_max = max(distance / duration_s * 2.0, 500)
+                a_max = v_max / (duration_s * 0.3)
+            else:
+                v_max = max(distance * 2.0, 1000)
+                a_max = 180000
         
         Args:
             angle_deg: Target angle in robot coordinate (degrees)
-            v_max: Max velocity (degrees/s), None = use default
-            a_max: Max acceleration (degrees/s² / 10), None = use default
-            j_max: Max jerk (degrees/s³ / 100), None = use default
+            duration_ms: Movement duration in milliseconds, None = use default
             
         Returns:
             True if command sent successfully
@@ -450,37 +442,23 @@ class FullSCurveMotorController:
         if not self.is_connected:
             return False
         
-        # Use defaults if not specified
-        if v_max is None:
-            v_max = self.default_v_max
-        if a_max is None:
-            a_max = self.default_a_max
-        if j_max is None:
-            j_max = self.default_j_max
+        # Use default if not specified
+        if duration_ms is None:
+            duration_ms = self.default_duration_ms
         
         try:
             motor_angle = angle_deg * GEAR_RATIO
             
-            # v_max and a_max are sent directly (no GEAR_RATIO scaling needed)
-            # Firmware works in motor shaft units, so these values are already correct
-            # Protocol scaling: a_max × 10, j_max × 100 in firmware
-            
-            # Clamp to uint16 max (65535)
-            motor_v_max = min(int(v_max), 65535)
-            motor_a_max = min(int(a_max), 65535)
-            motor_j_max = min(int(j_max), 65535)
-            
             with self.lock:
-                mode = bytes([ControlMode.MODE_SCURVE_FULL])
+                # Build payload for MODE_SCURVE_PROFILE: mode(1) + target_pos(4) + duration(2)
+                mode = bytes([ControlMode.MODE_SCURVE_PROFILE])
                 target_pos = struct.pack('<i', int(motor_angle * 100))
-                v_max_bytes = struct.pack('<H', motor_v_max)
-                a_max_bytes = struct.pack('<H', motor_a_max)
-                j_max_bytes = struct.pack('<H', motor_j_max)
-                payload = mode + target_pos + v_max_bytes + a_max_bytes + j_max_bytes
+                duration_bytes = struct.pack('<H', min(int(duration_ms), 65535))
+                payload = mode + target_pos + duration_bytes
                 
                 # Debug output (first 3 commands only)
                 if self.stats_tx_count < 3:
-                    print(f"      [DEBUG TX] Motor {self.motor_id}: target={motor_angle:.1f} deg (motor shaft), v={motor_v_max}, a={motor_a_max}, j={motor_j_max}")
+                    print(f"      [DEBUG TX] Motor {self.motor_id}: target={motor_angle:.1f} deg (motor shaft), duration={duration_ms}ms")
                     print(f"      [DEBUG TX] Payload ({len(payload)} bytes): {payload.hex()}")
                 
                 packet = build_packet(PacketType.PKT_CMD_SET_GOAL, payload)
@@ -510,18 +488,12 @@ class FullSCurveMotorController:
             return False
     
     def set_position_slow(self, angle_deg: float) -> bool:
-        """Set position with slow/smooth S-Curve parameters"""
-        return self.set_position(angle_deg, 
-                                  SCURVE_SLOW_V_MAX, 
-                                  SCURVE_SLOW_A_MAX, 
-                                  SCURVE_SLOW_J_MAX)
+        """Set position with slow duration (for init/home movements)"""
+        return self.set_position(angle_deg, SLOW_DURATION_MS)
     
     def set_position_fast(self, angle_deg: float) -> bool:
-        """Set position with fast gait S-Curve parameters"""
-        return self.set_position(angle_deg, 
-                                  SCURVE_GAIT_V_MAX, 
-                                  SCURVE_GAIT_A_MAX, 
-                                  SCURVE_GAIT_J_MAX)
+        """Set position with gait duration (for walking)"""
+        return self.set_position(angle_deg, GAIT_DURATION_MS)
     
     def send_emergency_stop(self) -> bool:
         """Send emergency stop command"""
@@ -657,7 +629,7 @@ def scan_com_ports() -> list:
 def discover_motors() -> dict:
     """Discover all motors by scanning COM ports and sending PING"""
     print("\n" + "="*70)
-    print("  🔍 MOTOR DISCOVERY (Full S-Curve Mode)")
+    print("  🔍 MOTOR DISCOVERY (Auto S-Curve Mode)")
     print("="*70)
     
     ports = scan_com_ports()
@@ -678,7 +650,7 @@ def discover_motors() -> dict:
         port = port_info['device']
         print(f"\n    Checking {port}...")
         
-        controller = FullSCurveMotorController(port)
+        controller = AutoSCurveMotorController(port)
         
         if not controller.connect(timeout=SERIAL_TIMEOUT):
             print(f"      ❌ Failed to open {port}")
@@ -721,7 +693,7 @@ def register_leg_motors(discovered_motors: dict) -> bool:
     global leg_motors, motor_registry
     
     print("\n" + "="*70)
-    print("  🔗 MOTOR REGISTRATION (Full S-Curve Mode)")
+    print("  🔗 MOTOR REGISTRATION (Auto S-Curve Mode)")
     print("="*70)
     
     motor_registry = discovered_motors
@@ -768,7 +740,7 @@ def register_leg_motors(discovered_motors: dict) -> bool:
 def start_all_motors() -> bool:
     """Start all registered motors"""
     print("\n" + "="*70)
-    print("  🚀 STARTING MOTORS (Full S-Curve Mode)")
+    print("  🚀 STARTING MOTORS (Auto S-Curve Mode)")
     print("="*70)
     
     success_count = 0
@@ -959,7 +931,7 @@ def toggle_gait_control():
         if gait_paused:
             gait_running = True
             gait_paused = False
-            print("\n▶️  Gait control STARTED (Full S-Curve Mode)!")
+            print("\n▶️  Gait control STARTED (Auto S-Curve Mode)!")
         else:
             gait_running = False
             gait_paused = True
@@ -980,11 +952,10 @@ def emergency_stop_all():
 
 def smooth_move_to_home_position(leg_motors_dict, home_angles_dict, duration_s=3.0):
     """Move all motors to home position using slow S-Curve profile"""
-    print(f"\n🏠 Moving to home position using Full S-Curve (SLOW)...")
-    print(f"    Duration: ~{duration_s:.1f}s")
-    print(f"    V_max: {SCURVE_SLOW_V_MAX} deg/s")
-    print(f"    A_max: {SCURVE_SLOW_A_MAX * 10} deg/s²")
-    print(f"    J_max: {SCURVE_SLOW_J_MAX * 100} deg/s³")
+    print(f"\n🏠 Moving to home position using Auto S-Curve (SLOW)...")
+    print(f"    Duration: {duration_s:.1f}s")
+    
+    duration_ms = int(duration_s * 1000)
     
     for leg_id, motors in leg_motors_dict.items():
         if leg_id not in home_angles_dict:
@@ -992,14 +963,14 @@ def smooth_move_to_home_position(leg_motors_dict, home_angles_dict, duration_s=3
         
         target_A, target_B = home_angles_dict[leg_id]
         
-        # Use slow S-Curve parameters for smooth movement
-        motors['A'].set_position_slow(target_A)
-        motors['B'].set_position_slow(target_B)
+        # Use slow duration for smooth movement
+        motors['A'].set_position(target_A, duration_ms)
+        motors['B'].set_position(target_B, duration_ms)
         
         with viz_lock:
             leg_states[leg_id]['target_angles'] = [np.deg2rad(target_A), np.deg2rad(target_B)]
         
-        print(f"    {leg_id}: θA={target_A:+.1f}°, θB={target_B:+.1f}°")
+        print(f"    {leg_id}: θA={target_A:+.1f}°, θB={target_B:+.1f}° (duration={duration_ms}ms)")
     
     print(f"\n    ⏳ Waiting for motors to reach home position...")
     time.sleep(duration_s + 0.5)
@@ -1018,23 +989,20 @@ def check_keyboard_input():
     return None
 
 # ============================================================================
-# SINGLE MOTOR CONTROL (Full S-Curve Mode)
+# SINGLE MOTOR CONTROL (Auto S-Curve Mode)
 # ============================================================================
 
 def run_single_motor_mode(controller):
-    """Run single motor oscillation test with Full S-Curve"""
+    """Run single motor oscillation test with Auto S-Curve"""
     global gait_running, gait_paused, plot_running
     
     print("\n" + "="*70)
-    print("  🔧 SINGLE MOTOR TEST MODE (Full S-Curve)")
+    print("  🔧 SINGLE MOTOR TEST MODE (Auto S-Curve)")
     print("="*70)
     print(f"  Motor ID: {controller.motor_id}")
     print(f"  Oscillation: ±{SINGLE_MOTOR_OSCILLATION}°")
     print(f"  Period: {SINGLE_MOTOR_PERIOD}s")
-    print(f"  S-Curve Parameters:")
-    print(f"    V_max: {SCURVE_TEST_V_MAX} deg/s")
-    print(f"    A_max: {SCURVE_TEST_A_MAX * 10} deg/s²")
-    print(f"    J_max: {SCURVE_TEST_J_MAX * 100} deg/s³")
+    print(f"  Duration per command: {TEST_DURATION_MS}ms")
     print("="*70)
     
     print("\n🚀 Starting motor...")
@@ -1092,11 +1060,8 @@ def run_single_motor_mode(controller):
             phase = (elapsed % SINGLE_MOTOR_PERIOD) / SINGLE_MOTOR_PERIOD
             target_angle = center_pos + SINGLE_MOTOR_OSCILLATION * np.sin(2 * np.pi * phase)
             
-            # Use Full S-Curve with test parameters
-            controller.set_position(target_angle, 
-                                     SCURVE_TEST_V_MAX, 
-                                     SCURVE_TEST_A_MAX, 
-                                     SCURVE_TEST_J_MAX)
+            # Use Auto S-Curve with test duration
+            controller.set_position(target_angle, TEST_DURATION_MS)
             
             feedback = controller.read_feedback()
             
@@ -1116,8 +1081,6 @@ def run_single_motor_mode(controller):
         print("\n\n⏹️  Single motor test stopped by user")
     
     finally:
-        # Do NOT return to -90 - this can cause motor to move too far
-        # Just stay at current position
         print("\n\n🏁 Test completed - motor staying at current position")
         print("    (Not returning to -90 to prevent large movement)")
         
@@ -1140,7 +1103,7 @@ def main():
     global plot_running, gait_running, gait_paused, leg_states
     
     print("="*70)
-    print("  BLEGS Quadruped Gait Control - FULL S-CURVE MODE")
+    print("  BLEGS Quadruped Gait Control - AUTO S-CURVE MODE")
     print("="*70)
     
     if SINGLE_MOTOR_MODE:
@@ -1155,14 +1118,14 @@ def main():
     if not SINGLE_MOTOR_MODE:
         print(f"  Gait Type: {GAIT_TYPE.upper()}")
     
-    print(f"  Control Mode: FULL S-CURVE (MODE_SCURVE_FULL)")
+    print(f"  Control Mode: AUTO S-CURVE (MODE_SCURVE_PROFILE)")
     print(f"  Update Rate: {UPDATE_RATE} Hz")
     print(f"  Gear Ratio: {GEAR_RATIO}:1")
     
-    print(f"\n  📊 S-Curve Parameters (Gait):")
-    print(f"      V_max: {SCURVE_GAIT_V_MAX} deg/s")
-    print(f"      A_max: {SCURVE_GAIT_A_MAX * 10} deg/s²")
-    print(f"      J_max: {SCURVE_GAIT_J_MAX * 100} deg/s³")
+    print(f"\n  📊 Auto S-Curve Durations:")
+    print(f"      Gait:  {GAIT_DURATION_MS}ms per step")
+    print(f"      Slow:  {SLOW_DURATION_MS}ms (init/home)")
+    print(f"      Test:  {TEST_DURATION_MS}ms (single motor)")
     
     if not SINGLE_MOTOR_MODE:
         print(f"\n  Motor Init Angle: {MOTOR_INIT_ANGLE}° (robot)")
@@ -1260,14 +1223,12 @@ def main():
                 leg_states[leg_id]['target_angles'] = home_angles.tolist()
                 leg_states[leg_id]['target_pos'] = home_pos.tolist()
             
-            # Warn if delta is too large
             max_delta = max(abs(delta_A), abs(delta_B))
             warn_str = " ⚠️ LARGE DELTA!" if max_delta > 30 else ""
             print(f"    {leg_id}: θA={target_angle_A:+.1f}° (Δ{delta_A:+.1f}°), θB={target_angle_B:+.1f}° (Δ{delta_B:+.1f}°){warn_str}")
         else:
             print(f"    {leg_id}: IK FAILED for home position!")
     
-    # Move to home position with slow S-Curve (or skip if configured)
     if SKIP_HOME_TRANSITION:
         print(f"\n⚠️  SKIP_HOME_TRANSITION is enabled - motors will stay at current position")
         print(f"    Gait will start from current motor angles instead of IK home position")
@@ -1286,6 +1247,9 @@ def main():
     frame = 0
     last_status_time = 0
     running = True
+    
+    # Calculate duration for each gait step
+    step_duration_ms = int(1000.0 / UPDATE_RATE)  # Duration = period between commands
     
     try:
         while running and plot_running:
@@ -1367,15 +1331,9 @@ def main():
                     motor_a = leg_motors[leg_id]['A']
                     motor_b = leg_motors[leg_id]['B']
                     
-                    # Use Full S-Curve with gait parameters
-                    motor_a.set_position(np.rad2deg(theta_A), 
-                                          SCURVE_GAIT_V_MAX, 
-                                          SCURVE_GAIT_A_MAX, 
-                                          SCURVE_GAIT_J_MAX)
-                    motor_b.set_position(np.rad2deg(theta_B), 
-                                          SCURVE_GAIT_V_MAX, 
-                                          SCURVE_GAIT_A_MAX, 
-                                          SCURVE_GAIT_J_MAX)
+                    # Use Auto S-Curve with step duration
+                    motor_a.set_position(np.rad2deg(theta_A), step_duration_ms)
+                    motor_b.set_position(np.rad2deg(theta_B), step_duration_ms)
                     
                     feedback_a = motor_a.read_feedback()
                     feedback_b = motor_b.read_feedback()
@@ -1415,7 +1373,6 @@ def main():
     finally:
         plot_running = False
         
-        # Return to init position with slow S-Curve
         print("\n🏠 Returning to init position (-90°)...")
         try:
             for leg_id in leg_motors.keys():
