@@ -23,7 +23,12 @@ ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 // Protocol variables
 BinaryPacket rx_packet;
 bool binary_mode_enabled = true;  // Enable binary protocol by default
-bool emergency_stop_active = false;  // Emergency stop flag (permanent until power cycle)
+bool emergency_stop_active = false;  // Emergency stop flag (can be reset via PKT_CMD_RESET_EMERGENCY)
+
+// Emergency stop protection - double-confirmation mechanism
+bool estop_pending = false;             // First emergency stop received, waiting for confirmation
+uint32_t estop_pending_time = 0;        // Time when first emergency stop was received
+uint8_t estop_pending_motor_id = 0;     // Motor ID from pending emergency stop
 
 // Command queue to prevent motor jerking
 #define CMD_QUEUE_SIZE 4
@@ -199,6 +204,15 @@ void loop()
     
     // Get current time
     uint32_t current_time = micros();
+    uint32_t current_time_ms = millis();
+    
+    // Reset emergency stop pending state if timeout expired
+    if (estop_pending && (current_time_ms - estop_pending_time) >= ESTOP_CONFIRMATION_TIMEOUT_MS)
+    {
+        estop_pending = false;
+        // Optional: Log timeout
+        // SystemSerial->println("Emergency stop pending timeout - cancelled");
+    }
 
     // Set endless_drive_mode to true for continuous rotation
     static bool endless_drive_mode = false; 
@@ -274,33 +288,148 @@ void loop()
                         
                         case PKT_CMD_PING:
                         {
-                            // Simple ping response
+                            // Simple ping response with full status flags
                             int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
                             currentUpdate();
                             int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                            uint8_t flags = emergency_stop_active ? 0x40 : 0;  // Set emergency stop flag if active
+                            uint8_t flags = 0;
+                            if (emergency_stop_active) flags |= STATUS_EMERGENCY_STOPPED;
+                            if (estop_pending) flags |= STATUS_ERROR;  // Indicate pending state
                             sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, flags);
                             break;
                         }
                         
                         case PKT_CMD_EMERGENCY_STOP:
                         {
-                            // Emergency stop - permanent until power cycle
-                            emergency_stop_active = true;
+                            // Protected Emergency Stop with multiple verification layers
+                            // 1. Magic bytes verification
+                            // 2. Motor ID verification  
+                            // 3. Double-confirmation within timeout
                             
-                            // Stop motor immediately
-                            vd_cmd = 0.0f;
-                            vq_cmd = 0.0f;
-                            setPWMdutyCycle();  // Set all PWM to zero
+                            PayloadEmergencyStop* estop_payload = (PayloadEmergencyStop*)rx_packet.payload;
                             
-                            // Send acknowledgment with emergency stop flag
+                            // Verify payload length
+                            if (rx_packet.payload_len < sizeof(PayloadEmergencyStop))
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_EMERGENCY_STOP);
+                                break;
+                            }
+                            
+                            // Step 1: Verify magic bytes
+                            if (estop_payload->magic[0] != ESTOP_MAGIC_BYTE_0 ||
+                                estop_payload->magic[1] != ESTOP_MAGIC_BYTE_1 ||
+                                estop_payload->magic[2] != ESTOP_MAGIC_BYTE_2 ||
+                                estop_payload->magic[3] != ESTOP_MAGIC_BYTE_3)
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_MAGIC, PKT_CMD_EMERGENCY_STOP);
+                                estop_pending = false;  // Reset pending state on invalid attempt
+                                break;
+                            }
+                            
+                            // Step 2: Verify motor ID (0xFF = broadcast to all motors)
+                            if (estop_payload->target_motor_id != 0xFF && 
+                                estop_payload->target_motor_id != GET_MOTOR_ID())
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_MOTOR_ID_MISMATCH, PKT_CMD_EMERGENCY_STOP);
+                                break;
+                            }
+                            
+                            // Step 3: Double-confirmation mechanism
+                            uint32_t now = millis();
+                            
+                            if (estop_pending && 
+                                estop_pending_motor_id == estop_payload->target_motor_id &&
+                                (now - estop_pending_time) < ESTOP_CONFIRMATION_TIMEOUT_MS)
+                            {
+                                // Second confirmation received within timeout - ACTIVATE EMERGENCY STOP
+                                emergency_stop_active = true;
+                                estop_pending = false;
+                                
+                                // Stop motor immediately
+                                vd_cmd = 0.0f;
+                                vq_cmd = 0.0f;
+                                setPWMdutyCycle();  // Set all PWM to zero
+                                
+                                // Send acknowledgment with emergency stop flag
+                                int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
+                                currentUpdate();
+                                int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
+                                sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, STATUS_EMERGENCY_STOPPED);
+                                
+                                SystemSerial->println("\n*** EMERGENCY STOP CONFIRMED & ACTIVATED ***");
+                                SystemSerial->println("Motor disabled. Send PKT_CMD_RESET_EMERGENCY to restart.");
+                            }
+                            else
+                            {
+                                // First emergency stop received - set pending state
+                                estop_pending = true;
+                                estop_pending_time = now;
+                                estop_pending_motor_id = estop_payload->target_motor_id;
+                                
+                                // Send pending confirmation request
+                                BinaryPacket pending_pkt;
+                                pending_pkt.header[0] = PROTOCOL_HEADER_1;
+                                pending_pkt.header[1] = PROTOCOL_HEADER_2;
+                                pending_pkt.packet_type = PKT_FB_ESTOP_PENDING;
+                                pending_pkt.payload_len = 1;
+                                pending_pkt.payload[0] = GET_MOTOR_ID();
+                                setCRC16(&pending_pkt);
+                                sendPacket(SystemSerial, &pending_pkt);
+                                
+                                SystemSerial->println("Emergency stop pending - send again within 100ms to confirm");
+                            }
+                            break;
+                        }
+                        
+                        case PKT_CMD_RESET_EMERGENCY:
+                        {
+                            // Reset Emergency Stop with verification
+                            PayloadResetEmergency* reset_payload = (PayloadResetEmergency*)rx_packet.payload;
+                            
+                            // Verify payload length
+                            if (rx_packet.payload_len < sizeof(PayloadResetEmergency))
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_RESET_EMERGENCY);
+                                break;
+                            }
+                            
+                            // Step 1: Verify magic bytes
+                            if (reset_payload->magic[0] != ESTOP_MAGIC_BYTE_0 ||
+                                reset_payload->magic[1] != ESTOP_MAGIC_BYTE_1 ||
+                                reset_payload->magic[2] != ESTOP_MAGIC_BYTE_2 ||
+                                reset_payload->magic[3] != ESTOP_MAGIC_BYTE_3)
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_MAGIC, PKT_CMD_RESET_EMERGENCY);
+                                break;
+                            }
+                            
+                            // Step 2: Verify motor ID
+                            if (reset_payload->target_motor_id != 0xFF && 
+                                reset_payload->target_motor_id != GET_MOTOR_ID())
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_MOTOR_ID_MISMATCH, PKT_CMD_RESET_EMERGENCY);
+                                break;
+                            }
+                            
+                            // Step 3: Verify reset code
+                            if (reset_payload->reset_code != RESET_EMERGENCY_CODE)
+                            {
+                                sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_RESET_EMERGENCY);
+                                break;
+                            }
+                            
+                            // All verification passed - reset emergency stop
+                            emergency_stop_active = false;
+                            estop_pending = false;
+                            
+                            // Send acknowledgment
                             int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
                             currentUpdate();
                             int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x40);  // 0x40 = STATUS_EMERGENCY_STOPPED
+                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0);  // No emergency flag
                             
-                            SystemSerial->println("\n*** EMERGENCY STOP ACTIVATED ***");
-                            SystemSerial->println("Motor disabled. Power cycle required to restart.");
+                            SystemSerial->println("\n*** EMERGENCY STOP RESET ***");
+                            SystemSerial->println("Motor enabled. Normal operation resumed.");
                             break;
                         }
                         
