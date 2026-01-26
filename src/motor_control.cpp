@@ -15,7 +15,7 @@ unsigned long last_debug_time = 0;               // Last debug time in microseco
 // integral_limit = 2000.0 (Anti-windup limit), output_limit = 12.0 (Output saturation)
 // tolerance = 0.2 (Deadband/error threshold for zero integral)
 // error_limit = 150.0 (Maximum error in degrees - prevents motor stall when target is far)
-PIDController position_pid(0.08f, 0.03f, 0.0f, 1000.0f, 8.0f, 0.2f, 50.0f);
+PIDController position_pid(0.08f, 0.045f, 0.0f, 1000.0f, 10.0f, 0.2f, 40.0f);
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
