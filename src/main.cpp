@@ -154,6 +154,7 @@ void setup()
                         
                         // Send response
                         int32_t pos_feedback = (int32_t)(abs_angle_with_offset * 100.0f);
+                        // delay(5); // Short delay before response
                         sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, 0, 0);
                     }
                 }

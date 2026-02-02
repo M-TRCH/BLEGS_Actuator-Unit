@@ -302,8 +302,8 @@ class BinaryMotorController:
             print(f"      ✓ Port opened (DTR/RTS disabled)")
             
             # Wait longer for MCU to be ready (some need boot time)
-            print(f"      ⏳ Waiting for MCU ready (500ms)...")
-            time.sleep(0.5)
+            print(f"      ⏳ Waiting for MCU ready (5ms)...")
+            # time.sleep(0.005)
             
             # Flush buffers multiple times to clear any garbage
             print(f"      ✓ Flushing buffers...")

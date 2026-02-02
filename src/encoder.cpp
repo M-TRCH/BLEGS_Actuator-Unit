@@ -51,9 +51,34 @@ void updateMultiTurnTracking()
     // Update the multi-turn tracking based on the raw rotor angle
     float raw_angle_deg = raw_rotor_angle * RAW_TO_DEGREE;
     float delta = raw_angle_deg - last_raw_angle_deg;
-    // Wrap detection
-    if (delta > 180.0f)         rotor_turns--;
-    else if (delta < -180.0f)   rotor_turns++;
+    
+    // Optimized wrap detection with hysteresis and validation
+    // Hysteresis threshold: ±(180° - 10°) = ±170° to avoid false triggers
+    // This prevents noise near zero-crossing from causing incorrect turn counting
+    const float WRAP_THRESHOLD = 170.0f;
+    const float MAX_DELTA = 45.0f;  // Maximum reasonable angular change per update (~25kHz SVPWM = 40µs)
+    
+    // Validate delta is within reasonable bounds (prevents spurious readings)
+    if (fabsf(delta) < MAX_DELTA)
+    {
+        // Normal case - no wrap, keep turn count as is
+        last_raw_angle_deg = raw_angle_deg;
+        return;
+    }
+    
+    // Wrap detection with hysteresis
+    if (delta > WRAP_THRESHOLD)
+    {
+        // Forward wrap: 359° -> 0° (CCW rotation, turning backward in raw counts)
+        rotor_turns--;
+    }
+    else if (delta < -WRAP_THRESHOLD)
+    {
+        // Backward wrap: 0° -> 359° (CW rotation, turning forward in raw counts)
+        rotor_turns++;
+    }
+    // If delta is between ±45° and ±170°, it's likely a spurious reading - ignore
+    
     // Update the last raw angle
     last_raw_angle_deg = raw_angle_deg;
 }
