@@ -9,6 +9,8 @@
 #include "scurve.h"
 #include "protocol.h"
 
+// Initial back to basics control
+
 // Control mode enumeration (legacy)
 enum ControlMode_t 
 {
