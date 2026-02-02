@@ -141,8 +141,8 @@ SMOOTH_TROT_STANCE_RATIO = 0.65
 # ============================================================================
 
 CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
-UPDATE_RATE = 50  # Hz (20ms per update)
-TRAJECTORY_STEPS = 20  # Number of steps in one gait cycle (matched with No_EF version)
+UPDATE_RATE = 80  # Hz (12.5ms per update) - higher resolution for smoother motion
+TRAJECTORY_STEPS = 32  # Number of steps in one gait cycle - increased proportionally to maintain same speed
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---

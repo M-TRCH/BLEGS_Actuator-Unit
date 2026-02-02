@@ -312,6 +312,10 @@ void loop()
         {
             last_position_control_time = current_time;
             
+            // *** CRITICAL FIX: Update encoder BEFORE position control to get fresh feedback ***
+            updateRawRotorAngle();
+            updateMultiTurnTracking();
+            
             // Direct position control (no velocity feedforward, no emergency stop check)
             positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd, 0.0f);
         }
@@ -322,11 +326,7 @@ void loop()
     {
         last_svpwm_time = current_time;
 
-        // Update raw rotor angle and absolute angle
-        updateRawRotorAngle();
-        updateMultiTurnTracking();  
-
-        // Apply SVPWM control directly
+        // Apply SVPWM control directly (encoder already updated in position control)
         svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
