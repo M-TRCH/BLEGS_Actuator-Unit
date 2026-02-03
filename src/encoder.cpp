@@ -29,11 +29,31 @@ void encoderInit()
 
 void updateRawRotorAngle()
 {
+    // Low-pass filter to reduce motor noise (Exponential Moving Average)
+    static float filtered_angle = 0.0f;
+    static bool filter_initialized = false;
+    const float FILTER_ALPHA = 0.5f;  // 0.5 = simple average of current and previous
+    
+    // Read raw encoder value
+    uint16_t raw_reading;
     #if RAW_ROTOR_ANGLE_INVERT == true
-        raw_rotor_angle = _14_BIT - rotor.readAngleRaw(); 
+        raw_reading = _14_BIT - rotor.readAngleRaw(); 
     #else
-        raw_rotor_angle = rotor.readAngleRaw(); 
+        raw_reading = rotor.readAngleRaw(); 
     #endif
+    
+    // Initialize filter on first run
+    if (!filter_initialized)
+    {
+        filtered_angle = (float)raw_reading;
+        filter_initialized = true;
+    }
+    
+    // Apply exponential moving average (EMA) low-pass filter
+    filtered_angle = FILTER_ALPHA * (float)raw_reading + (1.0f - FILTER_ALPHA) * filtered_angle;
+    
+    // Convert back to uint16_t with rounding
+    raw_rotor_angle = (uint16_t)(filtered_angle + 0.5f);
 }
 
 float readRotorAngle(bool ccw)
