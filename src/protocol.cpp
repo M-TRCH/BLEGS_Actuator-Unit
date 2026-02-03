@@ -119,9 +119,11 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     
     uint32_t start_time = millis();
     
+    // *** OPTIMIZED: Single timeout for entire packet (not per-stage) ***
     // Wait for header bytes
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);  // Brief yield to prevent 100% CPU busy-wait
     }
     
     // Read and verify header
@@ -131,10 +133,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     pkt->header[0] = PROTOCOL_HEADER_1;
     pkt->header[1] = PROTOCOL_HEADER_2;
     
-    // Wait for packet_type and payload_len
-    start_time = millis();
+    // Wait for packet_type and payload_len (NO timeout reset)
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     pkt->packet_type = serial->read();
@@ -143,10 +145,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     // Validate payload length
     if (pkt->payload_len > PROTOCOL_MAX_PAYLOAD_SIZE) return false;
     
-    // Wait for payload
-    start_time = millis();
+    // Wait for payload (NO timeout reset)
     while (serial->available() < pkt->payload_len) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     // Read payload
@@ -154,10 +156,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
         pkt->payload[i] = serial->read();
     }
     
-    // Wait for CRC bytes (2 bytes, little-endian)
-    start_time = millis();
+    // Wait for CRC bytes (2 bytes, little-endian) (NO timeout reset)
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     // Read CRC (little-endian)

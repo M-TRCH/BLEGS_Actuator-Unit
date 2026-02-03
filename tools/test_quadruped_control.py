@@ -124,7 +124,7 @@ P_A_RIGHT = np.array([MOTOR_SPACING/2, 0.0])
 P_B_RIGHT = np.array([-MOTOR_SPACING/2, 0.0])
 
 # --- Default Standing Pose ---
-DEFAULT_STANCE_HEIGHT = -200.0  # mm (negative = down)
+DEFAULT_STANCE_HEIGHT = -240.0  # mm (negative = down)
 DEFAULT_STANCE_OFFSET_X = 0.0   # mm
 
 # --- Motion Parameters ---
@@ -141,8 +141,8 @@ SMOOTH_TROT_STANCE_RATIO = 0.65
 # ============================================================================
 
 CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
-UPDATE_RATE = 80  # Hz (12.5ms per update) - higher resolution for smoother motion
-TRAJECTORY_STEPS = 32  # Number of steps in one gait cycle - increased proportionally to maintain same speed
+UPDATE_RATE = 50  # Hz (20ms per update)
+TRAJECTORY_STEPS = 20  # Number of steps in one gait cycle (maintains 0.4s cycle time: 20/50 = 0.4s)
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---

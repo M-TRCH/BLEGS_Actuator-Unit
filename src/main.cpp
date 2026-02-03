@@ -235,7 +235,7 @@ void loop()
             if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
             {
                 // Binary protocol path - with non-blocking check
-                if (receivePacket(SystemSerial, &rx_packet, 5))  // Reduced timeout to 5ms
+                if (receivePacket(SystemSerial, &rx_packet, 2))  // Reduced timeout to 2ms - aggressive for 80Hz update
                 {
                     // Process packet based on type
                     switch (rx_packet.packet_type)
