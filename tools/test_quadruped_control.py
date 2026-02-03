@@ -129,7 +129,7 @@ DEFAULT_STANCE_OFFSET_X = 0.0   # mm
 
 # --- Motion Parameters ---
 GAIT_LIFT_HEIGHT = 15.0    # mm
-GAIT_STEP_FORWARD = 50.0   # mm (matched with No_EF version)
+GAIT_STEP_FORWARD = 50.0   # mm
 
 # Smooth Trot Parameters
 SMOOTH_TROT_LIFT_HEIGHT = 15.0  # mm
@@ -142,7 +142,7 @@ SMOOTH_TROT_STANCE_RATIO = 0.65
 
 CONTROL_MODE = ControlMode.MODE_DIRECT_POSITION  # Control mode for gait control
 UPDATE_RATE = 50  # Hz (20ms per update)
-TRAJECTORY_STEPS = 20  # Number of steps in one gait cycle (maintains 0.4s cycle time: 20/50 = 0.4s)
+TRAJECTORY_STEPS = 30  # Number of steps in one gait cycle (0.6s cycle time: 30/50 = 0.6s)
 GAIT_TYPE = 'trot'  # 'trot', 'walk', 'stand'
 
 # --- Single Motor Mode ---
