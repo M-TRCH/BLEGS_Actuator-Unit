@@ -98,11 +98,8 @@ L_AC = 105.0  # Link 1 length (Motor A to joint C)
 L_BD = 105.0  # Link 2 length (Motor B to joint D)
 L_CE = 145.0  # Link 3 length (joint C to joint E)
 L_DE = 145.0  # Link 4 length (joint D to joint E)
-L_EF = 40.0   # Offset length (joint E to foot F)
 
-# Offset ratios
-OFFSET_RATIO_E = 37.0 / 29.0
-OFFSET_RATIO_D = 8.0 / 29.0
+# NOTE: No L_EF link - Joint E is the foot!
 
 # --- Motor Configuration ---
 GEAR_RATIO = 8.0  # Motor shaft to output shaft gear ratio
@@ -124,7 +121,7 @@ P_A_RIGHT = np.array([MOTOR_SPACING/2, 0.0])
 P_B_RIGHT = np.array([-MOTOR_SPACING/2, 0.0])
 
 # --- Default Standing Pose ---
-DEFAULT_STANCE_HEIGHT = -240.0  # mm (negative = down)
+DEFAULT_STANCE_HEIGHT = -220.0  # mm (negative = down)
 DEFAULT_STANCE_OFFSET_X = 0.0   # mm
 
 # --- Motion Parameters ---
@@ -928,12 +925,12 @@ def solve_circle_intersection(center1, radius1, center2, radius2, choose_lower=T
     else:
         return P_intersection_1 if P_intersection_1[1] > P_intersection_2[1] else P_intersection_2
 
-def calculate_ik_analytical(P_F_target, P_A, P_B, elbow_C_down=True, elbow_D_down=True):
+def calculate_ik_no_ef(P_E_target, P_A, P_B, elbow_C_down=True, elbow_D_down=True):
     """
-    Calculate Inverse Kinematics using analytical method
+    Calculate Inverse Kinematics WITHOUT EF link (E is the foot)
     
     Args:
-        P_F_target: Target foot position [x, y] in leg frame
+        P_E_target: Target foot position [x, y] in leg frame
         P_A: Motor A position [x, y]
         P_B: Motor B position [x, y]
         elbow_C_down: True to choose lower elbow position for joint C
@@ -942,22 +939,16 @@ def calculate_ik_analytical(P_F_target, P_A, P_B, elbow_C_down=True, elbow_D_dow
     Returns:
         numpy array [theta_A, theta_B] in radians, or [nan, nan] if no solution
     """
-    R_FD = L_DE * OFFSET_RATIO_E
-    R_DB = L_BD
-    
-    # Find joint D position (switched: elbow_D_down=True → choose upper)
-    P_D = solve_circle_intersection(P_F_target, R_FD, P_B, R_DB, not elbow_D_down)
-    
-    if np.isnan(P_D).any():
-        return np.array([np.nan, np.nan])
-    
-    # Calculate joint E position
-    P_E = (29.0 * P_F_target + 8.0 * P_D) / 37.0
-    
     # Find joint C position
-    P_C = solve_circle_intersection(P_A, L_AC, P_E, L_CE, elbow_C_down)
+    P_C = solve_circle_intersection(P_A, L_AC, P_E_target, L_CE, elbow_C_down)
     
     if np.isnan(P_C).any():
+        return np.array([np.nan, np.nan])
+    
+    # Find joint D position
+    P_D = solve_circle_intersection(P_B, L_BD, P_E_target, L_DE, elbow_D_down)
+    
+    if np.isnan(P_D).any():
         return np.array([np.nan, np.nan])
     
     # Calculate motor angles
@@ -969,11 +960,18 @@ def calculate_ik_analytical(P_F_target, P_A, P_B, elbow_C_down=True, elbow_D_dow
     
     return np.array([theta_A, theta_B])
 
-def calculate_fk_positions(theta_A, theta_B, P_A, P_B):
-    """Calculate forward kinematics positions for visualization"""
+def calculate_fk_no_ef(theta_A, theta_B, P_A, P_B):
+    """
+    Calculate forward kinematics positions WITHOUT EF link
+    
+    Returns:
+        P_C, P_D, P_E (foot position)
+    """
+    # Calculate P_C and P_D from motor angles
     P_C = P_A + np.array([L_AC * np.cos(theta_A), L_AC * np.sin(theta_A)])
     P_D = P_B + np.array([L_BD * np.cos(theta_B), L_BD * np.sin(theta_B)])
     
+    # Calculate P_E using circle intersection between C and D
     V_CD = P_D - P_C
     d = np.linalg.norm(V_CD)
     
@@ -989,16 +987,13 @@ def calculate_fk_positions(theta_A, theta_B, P_A, P_B):
             P_E1 = P_C + a * v_d + h * v_perp
             P_E2 = P_C + a * v_d - h * v_perp
             
-            P_F1 = (37.0 * P_E1 - 8.0 * P_D) / 29.0
-            P_F2 = (37.0 * P_E2 - 8.0 * P_D) / 29.0
-            
-            # Choose configuration with lower foot position
-            if P_F1[1] < P_F2[1]:
-                return P_C, P_D, P_E1, P_F1
+            # Choose configuration with lower foot position (E is the foot)
+            if P_E1[1] < P_E2[1]:
+                return P_C, P_D, P_E1
             else:
-                return P_C, P_D, P_E2, P_F2
+                return P_C, P_D, P_E2
     
-    return None, None, None, None
+    return None, None, None
 
 # ============================================================================
 # TRAJECTORY GENERATION
@@ -1589,18 +1584,16 @@ def create_leg_subplot(ax, leg_id, leg_name):
             color='white', ha='center', va='center', zorder=10,
             bbox=dict(boxstyle='circle', facecolor='darkred', edgecolor='white', linewidth=1))
     
-    # Links
+    # Links (No EF link - only 4 links: AC, BD, CE, DE)
     link1 = ax.plot([], [], '-', color='darkblue', linewidth=3, zorder=4)[0]
     link2 = ax.plot([], [], '-', color='darkred', linewidth=3, zorder=4)[0]
     link3 = ax.plot([], [], '--', color='orange', linewidth=2, zorder=3)[0]
     link4 = ax.plot([], [], '--', color='cyan', linewidth=2, zorder=3)[0]
-    link5 = ax.plot([], [], '-', color='green', linewidth=2.5, zorder=4)[0]
     
-    # Joints
+    # Joints (C, D, E where E is the foot)
     joint_c = ax.plot([], [], 'ro', markersize=7, zorder=5)[0]
     joint_d = ax.plot([], [], 'bo', markersize=7, zorder=5)[0]
-    joint_e = ax.plot([], [], 's', color='purple', markersize=6, zorder=5)[0]
-    foot = ax.plot([], [], '*', color='green', markersize=15, zorder=6)[0]
+    joint_e_foot = ax.plot([], [], '*', color='green', markersize=15, zorder=6)[0]  # E is the foot
     target = ax.plot([], [], 'x', color='red', markersize=10, markeredgewidth=2, zorder=6)[0]
     
     info_text = ax.text(0.02, 0.98, '', transform=ax.transAxes,
@@ -1608,9 +1601,9 @@ def create_leg_subplot(ax, leg_id, leg_name):
                         bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
     
     return {
-        'links': [link1, link2, link3, link4, link5],
-        'joints': [joint_c, joint_d, joint_e],
-        'foot': foot,
+        'links': [link1, link2, link3, link4],
+        'joints': [joint_c, joint_d, joint_e_foot],
+        'foot': joint_e_foot,  # E is the foot
         'target': target,
         'info_text': info_text,
         'P_A': P_A,
@@ -1627,20 +1620,20 @@ def update_leg_plot(leg_id, plot_elements):
     P_A = plot_elements['P_A']
     P_B = plot_elements['P_B']
     
-    # Calculate FK for target
-    P_C, P_D, P_E, P_F = calculate_fk_positions(theta_A, theta_B, P_A, P_B)
+    # Calculate FK for target (No EF link - E is the foot)
+    P_C, P_D, P_E = calculate_fk_no_ef(theta_A, theta_B, P_A, P_B)
     
     if P_C is not None:
         plot_elements['links'][0].set_data([P_A[0], P_C[0]], [P_A[1], P_C[1]])
         plot_elements['links'][1].set_data([P_B[0], P_D[0]], [P_B[1], P_D[1]])
         plot_elements['links'][2].set_data([P_C[0], P_E[0]], [P_C[1], P_E[1]])
         plot_elements['links'][3].set_data([P_D[0], P_E[0]], [P_D[1], P_E[1]])
-        plot_elements['links'][4].set_data([P_E[0], P_F[0]], [P_E[1], P_F[1]])
+        # No link 4 (EF) - E is the foot
         
         plot_elements['joints'][0].set_data([P_C[0]], [P_C[1]])
         plot_elements['joints'][1].set_data([P_D[0]], [P_D[1]])
         plot_elements['joints'][2].set_data([P_E[0]], [P_E[1]])
-        plot_elements['foot'].set_data([P_F[0]], [P_F[1]])
+        plot_elements['foot'].set_data([P_E[0]], [P_E[1]])  # E is the foot
         plot_elements['target'].set_data([target_x], [target_y])
         
         # Update info text
@@ -1654,7 +1647,7 @@ def update_leg_plot(leg_id, plot_elements):
             f'Motor {motor_a_id}: {np.rad2deg(theta_A):+6.1f}°\n'
             f'Motor {motor_b_id}: {np.rad2deg(theta_B):+6.1f}°\n'
             f'ΔA: {error_A:+5.1f}° ΔB: {error_B:+5.1f}°\n'
-            f'Pos: ({P_F[0]:.0f},{P_F[1]:.0f})'
+            f'Pos: ({P_E[0]:.0f},{P_E[1]:.0f})'
         )
 
 def visualization_thread():
@@ -1842,7 +1835,7 @@ def main():
     for leg_id in leg_motors.keys():
         home_pos = np.array([DEFAULT_STANCE_OFFSET_X, DEFAULT_STANCE_HEIGHT])
         P_A, P_B = get_motor_positions(leg_id)
-        home_angles = calculate_ik_analytical(home_pos, P_A, P_B, elbow_C_down=True, elbow_D_down=False)
+        home_angles = calculate_ik_no_ef(home_pos, P_A, P_B, elbow_C_down=True, elbow_D_down=True)
         
         if not np.isnan(home_angles).any():
             prev_solutions[leg_id] = home_angles
@@ -1940,7 +1933,7 @@ def main():
                 P_A, P_B = get_motor_positions(leg_id)
                 
                 for elbow_C, elbow_D in configs:
-                    solution = calculate_ik_analytical(
+                    solution = calculate_ik_no_ef(
                         np.array([px, py]),
                         P_A, P_B,
                         elbow_C_down=elbow_C,
