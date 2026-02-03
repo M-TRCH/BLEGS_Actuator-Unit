@@ -32,8 +32,8 @@ void updateRawRotorAngle()
     // Low-pass filter to reduce motor noise (Exponential Moving Average)
     static float filtered_angle = 0.0f;
     static bool filter_initialized = false;
-    const float FILTER_ALPHA = 0.5f;  // 0.5 = simple average of current and previous
-    
+    const float FILTER_ALPHA = 1.0f;    // No filtering (set to 1.0f); adjust between 0.0f (max filtering) and 1.0f (no filtering)
+
     // Read raw encoder value
     uint16_t raw_reading;
     #if RAW_ROTOR_ANGLE_INVERT == true
