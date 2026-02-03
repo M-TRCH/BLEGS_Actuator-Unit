@@ -131,7 +131,7 @@ GAIT_STEP_FORWARD = 50.0   # mm
 # Smooth Trot Parameters
 SMOOTH_TROT_LIFT_HEIGHT = 15.0  # mm
 SMOOTH_TROT_STEPS = 30
-SMOOTH_TROT_STANCE_RATIO = 0.65
+SMOOTH_TROT_STANCE_RATIO = 0.70
 
 # ============================================================================
 # CONTROL PARAMETERS
@@ -162,7 +162,7 @@ control_lock = threading.Lock()
 
 # Visualization state
 plot_running = True
-
+ 
 # Control state
 gait_running = False
 gait_paused = True
