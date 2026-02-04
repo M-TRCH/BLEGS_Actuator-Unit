@@ -1,0 +1,106 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+
+% Setup page margins
+\geometry{top=1in, bottom=1in, left=1in, right=1in}
+
+\title{\textbf{Hierarchical Control Architecture for a Quadruped Robot with 5-Bar Linkage Mechanisms}}
+\author{Your Name \\ Department of Engineering, Your University}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This paper presents a hierarchical control architecture designed for a quadruped robot utilizing a 5-bar linkage leg mechanism. The system is decomposed into three distinct layers: a High-Level Navigation Planner, a Mid-Level Gait Generator, and a Low-Level Motor Controller. A State Estimator closes the control loop by fusing proprioceptive encoder data with exteroceptive IMU measurements to provide robust localization.
+\end{abstract}
+
+\section{Introduction}
+Locomotion in legged robots requires the coordination of multiple degrees of freedom (DoF) to maintain stability while tracking desired trajectories. To manage this complexity, we adopt a modular hierarchical control scheme. This approach decouples the slow-dynamic trajectory planning (10-50 Hz) from the fast-dynamic joint torque/position control (1 kHz), ensuring real-time performance and system stability.
+
+\section{Control Architecture Modules}
+
+\subsection{High-Level: Navigation Planner}
+The Navigation Planner serves as the highest level of decision-making. It is responsible for calculating the reference body velocity required to reach a target waypoint $P_{target} = [x_g, y_g]^T$ in the global World Frame $\{W\}$.
+
+Given the robot's current estimated position $P_{current}$, the position error vector $e_p$ is defined as:
+\begin{equation}
+    e_p = P_{target} - P_{current}
+\end{equation}
+
+To ensure safe operation, the command velocity is saturated at a maximum limit $v_{max}$. The desired velocity vector in the World Frame, $\mathbf{v}_{world}$, is computed via a proportional control law:
+\begin{equation}
+    \mathbf{v}_{world} = \min(v_{max}, K_p \|e_p\|) \cdot \frac{e_p}{\|e_p\|}
+\end{equation}
+
+Since the gait generator operates in the robot's local frame, this velocity must be transformed into the Body Frame $\{B\}$ using the inverse rotation matrix $R_z(\psi)^T$, where $\psi$ is the current yaw angle:
+\begin{equation}
+    \mathbf{v}_{body} = R_z(\psi)^T \cdot \mathbf{v}_{world} = 
+    \begin{bmatrix} \cos\psi & \sin\psi \\ -\sin\psi & \cos\psi \end{bmatrix} 
+    \begin{bmatrix} v_x \\ v_y \end{bmatrix}_{world}
+\end{equation}
+
+\subsection{Mid-Level: Gait Generator}
+The Gait Generator determines the end-effector (foot) trajectory in Cartesian space relative to the hip joint. The trajectory is generated based on a finite state machine (FSM) that cycles between two primary phases: Stance and Swing.
+
+\subsubsection{Stance Phase (Propulsion)}
+During the stance phase, the foot supports the robot's weight and moves linearly backward relative to the body to generate forward motion. For a stance duration $T_{stance}$, the foot position $P_{foot}(t)$ is updated as:
+\begin{equation}
+    P_{foot}(t) = P_{nom} + \frac{\mathbf{v}_{body} \cdot T_{stance}}{2} \cdot (1 - 2\phi_{stance})
+\end{equation}
+where $\phi_{stance} \in [0, 1]$ represents the normalized phase progress.
+
+\subsubsection{Swing Phase (Recovery)}
+To minimize impact forces (heel-strike) and ensure smooth motion, the swing trajectory follows a \textit{Cycloid} function. This curve ensures zero vertical velocity at lift-off and touch-down. The trajectory equations are:
+\begin{align}
+    x(\sigma) &= P_{start} + (P_{end} - P_{start}) \cdot \frac{\sigma \pi - \sin(\sigma \pi)}{2\pi} \\
+    z(\sigma) &= H_{step} \cdot \sin(\sigma \pi)
+\end{align}
+where $\sigma \in [0, 1]$ is the normalized swing time, and $H_{step}$ is the peak step height.
+
+\subsection{Mid-Level: Inverse Kinematics (5-Bar Linkage)}
+Unlike serial manipulators, the 5-bar linkage is a parallel mechanism. The Inverse Kinematics (IK) problem involves finding the joint angles $\theta_1$ (proximal) and $\theta_2$ (distal) that result in a specific foot position $(x, y)$.
+
+This is solved geometrically by finding the intersection points of two circles centered at the motor shafts with radii equal to the linkage arm lengths. The solution is derived as:
+\begin{equation}
+    (x - x_{c,i})^2 + (y - y_{c,i})^2 = L_{leg}^2
+\end{equation}
+Resolving this system yields the closed-form solution for joint angles:
+\begin{equation}
+    \theta_i = 2 \arctan \left( \frac{-B \pm \sqrt{B^2 - 4AC}}{2A} \right)
+\end{equation}
+where coefficients $A, B, C$ depend on the mechanism's geometric parameters and the target coordinates.
+
+\subsection{Low-Level: Motor Controller}
+The Low-Level Controller executes the motion commands at high frequency (typically 500 Hz - 1 kHz). We employ a Position-Tracking PID Controller to minimize the error between the desired angle $\theta_{ref}$ derived from IK and the actual angle $\theta_{act}$ measured by encoders.
+
+The control output $u(t)$ sent to the motor driver is:
+\begin{equation}
+    u(t) = K_p e(t) + K_i \int_{0}^{t} e(\tau) d\tau + K_d \frac{d e(t)}{dt}
+\end{equation}
+where $K_p, K_i, K_d$ are the proportional, integral, and derivative gains, respectively. This stiff position control helps the robot maintain its posture against gravity and external disturbances.
+
+\subsection{Feedback Loop: State Estimator}
+Accurate localization is critical for the Navigation Planner. The State Estimator fuses data from two sources:
+\begin{itemize}
+    \item \textbf{Odometry (Kinematics):} Estimates velocity based on leg movements and wheel/foot contact.
+    \item \textbf{IMU (Inertial):} Provides absolute orientation (Yaw, $\psi$) and linear acceleration.
+\end{itemize}
+The position is updated via Dead Reckoning integration:
+\begin{equation}
+    P_{k+1} = P_k + (R_k(\psi) \cdot \mathbf{v}_{body, k}) \cdot \Delta t
+\end{equation}
+This estimated position $P_{k+1}$ is fed back to the Navigation Planner, closing the outer control loop.
+
+\section{Conclusion}
+The proposed architecture successfully integrates trajectory planning, kinematic solving, and feedback control. The separation of the system into hierarchical layers allows for robust locomotion control, capable of handling the complex dynamics of a quadruped robot with 5-bar linkage legs.
+
+\end{document}
