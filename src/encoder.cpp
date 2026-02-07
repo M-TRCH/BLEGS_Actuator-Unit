@@ -29,11 +29,31 @@ void encoderInit()
 
 void updateRawRotorAngle()
 {
+    // Low-pass filter to reduce motor noise (Exponential Moving Average)
+    static float filtered_angle = 0.0f;
+    static bool filter_initialized = false;
+    const float FILTER_ALPHA = 1.0f;    // No filtering (set to 1.0f); adjust between 0.0f (max filtering) and 1.0f (no filtering)
+
+    // Read raw encoder value
+    uint16_t raw_reading;
     #if RAW_ROTOR_ANGLE_INVERT == true
-        raw_rotor_angle = _14_BIT - rotor.readAngleRaw(); 
+        raw_reading = _14_BIT - rotor.readAngleRaw(); 
     #else
-        raw_rotor_angle = rotor.readAngleRaw(); 
+        raw_reading = rotor.readAngleRaw(); 
     #endif
+    
+    // Initialize filter on first run
+    if (!filter_initialized)
+    {
+        filtered_angle = (float)raw_reading;
+        filter_initialized = true;
+    }
+    
+    // Apply exponential moving average (EMA) low-pass filter
+    filtered_angle = FILTER_ALPHA * (float)raw_reading + (1.0f - FILTER_ALPHA) * filtered_angle;
+    
+    // Convert back to uint16_t with rounding
+    raw_rotor_angle = (uint16_t)(filtered_angle + 0.5f);
 }
 
 float readRotorAngle(bool ccw)
@@ -51,9 +71,34 @@ void updateMultiTurnTracking()
     // Update the multi-turn tracking based on the raw rotor angle
     float raw_angle_deg = raw_rotor_angle * RAW_TO_DEGREE;
     float delta = raw_angle_deg - last_raw_angle_deg;
-    // Wrap detection
-    if (delta > 180.0f)         rotor_turns--;
-    else if (delta < -180.0f)   rotor_turns++;
+    
+    // Optimized wrap detection with hysteresis and validation
+    // Hysteresis threshold: ±(180° - 10°) = ±170° to avoid false triggers
+    // This prevents noise near zero-crossing from causing incorrect turn counting
+    const float WRAP_THRESHOLD = 170.0f;
+    const float MAX_DELTA = 45.0f;  // Maximum reasonable angular change per update (~25kHz SVPWM = 40µs)
+    
+    // Validate delta is within reasonable bounds (prevents spurious readings)
+    if (fabsf(delta) < MAX_DELTA)
+    {
+        // Normal case - no wrap, keep turn count as is
+        last_raw_angle_deg = raw_angle_deg;
+        return;
+    }
+    
+    // Wrap detection with hysteresis
+    if (delta > WRAP_THRESHOLD)
+    {
+        // Forward wrap: 359° -> 0° (CCW rotation, turning backward in raw counts)
+        rotor_turns--;
+    }
+    else if (delta < -WRAP_THRESHOLD)
+    {
+        // Backward wrap: 0° -> 359° (CW rotation, turning forward in raw counts)
+        rotor_turns++;
+    }
+    // If delta is between ±45° and ±170°, it's likely a spurious reading - ignore
+    
     // Update the last raw angle
     last_raw_angle_deg = raw_angle_deg;
 }

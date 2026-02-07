@@ -16,6 +16,7 @@ public:
 
     void plan(float start, float end, float v_max, float a_max, float amax_min, float amax_max);
     float getPosition(float t);
+    float getVelocity(float t);  // Get velocity at time t for feedforward
 };
 
 #endif // SCURVE_PROFILE_H

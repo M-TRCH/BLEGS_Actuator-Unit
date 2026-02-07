@@ -24,18 +24,21 @@ enum PacketType : uint8_t {
     PKT_CMD_SET_GOAL        = 0x01,     // Command: Set position goal (PC -> Motor)
     PKT_CMD_SET_CONFIG      = 0x02,     // Command: Set configuration (PC -> Motor)
     PKT_CMD_PING            = 0x03,     // Command: Ping/health check
-    PKT_CMD_EMERGENCY_STOP  = 0x04,     // Command: Emergency stop (permanent until power cycle)
+    PKT_CMD_EMERGENCY_STOP  = 0x04,     // Command: Emergency stop (requires magic bytes + confirmation)
+    PKT_CMD_RESET_EMERGENCY = 0x05,     // Command: Reset emergency stop (requires magic bytes)
     
     PKT_FB_STATUS           = 0x81,     // Feedback: Status response (Motor -> PC)
     PKT_FB_CONFIG           = 0x82,     // Feedback: Configuration response
     PKT_FB_ERROR            = 0x83,     // Feedback: Error report
-    PKT_FB_PONG             = 0x84      // Feedback: Pong response
+    PKT_FB_PONG             = 0x84,     // Feedback: Pong response
+    PKT_FB_ESTOP_PENDING    = 0x85      // Feedback: Emergency stop pending confirmation
 };
 
 // Control Mode IDs (used in CMD_SET_GOAL payload)
 enum ControlMode : uint8_t {
     MODE_DIRECT_POSITION    = 0x00,     // Direct position control (PID only)
-    MODE_SCURVE_PROFILE     = 0x01      // S-Curve profile motion
+    MODE_SCURVE_PROFILE     = 0x01,     // S-Curve profile motion (auto-calculated params)
+    MODE_SCURVE_FULL        = 0x02      // S-Curve with full parameters (vmax, amax, jmax)
 };
 
 // Status Flags (bitfield for FB_STATUS)
@@ -57,7 +60,10 @@ enum ErrorCode : uint8_t {
     ERR_TIMEOUT             = 0x03,
     ERR_UNKNOWN_COMMAND     = 0x04,
     ERR_INVALID_PAYLOAD     = 0x05,
-    ERR_MOTOR_FAULT         = 0x06
+    ERR_MOTOR_FAULT         = 0x06,
+    ERR_INVALID_MAGIC       = 0x07,     // Magic bytes verification failed
+    ERR_MOTOR_ID_MISMATCH   = 0x08,     // Command not for this motor
+    ERR_ESTOP_NOT_CONFIRMED = 0x09      // Emergency stop requires confirmation
 };
 
 // Generic binary packet structure
@@ -79,12 +85,21 @@ struct __attribute__((packed)) PayloadSCurveProfile {
     uint16_t duration_ms;           // Duration in milliseconds
 };
 
+// Full S-Curve profile with all parameters
+struct __attribute__((packed)) PayloadSCurveProfileFull {
+    int32_t target_pos;             // Target position (degrees*100)
+    uint16_t v_max;                 // Max velocity (degrees/s)
+    uint16_t a_max;                 // Max acceleration (degrees/s² / 10)
+    uint16_t j_max;                 // Max jerk (degrees/s³ / 100)
+};
+
 // Union for CMD_SET_GOAL payload variants
 struct __attribute__((packed)) PayloadSetGoal {
     uint8_t control_mode;           // ControlMode enum
     union {
         PayloadDirectPosition direct;
         PayloadSCurveProfile scurve;
+        PayloadSCurveProfileFull scurve_full;
     } data;
 };
 
@@ -107,6 +122,35 @@ struct __attribute__((packed)) PayloadError {
 struct __attribute__((packed)) PayloadSetConfig {
     uint8_t config_id;              // Configuration parameter ID
     float value;                    // Configuration value
+};
+
+// Emergency Stop magic bytes for verification (anti-corruption protection)
+#define ESTOP_MAGIC_BYTE_0      0xDE
+#define ESTOP_MAGIC_BYTE_1      0xAD
+#define ESTOP_MAGIC_BYTE_2      0xBE
+#define ESTOP_MAGIC_BYTE_3      0xEF
+#define ESTOP_CONFIRMATION_TIMEOUT_MS  100  // Must receive 2nd confirmation within 100ms
+
+// Payload structure for CMD_EMERGENCY_STOP (with magic verification)
+struct __attribute__((packed)) PayloadEmergencyStop {
+    uint8_t magic[4];               // Must be {0xDE, 0xAD, 0xBE, 0xEF}
+    uint8_t target_motor_id;        // Target motor ID (0xFF = broadcast to all)
+};
+
+// Payload structure for CMD_RESET_EMERGENCY (with magic verification)
+struct __attribute__((packed)) PayloadResetEmergency {
+    uint8_t magic[4];               // Must be {0xDE, 0xAD, 0xBE, 0xEF}
+    uint8_t target_motor_id;        // Target motor ID (0xFF = broadcast to all)
+    uint8_t reset_code;             // Additional reset verification code (0x55)
+};
+
+#define RESET_EMERGENCY_CODE    0x55    // Required reset verification code
+
+// S-Curve parameters structure (for output)
+struct SCurveParams {
+    float v_max;                    // Max velocity (degrees/s)
+    float a_max;                    // Max acceleration (degrees/s²)
+    float j_max;                    // Max jerk (degrees/s³)
 };
 
 // Function prototypes
@@ -195,6 +239,16 @@ void sendErrorFeedback(HardwareSerial* serial, uint8_t error_code, uint8_t last_
  * @return true if payload is valid
  */
 bool processSetGoalPayload(const PayloadSetGoal* payload, float* target_pos, uint16_t* duration_ms, uint8_t* mode);
+
+/**
+ * @brief Process received CMD_SET_GOAL packet with full S-Curve parameters
+ * @param payload Pointer to PayloadSetGoal structure
+ * @param target_pos Output: target position (degrees)
+ * @param mode Output: control mode
+ * @param scurve_params Output: S-Curve parameters (for MODE_SCURVE_FULL)
+ * @return true if payload is valid
+ */
+bool processSetGoalPayloadEx(const PayloadSetGoal* payload, float* target_pos, uint8_t* mode, SCurveParams* scurve_params);
 
 /**
  * @brief Compute status flags based on current system state

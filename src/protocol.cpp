@@ -119,9 +119,11 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     
     uint32_t start_time = millis();
     
+    // *** OPTIMIZED: Single timeout for entire packet (not per-stage) ***
     // Wait for header bytes
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);  // Brief yield to prevent 100% CPU busy-wait
     }
     
     // Read and verify header
@@ -131,10 +133,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     pkt->header[0] = PROTOCOL_HEADER_1;
     pkt->header[1] = PROTOCOL_HEADER_2;
     
-    // Wait for packet_type and payload_len
-    start_time = millis();
+    // Wait for packet_type and payload_len (NO timeout reset)
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     pkt->packet_type = serial->read();
@@ -143,10 +145,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
     // Validate payload length
     if (pkt->payload_len > PROTOCOL_MAX_PAYLOAD_SIZE) return false;
     
-    // Wait for payload
-    start_time = millis();
+    // Wait for payload (NO timeout reset)
     while (serial->available() < pkt->payload_len) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     // Read payload
@@ -154,10 +156,10 @@ bool receivePacket(HardwareSerial* serial, BinaryPacket* pkt, uint32_t timeout_m
         pkt->payload[i] = serial->read();
     }
     
-    // Wait for CRC bytes (2 bytes, little-endian)
-    start_time = millis();
+    // Wait for CRC bytes (2 bytes, little-endian) (NO timeout reset)
     while (serial->available() < 2) {
         if (millis() - start_time > timeout_ms) return false;
+        delayMicroseconds(50);
     }
     
     // Read CRC (little-endian)
@@ -288,9 +290,59 @@ bool processSetGoalPayload(const PayloadSetGoal* payload, float* target_pos, uin
             *target_pos = (float)payload->data.scurve.target_pos / 100.0f;
             *duration_ms = payload->data.scurve.duration_ms;
             return true;
+        
+        case MODE_SCURVE_FULL:
+            // Full S-Curve mode - duration calculated from params
+            *target_pos = (float)payload->data.scurve_full.target_pos / 100.0f;
+            *duration_ms = 0;  // Not used in full mode
+            return true;
             
         default:
             return false;  // Invalid mode
+    }
+}
+
+/**
+ * @brief Process received CMD_SET_GOAL packet with full S-Curve parameters
+ * @param payload Pointer to PayloadSetGoal structure
+ * @param target_pos Output: target position (degrees)
+ * @param mode Output: control mode
+ * @param scurve_params Output: S-Curve parameters (for MODE_SCURVE_FULL)
+ * @return true if payload is valid
+ */
+bool processSetGoalPayloadEx(const PayloadSetGoal* payload, float* target_pos, uint8_t* mode, SCurveParams* scurve_params) {
+    if (payload == nullptr || target_pos == nullptr || mode == nullptr || scurve_params == nullptr) {
+        return false;
+    }
+    
+    *mode = payload->control_mode;
+    
+    // Initialize default S-Curve parameters
+    scurve_params->v_max = 1000.0f;    // Default max velocity (deg/s)
+    scurve_params->a_max = 180000.0f;  // Default max acceleration (deg/s²)
+    scurve_params->j_max = 180000.0f;  // Default max jerk (deg/s³)
+    
+    switch (payload->control_mode) {
+        case MODE_DIRECT_POSITION:
+            *target_pos = (float)payload->data.direct.target_pos / 100.0f;
+            return true;
+            
+        case MODE_SCURVE_PROFILE:
+            // Auto-calculate parameters from duration
+            *target_pos = (float)payload->data.scurve.target_pos / 100.0f;
+            // Parameters will be calculated in main.cpp based on duration
+            return true;
+        
+        case MODE_SCURVE_FULL:
+            // Full S-Curve with explicit parameters
+            *target_pos = (float)payload->data.scurve_full.target_pos / 100.0f;
+            scurve_params->v_max = (float)payload->data.scurve_full.v_max;           // deg/s
+            scurve_params->a_max = (float)payload->data.scurve_full.a_max * 10.0f;   // Scaled by 10
+            scurve_params->j_max = (float)payload->data.scurve_full.j_max * 100.0f;  // Scaled by 100
+            return true;
+            
+        default:
+            return false;
     }
 }
 

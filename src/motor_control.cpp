@@ -10,11 +10,13 @@ unsigned long last_svpwm_time = 0;               // Last SVPWM time in microseco
 unsigned long last_position_control_time = 0;    // Last position control time in microseconds
 unsigned long last_debug_time = 0;               // Last debug time in microseconds
 // position control variables
-// Position PID controller (Kp, Ki, Kd, integral_limit, output_limit, tolerance)
-// Kp = 0.04 (Proportional gain), Ki = 0.02 (Integral gain), Kd = 0.0 (Derivative gain)
-// integral_limit = 4000.0 (Anti-windup limit), output_limit = 20.0 (Output saturation)
-// tolerance = 0.5 (Deadband/error threshold for zero integral)
-PIDController position_pid(0.04f, 0.02f, 0.0f, 2000.0f, 10.0f, 0.5f);
+// Position PID controller (Kp, Ki, Kd, integral_limit, output_limit, tolerance, error_limit)
+// Kp = 0.08 (Proportional gain), Ki = 0.03 (Integral gain), Kd = 0.0 (Derivative gain)
+// integral_limit = 2000.0 (Anti-windup limit), output_limit = 12.0 (Output saturation)
+// tolerance = 0.2 (Deadband/error threshold for zero integral)
+// error_limit = 150.0 (Maximum error in degrees - prevents motor stall when target is far)
+// PIDController position_pid(0.08f, 0.045f, 0.0f, 1000.0f, 10.0f, 0.2f, 40.0f);   // smooth tuning
+PIDController position_pid(0.08f, 0.0f, 0.0f, 1000.0f, 12.0f, 0.2f, 60.0f);   // aggressive tuning
 
 /* @brief   Find the constant offset for the rotor angle based on the applied voltage and step size
  * @param   active      Flag to indicate if the function is active
@@ -129,12 +131,24 @@ void svpwmControl(float vd_ref, float vq_ref, float angle_rad)
     applySVPWM(vd_ref, vq_ref, angle_rad); // Apply SVPWM with rotor angle in radians
 }
 
-/* @brief   Position control using PID
- * @param   measured   The measured position
- * @param   output     Pointer to the output voltage
+/* @brief   Position control using PID with velocity feedforward
+ * @param   measured     The measured position
+ * @param   output       Pointer to the output voltage
+ * @param   velocity_ff  Velocity feedforward (degrees/second)
  */
-void positionControl(float measured, float *output)
+void positionControl(float measured, float *output, float velocity_ff)
 {
-    *output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
+    // PID feedback control
+    float pid_output = position_pid.compute(measured, POSITION_CONTROL_PERIOD);
+    
+    // Velocity feedforward: convert velocity (deg/s) to voltage
+    float ff_output = velocity_ff * VELOCITY_FF_GAIN;
+    
+    // Combined output: PID + Feedforward
+    *output = pid_output + ff_output;
+    
+    // Apply output limit (same as PID output limit)
+    if (*output > position_pid.output_limit) *output = position_pid.output_limit;
+    else if (*output < -position_pid.output_limit) *output = -position_pid.output_limit;
 }
 

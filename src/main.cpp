@@ -9,6 +9,8 @@
 #include "scurve.h"
 #include "protocol.h"
 
+// Initial back to basics control
+
 // Control mode enumeration (legacy)
 enum ControlMode_t 
 {
@@ -23,7 +25,12 @@ ControlMode_t control_mode = POSITION_CONTROL_WITH_SCURVE;  // Default mode
 // Protocol variables
 BinaryPacket rx_packet;
 bool binary_mode_enabled = true;  // Enable binary protocol by default
-bool emergency_stop_active = false;  // Emergency stop flag (permanent until power cycle)
+bool emergency_stop_active = false;  // Emergency stop flag (can be reset via PKT_CMD_RESET_EMERGENCY)
+
+// Emergency stop protection - double-confirmation mechanism
+bool estop_pending = false;             // First emergency stop received, waiting for confirmation
+uint32_t estop_pending_time = 0;        // Time when first emergency stop was received
+uint8_t estop_pending_motor_id = 0;     // Motor ID from pending emergency stop
 
 // Command queue to prevent motor jerking
 #define CMD_QUEUE_SIZE 4
@@ -31,6 +38,8 @@ struct CommandQueue
 {
     float target_positions[CMD_QUEUE_SIZE];
     uint8_t modes[CMD_QUEUE_SIZE];
+    SCurveParams scurve_params[CMD_QUEUE_SIZE];  // S-Curve parameters for each command
+    uint16_t durations[CMD_QUEUE_SIZE];          // Duration for auto-calc mode
     uint8_t write_idx;
     uint8_t read_idx;
     uint8_t count;
@@ -145,6 +154,7 @@ void setup()
                         
                         // Send response
                         int32_t pos_feedback = (int32_t)(abs_angle_with_offset * 100.0f);
+                        // delay(5); // Short delay before response
                         sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, 0, 0);
                     }
                 }
@@ -175,11 +185,13 @@ void setup()
     setLEDStatus(LED_STATUS_RUNNING);
 
     // Initialize position control S-curve
-    updateRawRotorAngle();  
-    updateMultiTurnTracking();
-    abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-    scurve.plan(abs_angle_with_offset, calibration_angle * GEAR_RATIO, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
-    start_scurve_time = micros(); // Record the start time in microseconds
+    // updateRawRotorAngle();  
+    // updateMultiTurnTracking();
+    // abs_angle_with_offset = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
+    // scurve.plan(abs_angle_with_offset, calibration_angle * GEAR_RATIO, 1000.0f, 40000.0f, 1000.0f, 40000.0f);
+    // start_scurve_time = micros(); // Record the start time in microseconds
+    
+    position_pid.setpoint = -90.0f * GEAR_RATIO; // Target position in degrees (with gear ratio)
 }
 
 void loop()
@@ -197,6 +209,15 @@ void loop()
     
     // Get current time
     uint32_t current_time = micros();
+    uint32_t current_time_ms = millis();
+    
+    // DISABLED: Reset emergency stop pending state if timeout expired
+    // if (estop_pending && (current_time_ms - estop_pending_time) >= ESTOP_CONFIRMATION_TIMEOUT_MS)
+    // {
+    //     estop_pending = false;
+    //     // Optional: Log timeout
+    //     // SystemSerial->println("Emergency stop pending timeout - cancelled");
+    // }
 
     // Set endless_drive_mode to true for continuous rotation
     static bool endless_drive_mode = false; 
@@ -214,13 +235,14 @@ void loop()
             if (binary_mode_enabled && isBinaryPacketAvailable(SystemSerial))
             {
                 // Binary protocol path - with non-blocking check
-                if (receivePacket(SystemSerial, &rx_packet, 5))  // Reduced timeout to 5ms
+                if (receivePacket(SystemSerial, &rx_packet, 2))  // Reduced timeout to 2ms - aggressive for 80Hz update
                 {
                     // Process packet based on type
                     switch (rx_packet.packet_type)
                     {
                         case PKT_CMD_SET_GOAL:
                         {
+                            // SIMPLIFIED: Direct position control only (no queue, no S-curve)
                             float target_pos;
                             uint16_t duration_ms;
                             uint8_t mode;
@@ -229,33 +251,18 @@ void loop()
                             
                             if (processSetGoalPayload(goal_payload, &target_pos, &duration_ms, &mode))
                             {
-                                // Add to queue instead of processing immediately
-                                if (cmd_queue.count < CMD_QUEUE_SIZE)
-                                {
-                                    cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
-                                    cmd_queue.modes[cmd_queue.write_idx] = mode;
-                                    cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
-                                    cmd_queue.count++;
-                                }
-                                // If queue full, overwrite oldest command (sliding window)
-                                else
-                                {
-                                    cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
-                                    cmd_queue.target_positions[cmd_queue.write_idx] = target_pos;
-                                    cmd_queue.modes[cmd_queue.write_idx] = mode;
-                                    cmd_queue.write_idx = (cmd_queue.write_idx + 1) % CMD_QUEUE_SIZE;
-                                }
+                                // Direct position control - set setpoint immediately
+                                position_pid.setpoint = target_pos;
                                 
-                                // Quick ACK without detailed status
+                                // Send ACK with current status
                                 float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
                                 int32_t pos_feedback = (int32_t)(current_pos * 100.0f);
                                 currentUpdate();
                                 int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                                sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x01);  // Moving flag
+                                sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x01);
                             }
                             else
                             {
-                                // Invalid payload
                                 sendErrorFeedback(SystemSerial, ERR_INVALID_PAYLOAD, PKT_CMD_SET_GOAL);
                             }
                             break;
@@ -267,31 +274,13 @@ void loop()
                             int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
                             currentUpdate();
                             int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                            uint8_t flags = emergency_stop_active ? 0x40 : 0;  // Set emergency stop flag if active
-                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, flags);
+                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0);
                             break;
                         }
                         
-                        case PKT_CMD_EMERGENCY_STOP:
-                        {
-                            // Emergency stop - permanent until power cycle
-                            emergency_stop_active = true;
-                            
-                            // Stop motor immediately
-                            vd_cmd = 0.0f;
-                            vq_cmd = 0.0f;
-                            setPWMdutyCycle();  // Set all PWM to zero
-                            
-                            // Send acknowledgment with emergency stop flag
-                            int32_t pos_feedback = (int32_t)(readRotorAbsoluteAngle(WITH_ABS_OFFSET) * 100.0f);
-                            currentUpdate();
-                            int16_t current_mA = (int16_t)(currentEstimateDC() * 1000.0f);
-                            sendStatusFeedback(SystemSerial, GET_MOTOR_ID(), pos_feedback, current_mA, 0x40);  // 0x40 = STATUS_EMERGENCY_STOPPED
-                            
-                            SystemSerial->println("\n*** EMERGENCY STOP ACTIVATED ***");
-                            SystemSerial->println("Motor disabled. Power cycle required to restart.");
-                            break;
-                        }
+                        // DISABLED: Emergency stop commands (testing direct position control only)
+                        // case PKT_CMD_EMERGENCY_STOP:
+                        // case PKT_CMD_RESET_EMERGENCY:
                         
                         default:
                         {
@@ -307,141 +296,38 @@ void loop()
                     sendErrorFeedback(SystemSerial, ERR_CRC_FAILED);
                 }
             }
-            else
-            {
-                // Legacy ASCII protocol path
-                char cmd = SystemSerial->read();
-                
-                // Mode selection commands
-                if (cmd == 'M' || cmd == 'm') 
-                {
-                    // Read mode number: M0 = POSITION_CONTROL_ONLY, M1 = POSITION_CONTROL_WITH_SCURVE
-                    int mode = SystemSerial->parseInt();
-                    if (mode == 0) 
-                    {
-                        control_mode = POSITION_CONTROL_ONLY;
-                        SystemSerial->println("Mode: Position Control Only");
-                    } 
-                    else if (mode == 1) 
-                    {
-                        control_mode = POSITION_CONTROL_WITH_SCURVE;
-                        SystemSerial->println("Mode: Position Control with S-Curve");
-                    }
-                }
-                // Position setpoint command
-                else if (cmd == '#') 
-                {
-                    float new_setpoint = SystemSerial->parseFloat();
-                    float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                    
-                    if (control_mode == POSITION_CONTROL_ONLY) 
-                    {
-                        // Direct position control without S-curve
-                        position_pid.setpoint = new_setpoint;
-                        SystemSerial->print("Direct setpoint: ");
-                        SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
-                    } 
-                    else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-                    {
-                        // Position control with S-curve profile
-                        if (new_setpoint != position_pid.setpoint) 
-                        {
-                            scurve.plan(current_pos, new_setpoint, 4000.0f, 180000.0f, 1000.0f, 180000.0f);
-                            start_scurve_time = micros();
-                            SystemSerial->print("S-Curve setpoint: ");
-                            SystemSerial->println(new_setpoint, SERIAL1_DECIMAL_PLACES);
-                        }
-                    }
-                }
-                // Toggle binary protocol mode
-                else if (cmd == 'B' || cmd == 'b')
-                {
-                    binary_mode_enabled = !binary_mode_enabled;
-                    SystemSerial->print("Binary mode: ");
-                    SystemSerial->println(binary_mode_enabled ? "ENABLED" : "DISABLED");
-                }
-            }
+            // DISABLED: ASCII protocol and command queue processing
+            // else
+            // {
+            //     char cmd = SystemSerial->read();
+            //     // ... ASCII protocol handling ...
+            // }
         }
 
-        // Process command queue with rate limiting
-        if (!emergency_stop_active && cmd_queue.count > 0 && (current_time - last_setpoint_update_time >= MIN_SETPOINT_UPDATE_INTERVAL_US))
-        {
-            last_setpoint_update_time = current_time;
-            
-            // Get command from queue
-            float target_pos = cmd_queue.target_positions[cmd_queue.read_idx];
-            uint8_t mode = cmd_queue.modes[cmd_queue.read_idx];
-            cmd_queue.read_idx = (cmd_queue.read_idx + 1) % CMD_QUEUE_SIZE;
-            cmd_queue.count--;
-            
-            // Only update if position changed significantly
-            if (abs(target_pos - last_target_position) > POSITION_DEADBAND)
-            {
-                float current_pos = readRotorAbsoluteAngle(WITH_ABS_OFFSET);
-                
-                if (mode == MODE_DIRECT_POSITION)
-                {
-                    control_mode = POSITION_CONTROL_ONLY;
-                    position_pid.setpoint = target_pos;
-                }
-                else if (mode == MODE_SCURVE_PROFILE)
-                {
-                    // S-Curve profile motion
-                    control_mode = POSITION_CONTROL_WITH_SCURVE;
-                    // Calculate velocity based on distance and default acceleration
-                    float distance = abs(target_pos - current_pos);
-                    float v_max = fmax(distance * 2.0f, 1000.0f);  // Adaptive velocity
-                    float a_max = 180000.0f;  // Max acceleration
-                    scurve.plan(current_pos, target_pos, v_max, a_max, 1000.0f, a_max);
-                    start_scurve_time = micros();  // Use micros() for accurate timing
-                }
-                
-                last_target_position = target_pos;
-            }
-        }
+        // DISABLED: Command queue processing (testing direct position control only)
+        // if (!emergency_stop_active && cmd_queue.count > 0 && ...)
 
-        // Position controller
+        // Position controller - DIRECT POSITION CONTROL ONLY
         if (current_time - last_position_control_time >= POSITION_CONTROL_PERIOD_US)
         {
             last_position_control_time = current_time;
-
-            if (!emergency_stop_active)
-            {
-                if (control_mode == POSITION_CONTROL_ONLY) 
-                {
-                    // Direct position control
-                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
-                }
-                else if (control_mode == POSITION_CONTROL_WITH_SCURVE) 
-                {
-                    // Position control with S-curve profile
-                    float elapsed_time = (float)(current_time - start_scurve_time) / 1000000.0f;
-                    position_pid.setpoint = scurve.getPosition(elapsed_time);
-                    positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd);
-                }
-            }
+            
+            // *** CRITICAL FIX: Update encoder BEFORE position control to get fresh feedback ***
+            updateRawRotorAngle();
+            updateMultiTurnTracking();
+            
+            // Direct position control (no velocity feedforward, no emergency stop check)
+            positionControl(readRotorAbsoluteAngle(WITH_ABS_OFFSET), &vq_cmd, 0.0f);
         }
     }
 
-    // SVPWM controller
+    // SVPWM controller - NO SAFETY CHECKS
     if (current_time - last_svpwm_time >= SVPWM_PERIOD_US)
     {
         last_svpwm_time = current_time;
 
-        // Update raw rotor angle and absolute angle
-        updateRawRotorAngle();
-        updateMultiTurnTracking();  
-
-        // Apply SVPWM control only if emergency stop is not active
-        if (!emergency_stop_active)
-        {
-            svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
-        }
-        else
-        {
-            // Keep PWM at zero during emergency stop
-            setPWMdutyCycle();
-        }
+        // Apply SVPWM control directly (encoder already updated in position control)
+        svpwmControl(vd_cmd, vq_cmd, readRotorAngle(vq_cmd>0? CCW: CW) * DEG_TO_RAD);
     }
 
     // Debug (disable by default)
