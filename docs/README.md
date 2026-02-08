@@ -77,5 +77,18 @@ M1          # S-Curve mode
 
 ---
 
+## 📖 Theory Documentation
+
+Complete control theory and mathematical modeling:
+- **Phase 1:** Kinematics - Five-bar mechanism forward kinematics
+- **Phase 2:** Dynamics - Lagrangian dynamics and equations of motion
+- **Phase 3:** Simulation - MATLAB/Simulink system modeling
+- **Phase 4:** Control - PID and advanced control strategies
+- **Phase 5:** Quadruped - Full robot integration
+
+See [theory/README.md](theory/README.md) for LaTeX documentation.
+
+---
+
 **Last Updated:** February 8, 2026  
-**Version:** 3.0
+**Version:** 3.1

@@ -1,0 +1,857 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\newfontfamily\thaifonttt{TH SarabunPSK}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+% Title
+\title{\textbf{Phase 4.2: Hardware Integration}\\
+\large การบูรณาการฮาร์ดแวร์และการทดสอบระบบจริง\\
+BLEGS Analysis Unit}
+
+\author{นายธีรโชติ เมืองจำนงค์\\
+BLEGS Quadruped Robot Project}
+
+\date{2 มกราคม 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{บทนำ (Introduction)}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+Phase 4.2 มีวัตถุประสงค์เพื่อบูรณาการระบบควบคุมที่ออกแบบใน Phase 4.1 เข้ากับฮาร์ดแวร์จริง รวมถึงการพัฒนาระบบสื่อสาร การทดสอบการทำงานของมอเตอร์ และการแก้ไขปัญหาที่พบในระหว่างการทดสอบ
+
+\subsection{ขอบเขตการศึกษา}
+\begin{itemize}
+    \item การพัฒนา Binary Communication Protocol v1.1
+    \item การบูรณาการ Motor Controller (MCU) กับ PC
+    \item การทดสอบระบบควบคุมด้วยขาเดียว (Single Leg Testing)
+    \item การแก้ไขปัญหา Motor Jitter และ Communication errors
+    \item การบันทึกและวิเคราะห์ข้อมูล Motor feedback
+    \item การเตรียมความพร้อมสำหรับ Quadruped scaling
+\end{itemize}
+
+\subsection{ความเชื่อมโยงกับ Phase ก่อนหน้า}
+Phase 4.2 ต่อยอดจาก Phase 4.1 โดยนำระบบควบคุมที่ออกแบบไปใช้จริงบนฮาร์ดแวร์:
+\begin{itemize}
+    \item ใช้ Controller design และ Trajectory generator จาก Phase 4.1
+    \item ใช้ Binary Protocol ที่ออกแบบใน Phase 4.1
+    \item ทดสอบกับมอเตอร์ที่เลือกจาก Phase 2.2 (5 N·m BLDC)
+\end{itemize}
+
+%=============================================================================
+\section{สถาปัตยกรรมระบบ (System Architecture)}
+%=============================================================================
+
+\subsection{ภาพรวมระบบ}
+
+ระบบควบคุมหุ่นยนต์สี่ขาประกอบด้วยส่วนประกอบหลัก 3 ส่วน:
+
+\begin{enumerate}
+    \item \textbf{PC (High-Level Control):}
+    \begin{itemize}
+        \item Gait pattern generation
+        \item Inverse Kinematics calculation
+        \item Trajectory planning
+        \item User interface และ Data logging
+    \end{itemize}
+    
+    \item \textbf{Motor Controller (MCU):}
+    \begin{itemize}
+        \item Low-level motor control (FOC - Field Oriented Control)
+        \item Position/Velocity/Current control loops
+        \item Encoder reading และ State estimation
+        \item Communication protocol handling
+    \end{itemize}
+    
+    \item \textbf{BLDC Motors (8 units):}
+    \begin{itemize}
+        \item Actuators สำหรับขาทั้ง 4 ข้าง (2 motors/leg)
+        \item Built-in encoders (14-bit magnetic encoder)
+        \item Rated torque: 5 N·m
+        \item Maximum speed: 300 RPM
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Communication Flow}
+
+\begin{tikzpicture}[
+    node distance=2cm,
+    block/.style={rectangle, draw, fill=blue!20, text width=6em, text centered, rounded corners, minimum height=3em},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Nodes
+    \node [block] (gait) {Gait Generator};
+    \node [block, below of=gait] (ik) {Inverse Kinematics};
+    \node [block, below of=ik] (protocol) {Binary Protocol};
+    \node [block, right of=protocol, xshift=3cm] (mcu) {MCU Controller};
+    \node [block, below of=mcu] (motor) {BLDC Motor};
+    \node [block, left of=motor, xshift=-3cm] (feedback) {Data Logger};
+    
+    % Arrows
+    \draw [arrow] (gait) -- node[right] {$P_F(t)$} (ik);
+    \draw [arrow] (ik) -- node[right] {$\theta(t)$} (protocol);
+    \draw [arrow] (protocol) -- node[above] {Serial} (mcu);
+    \draw [arrow] (mcu) -- node[right] {PWM} (motor);
+    \draw [arrow] (motor) -- node[below] {Encoder} (mcu);
+    \draw [arrow] (mcu) -- node[above] {Feedback} (feedback);
+    \draw [arrow] (feedback) -- (protocol);
+\end{tikzpicture}
+
+%=============================================================================
+\section{Binary Communication Protocol v1.1}
+%=============================================================================
+
+\subsection{ข้อกำหนดของโปรโตคอล}
+
+\subsubsection{ความต้องการ (Requirements)}
+\begin{itemize}
+    \item \textbf{Efficiency:} ส่งข้อมูลได้เร็ว (Low latency)
+    \item \textbf{Reliability:} ต้องมีการตรวจสอบความถูกต้อง (Error detection)
+    \item \textbf{Scalability:} รองรับมอเตอร์ได้หลายตัว (8+ motors)
+    \item \textbf{Real-time:} Update rate ≥ 100 Hz
+    \item \textbf{Bidirectional:} รับ-ส่งข้อมูลได้ทั้งสองทาง
+\end{itemize}
+
+\subsubsection{พารามิเตอร์การสื่อสาร}
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่า} \\
+\midrule
+Baud Rate & 921600 baud \\
+Data Bits & 8 bits \\
+Parity & None \\
+Stop Bits & 1 bit \\
+Flow Control & None \\
+Packet Size (Command) & 9 bytes \\
+Packet Size (Response) & 17 bytes \\
+CRC Algorithm & CRC-16-CCITT \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์การสื่อสาร Serial}
+\end{table}
+
+\subsection{โครงสร้าง Packet}
+
+\subsubsection{Command Packet (คอมพิวเตอร์ส่งไปยังไมโครคอนโทรลเลอร์)}
+
+คำสั่งที่ส่งจาก PC ไปยัง Motor Controller มีโครงสร้างดังนี้:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccp{6cm}}
+\toprule
+\textbf{Byte} & \textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+0 & Header & uint8 & 0xAA - Start marker \\
+1 & Command & uint8 & Command ID (0x01-0x06) \\
+2 & Motor ID & uint8 & Motor index (1-8) \\
+3-6 & Position & float32 & Target position (degrees) \\
+7-8 & CRC-16 & uint16 & Checksum (little-endian) \\
+\bottomrule
+\end{tabular}
+\caption{โครงสร้าง Command Packet}
+\end{table}
+
+\textbf{หมายเหตุ:} float32 ใช้ IEEE 754 format, little-endian byte order
+
+\subsubsection{Response Packet (ไมโครคอนโทรลเลอร์ตอบกลับไปยังคอมพิวเตอร์)}
+
+ข้อมูล feedback ที่ส่งกลับจาก Motor Controller:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccp{5.5cm}}
+\toprule
+\textbf{Byte} & \textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+0 & Header & uint8 & 0xBB - Response marker \\
+1 & Motor ID & uint8 & Motor index (1-8) \\
+2-5 & Current Pos & float32 & Current position (degrees) \\
+6-9 & Current Vel & float32 & Current velocity (deg/s) \\
+10-13 & Current & float32 & Motor current (A) \\
+14 & Status & uint8 & Status flags (bit field) \\
+15-16 & CRC-16 & uint16 & Checksum (little-endian) \\
+\bottomrule
+\end{tabular}
+\caption{โครงสร้าง Response Packet}
+\end{table}
+
+\subsection{Status Flags}
+
+Byte 14 (Status) เป็น bit field ที่บอกสถานะของมอเตอร์:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clp{7cm}}
+\toprule
+\textbf{Bit} & \textbf{Flag} & \textbf{Description} \\
+\midrule
+0 & ENABLED & 1 = Motor enabled, 0 = Motor disabled \\
+1 & IN\_POSITION & 1 = Reached target position (error < 1°) \\
+2 & OVER\_CURRENT & 1 = Current limit exceeded \\
+3 & OVER\_TEMP & 1 = Temperature warning (> 80°C) \\
+4 & ENCODER\_ERROR & 1 = Encoder reading error \\
+5 & COMM\_ERROR & 1 = Communication error (CRC mismatch) \\
+6-7 & RESERVED & Reserved for future use \\
+\bottomrule
+\end{tabular}
+\caption{Status Flags Definition}
+\end{table}
+
+\subsection{Command Types}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clp{7cm}}
+\toprule
+\textbf{ID} & \textbf{Command} & \textbf{Description} \\
+\midrule
+0x01 & SET\_POSITION & ส่งคำสั่งตำแหน่งเป้าหมายไปยังมอเตอร์ \\
+0x02 & GET\_FEEDBACK & ขอข้อมูล feedback จากมอเตอร์ (position, velocity, current) \\
+0x03 & ENABLE\_MOTOR & เปิดใช้งานมอเตอร์ (Enable torque output) \\
+0x04 & DISABLE\_MOTOR & ปิดใช้งานมอเตอร์ (Disable torque, free-wheel) \\
+0x05 & SET\_ZERO & ตั้งตำแหน่งปัจจุบันเป็นศูนย์ (Calibration) \\
+0x06 & EMERGENCY\_STOP & หยุดฉุกเฉิน (Stop all motors immediately) \\
+\bottomrule
+\end{tabular}
+\caption{รายการ Command Types}
+\end{table}
+
+\subsection{การจัดการ Error}
+
+\subsubsection{CRC-16 Checksum}
+
+ใช้ CRC-16-CCITT (Polynomial 0x1021) เพื่อตรวจจับความผิดพลาด:
+
+\begin{lstlisting}[language=Python, caption=CRC-16 Calculation]
+def crc16_ccitt(data):
+    """Calculate CRC-16-CCITT checksum"""
+    crc = 0xFFFF
+    polynomial = 0x1021
+    
+    for byte in data:
+        crc ^= (byte << 8)
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ polynomial) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    
+    return crc
+\end{lstlisting}
+
+\subsubsection{Timeout Protection}
+
+เมื่อไม่ได้รับ Response ภายใน Timeout period ระบบจะดำเนินการดังนี้:
+
+\begin{itemize}
+    \item \textbf{Timeout period:} 100 ms เป็นเวลาสูงสุดที่รอก่อนจะถือว่าไม่ได้รับ Response
+    \item \textbf{Action:} ทำการ Retry สูงสุด 3 ครั้ง โดยมีการหน่วงเวลา 10 ms ระหว่างแต่ละครั้ง
+    \item \textbf{Fallback:} ถ้า retry ครบ 3 ครั้งแล้วยังไม่สำเร็จ ระบบจะสั่ง Emergency stop เพื่อความปลอดภัย
+\end{itemize}
+
+\subsubsection{Packet Loss Recovery}
+
+ขั้นตอนการกู้คืนเมื่อเกิดการสูญหาย Packet:
+
+\begin{enumerate}
+    \item \textbf{ตรวจสอบ CRC:} เมื่อได้รับ Packet ใหม่ ตรวจสอบ CRC ก่อนดำเนินการต่อ
+    \item \textbf{จัดการ CRC Mismatch:} ถ้า CRC ไม่ตรงกัน ให้ทิ้ง Packet ที่เสียหายและขอส่งใหม่
+    \item \textbf{บันทึก Error:} เก็บข้อมูล Error rate สำหรับการวิเคราะห์และปรับปรุงระบบ
+\end{enumerate}
+
+%=============================================================================
+\section{การทดสอบขาเดียว (Single Leg Testing)}
+%=============================================================================
+
+\subsection{การติดตั้งฮาร์ดแวร์}
+
+\subsubsection{อุปกรณ์ที่ใช้}
+\begin{itemize}
+    \item \textbf{Motor:} 2 units BLDC 5 N·m (Thigh motor + Shank motor)
+    \item \textbf{Motor Controller:} Custom MCU board (STM32-based)
+    \item \textbf{Power Supply:} 24V DC, 10A
+    \item \textbf{PC:} Python control software
+    \item \textbf{USB-to-Serial:} CH340G @ 921600 baud
+\end{itemize}
+
+\subsubsection{การเชื่อมต่อ}
+\begin{verbatim}
+PC (Python) <--USB--> USB-to-Serial <--UART--> MCU <--3-phase PWM--> Motors
+\end{verbatim}
+
+\subsection{ขั้นตอนการทดสอบ}
+
+\subsubsection{Phase 1: Hardware Verification}
+\begin{enumerate}
+    \item ตรวจสอบการเชื่อมต่อสาย Power และ Signal
+    \item ทดสอบ Serial communication (Echo test)
+    \item Calibrate มอเตอร์ (SET\_ZERO command)
+    \item ทดสอบคำสั่งพื้นฐาน (ENABLE, DISABLE, SET\_POSITION)
+\end{enumerate}
+
+\subsubsection{Phase 2: Position Control Testing}
+\begin{enumerate}
+    \item ส่งคำสั่งตำแหน่งคงที่ (Static position)
+    \item ทดสอบความแม่นยำ (Position error measurement)
+    \item ทดสอบ Repeatability (10 รอบ)
+    \item บันทึกข้อมูล feedback
+\end{enumerate}
+
+\subsubsection{Phase 3: Trajectory Tracking}
+\begin{enumerate}
+    \item สร้าง Simple sinusoidal trajectory
+    \item ทดสอบ Trajectory tracking @ 50 Hz
+    \item เพิ่ม Update rate เป็น 100 Hz
+    \item วิเคราะห์ Tracking error
+\end{enumerate}
+
+\subsubsection{Phase 4: Gait Pattern Testing}
+\begin{enumerate}
+    \item ใช้ Elliptical trajectory (60×30 mm)
+    \item ทดสอบ 1 cycle (600 ms)
+    \item ทดสอบ Continuous gait (341+ cycles)
+    \item บันทึกข้อมูล Motor feedback ทุกรอบ
+\end{enumerate}
+
+\subsection{ผลการทดสอบ}
+
+\subsubsection{Hardware Verification Results}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Test Item} & \textbf{Result} & \textbf{Status} \\
+\midrule
+Serial Communication & 921600 baud stable & \checkmark PASS \\
+CRC Error Rate & $< 0.1$\% & \checkmark PASS \\
+Motor Calibration & Zero position set & \checkmark PASS \\
+Enable/Disable & Responsive & \checkmark PASS \\
+Emergency Stop & < 50 ms response & \checkmark PASS \\
+\bottomrule
+\end{tabular}
+\caption{ผลการทดสอบฮาร์ดแวร์พื้นฐาน}
+\end{table}
+
+\subsubsection{Position Control Accuracy}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Motor A} & \textbf{Motor B} \\
+\midrule
+Mean Error & $0.8$ deg & $0.9$ deg \\
+RMS Error & $1.5$ deg & $1.7$ deg \\
+Max Error & $4.2$ deg & $4.8$ deg \\
+Repeatability & $\pm 0.5$ deg & $\pm 0.6$ deg \\
+Settling Time & $80$ ms & $75$ ms \\
+\bottomrule
+\end{tabular}
+\caption{ความแม่นยำการควบคุมตำแหน่ง}
+\end{table}
+
+\subsubsection{Gait Pattern Testing Results}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Test Parameter} & \textbf{Result} \\
+\midrule
+Total Test Duration & 205 seconds \\
+Total Cycles Completed & 341+ cycles \\
+Successful Cycles & 327-337 cycles \\
+Success Rate & 96-99\% \\
+Average Cycle Time & 601 ms (target: 600 ms) \\
+Communication Errors & $< 1$\% \\
+Position Error (RMS) & $< 2$ degrees \\
+Maximum Current Draw & 3.2 A (peak) \\
+Average Current Draw & 1.1 A \\
+Motor Temperature & 45-52°C \\
+\midrule
+\textbf{Overall Status} & \checkmark \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{ผลการทดสอบ Gait Pattern ต่อเนื่อง}
+\end{table}
+
+%=============================================================================
+\section{ปัญหาและการแก้ไข (Problems and Solutions)}
+%=============================================================================
+
+\subsection{ปัญหา Motor Jitter}
+
+\subsubsection{ลักษณะอาการ}
+\begin{itemize}
+    \item มอเตอร์สั่นเล็กน้อยเมื่อรับคำสั่งตำแหน่งใหม่
+    \item เสียงดัง (ความถี่สูง ~200 Hz)
+    \item Current draw เพิ่มขึ้นแบบ spike
+    \item อุณหภูมิมอเตอร์สูงขึ้น (~10°C)
+\end{itemize}
+
+\subsubsection{การวินิจฉัยสาเหตุ}
+
+\textbf{ทดสอบที่ 1: ลด Update Rate}
+
+ทำการทดสอบโดยปรับ Update rate เป็น 3 ระดับและสังเกตผลกระทบต่อ Jitter:
+\begin{itemize}
+    \item ทดสอบ 50 Hz: Jitter ลดลง 50\% แต่ความเร็วในการอัพเดตตำแหน่งต่ำเกินไป
+    \item ทดสอบ 100 Hz: Jitter ลดลง 30\% เป็นค่าที่สมดุลระหว่างความเร็วและความนุ่มนวล
+    \item ทดสอบ 200 Hz: Jitter รุนแรงมาก มอเตอร์สั่นอย่างรุนแรง
+\end{itemize}
+
+\textbf{สรุปการวินิจฉัย:} Update rate ที่สูงเกินไปทำให้มอเตอร์ไม่ทันตอบสนองต่อคำสั่งตำแหน่งใหม่ที่เข้ามาอย่างรวดเร็ว ทำให้เกิด Oscillation ระหว่างตำแหน่งเป้าหมายและตำแหน่งจริง
+
+\textbf{ทดสอบที่ 2: วิเคราะห์ Trajectory}
+
+ทำการวิเคราะห์ Trajectory ที่สร้างขึ้นพบว่า:
+\begin{itemize}
+    \item Trajectory มี Discontinuity (กระโดด) ในบางจุด
+    \item ความเร่งเปลี่ยนแปลงแบบ step change ที่เปลี่ยนกะทันหัน
+    \item Jerk สูง (คืออัตราการเปลี่ยนแปลงของความเร่ง) ทำให้การเคลื่อนที่ไม่นุ่มนวล
+\end{itemize}
+
+\textbf{สรุปการวินิจฉัย:} Trajectory ที่ไม่นุ่มนวลพอทำให้มอเตอร์พยายามติดตามการเปลี่ยนแปลงตำแหน่งที่กระโดด ซึ่งเกินความสามารถของมอเตอร์ ทำให้เกิด Jitter
+
+\subsubsection{วิธีแก้ไข}
+
+\textbf{Solution 1: ปรับ Update Rate}
+
+ลด Update rate จาก 200 Hz ลงเป็น 100 Hz ซึ่งเป็นค่าที่เหมาะสมกับความสามารถในการตอบสนองของมอเตอร์
+
+\textbf{ผลลัพธ์:} Jitter ลดลงประมาณ 30\%
+
+\textbf{Solution 2: Trajectory Smoothing}
+\begin{lstlisting}[language=Python, caption=Trajectory Smoothing]
+def smooth_trajectory(trajectory, window_size=5):
+    """Apply moving average filter"""
+    smoothed = np.convolve(
+        trajectory, 
+        np.ones(window_size)/window_size, 
+        mode='same'
+    )
+    return smoothed
+
+# Apply smoothing
+x_smooth = smooth_trajectory(x_trajectory, window_size=5)
+y_smooth = smooth_trajectory(y_trajectory, window_size=5)
+\end{lstlisting}
+
+ผล: Jitter ลดลง ~40\%
+
+\textbf{Solution 3: Motor Parameter Tuning (MCU Firmware)}
+
+ปรับจูนพารามิเตอร์ PID controller ในมอเตอร์:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Parameter} & \textbf{Before} & \textbf{After} & \textbf{Change} \\
+\midrule
+Position P-Gain & 50 & 30 & -40\% \\
+Position I-Gain & 10 & 5 & -50\% \\
+Position D-Gain & 20 & 15 & -25\% \\
+Velocity Feedforward & 0.0 & 0.3 & +0.3 \\
+Current Limit & 10 A & 8 A & -20\% \\
+\bottomrule
+\end{tabular}
+\caption{การปรับจูนพารามิเตอร์มอเตอร์}
+\end{table}
+
+ผล: Jitter ลดลง ~60\%
+
+\subsubsection{ผลลัพธ์รวม}
+
+หลังจากใช้ทั้ง 3 solutions ร่วมกัน พบว่าปัญหา Motor Jitter ลดลงอย่างมาก:
+\begin{itemize}
+    \item Jitter ลดลงประมาณ 90\% มอเตอร์ทำงานได้เสถียรมากขึ้น
+    \item เสียงเบาลงมาก แทบไม่ได้ยินเสียงสั่นความถี่สูง
+    \item Current draw ลดลงประมาณ 25\% ทำให้ประหยัดพลังงานได้
+    \item อุณหภูมิมอเตอร์ลดลง 8-10°C ซึ่งอยู่ในเกณฑ์ที่ปลอดภัย
+    \item Success rate เพิ่มขึ้นจาก 85\% เป็น 96-99\% ซึ่งเกินเป้าหมายที่ตั้งไว้
+\end{itemize}
+
+\subsection{ปัญหา Communication Timeout}
+
+\subsubsection{ลักษณะอาการ}
+\begin{itemize}
+    \item บางครั้งไม่ได้รับ Response packet จากมอเตอร์
+    \item เกิด Timeout error ~3-5\% ของ commands
+    \item มอเตอร์หยุดเคลื่อนที่ชั่วคราว
+\end{itemize}
+
+\subsubsection{สาเหตุ}
+\begin{enumerate}
+    \item \textbf{Serial Buffer Overflow:} MCU ไม่ทันประมวลผล packet
+    \item \textbf{CRC Mismatch:} Noise บนสาย serial
+    \item \textbf{Busy MCU:} MCU ทำงานหนักเกินไป (Motor control + Communication)
+\end{enumerate}
+
+\subsubsection{วิธีแก้ไข}
+
+\textbf{Solution 1: Increase Serial Buffer Size (MCU)}
+
+เพิ่มขนาด Buffer ของ MCU เพื่อรองรับการรับส่งข้อมูลจำนวนมาก:
+\begin{itemize}
+    \item เพิ่ม RX buffer จาก 64 bytes เป็น 256 bytes (4 เท่า)
+    \item เพิ่ม TX buffer จาก 64 bytes เป็น 256 bytes (4 เท่า)
+\end{itemize}
+
+การเพิ่ม Buffer ทำให้ MCU มีพื้นที่ในการเก็บข้อมูลมากขึ้น ลดความเสี่ยงของ Buffer overflow
+
+\textbf{Solution 2: Optimize MCU Firmware}
+\begin{itemize}
+    \item ใช้ DMA (Direct Memory Access) สำหรับ Serial communication
+    \item ลด Priority ของ Communication interrupt
+    \item เพิ่ม Priority ของ Motor control interrupt
+\end{itemize}
+
+\textbf{Solution 3: Add Retry Logic (PC Side)}
+\begin{lstlisting}[language=Python, caption=Retry Logic]
+def send_command_with_retry(motor_id, position, max_retries=3):
+    """Send command with automatic retry"""
+    for attempt in range(max_retries):
+        try:
+            response = send_command(motor_id, position)
+            if verify_crc(response):
+                return response
+        except TimeoutError:
+            print(f"Retry {attempt+1}/{max_retries}")
+            time.sleep(0.01)  # 10ms delay
+    
+    raise CommunicationError("Max retries exceeded")
+\end{lstlisting}
+
+\subsubsection{ผลลัพธ์}
+
+หลังจากแก้ปัญหา Communication Timeout พบว่าประสิทธิภาพการสื่อสารดีขึ้นอย่างมาก:
+\begin{itemize}
+    \item Timeout rate ลดลงจาก 3-5\% เป็นน้อยกว่า 1\% ซึ่งอยู่ในเกณฑ์ที่ยอมรับได้
+    \item Communication เสถียรขึ้น ไม่พบปัญหาการขาดการสื่อสารในระหว่างทดสอบ
+    \item ไม่พบ Buffer overflow อีกต่อไป
+\end{itemize}
+
+%=============================================================================
+\section{Data Logging และการวิเคราะห์}
+%=============================================================================
+
+\subsection{ระบบบันทึกข้อมูล}
+
+\subsubsection{ข้อมูลที่บันทึก}
+\begin{itemize}
+    \item \textbf{Timestamp:} เวลา (ms) ตั้งแต่เริ่มทดสอบ
+    \item \textbf{Motor ID:} หมายเลขมอเตอร์ (1-8)
+    \item \textbf{Target Position:} ตำแหน่งเป้าหมาย (degrees)
+    \item \textbf{Actual Position:} ตำแหน่งจริงจาก Encoder (degrees)
+    \item \textbf{Velocity:} ความเร็วของมอเตอร์ (deg/s)
+    \item \textbf{Current:} กระแสไฟฟ้า (A)
+    \item \textbf{Status Flags:} สถานะของมอเตอร์
+\end{itemize}
+
+\subsubsection{รูปแบบไฟล์ CSV}
+
+\begin{lstlisting}[caption=ตัวอย่างไฟล์ motor\_feedback\_20260101\_175601.csv]
+timestamp,motor_id,target_pos,actual_pos,velocity,current,status
+0.010,1,-45.23,-45.18,2.3,0.8,0x03
+0.020,2,-120.56,-120.51,-1.2,0.6,0x03
+0.030,1,-45.67,-45.62,3.1,0.9,0x03
+...
+\end{lstlisting}
+
+\subsection{การวิเคราะห์ข้อมูล}
+
+\subsubsection{Script วิเคราะห์}
+
+มี Python script สำหรับวิเคราะห์ข้อมูล: \texttt{scripts/analysis/Plot\_Motor\_Log.py}
+
+\textbf{คุณสมบัติ:}
+\begin{itemize}
+    \item Plot Position tracking (Target vs Actual)
+    \item Plot Position error over time
+    \item Plot Velocity profile
+    \item Plot Current consumption
+    \item คำนวณ Statistics (Mean, RMS, Max error)
+\end{itemize}
+
+\subsubsection{ผลการวิเคราะห์}
+
+\textbf{Position Tracking Performance:}
+\begin{itemize}
+    \item Mean error: 0.8-0.9 degrees
+    \item RMS error: 1.5-1.7 degrees
+    \item Max error: 4.2-4.8 degrees
+    \item Settling time: 75-80 ms
+\end{itemize}
+
+\textbf{Power Consumption:}
+\begin{itemize}
+    \item Average current: 1.1 A (per motor)
+    \item Peak current: 3.2 A (during acceleration)
+    \item Average power: 26.4 W (@ 24V)
+    \item Total power (2 motors): ~50-60 W
+\end{itemize}
+
+\textbf{Thermal Performance:}
+\begin{itemize}
+    \item Steady-state temperature: 45-52°C
+    \item Ambient temperature: 25-28°C
+    \item Temperature rise: ~20-25°C
+    \item Thermal limit: 80°C (Warning threshold)
+\end{itemize}
+
+%=============================================================================
+\section{การเตรียมความพร้อมสำหรับ Quadruped}
+%=============================================================================
+
+\subsection{ข้อควรพิจารณา}
+
+\subsubsection{Scaling Challenges}
+เมื่อขยายจาก 1 ขา (2 motors) เป็น 4 ขา (8 motors):
+
+\begin{enumerate}
+    \item \textbf{Communication Bandwidth:}
+    \begin{itemize}
+        \item 1 ขา @ 100 Hz = 100 commands/s × 2 motors = 200 packets/s
+        \item 4 ขา @ 100 Hz = 800 packets/s
+        \item Bandwidth required: 800 × (9+17) bytes = 20.8 KB/s
+        \item Available @ 921600 baud: ~115 KB/s
+        \item Margin: ~80\% (เพียงพอ)
+    \end{itemize}
+    
+    \item \textbf{Processing Power (PC):}
+    \begin{itemize}
+        \item IK calculation: 8 motors × 100 Hz = 800 IK/s
+        \item คำนวณเวลา: ~0.1 ms/IK
+        \item รวม: ~80 ms/s (8\% CPU load)
+    \end{itemize}
+    
+    \item \textbf{Synchronization:}
+    \begin{itemize}
+        \item ต้องส่งคำสั่งไปยัง 8 motors พร้อมกัน
+        \item Latency ต้องไม่เกิน 1-2 ms ระหว่างมอเตอร์
+        \item ต้องใช้ Multi-threading หรือ Async I/O
+    \end{itemize}
+\end{enumerate}
+
+\subsection{ข้อเสนอแนะสำหรับ Phase 5}
+
+\subsubsection{Motor Indexing System}
+\begin{table}[H]
+\centering
+\begin{tabular}{cccc}
+\toprule
+\textbf{Leg} & \textbf{Position} & \textbf{Thigh Motor} & \textbf{Shank Motor} \\
+\midrule
+FL & Front-Left & Motor 1 & Motor 2 \\
+FR & Front-Right & Motor 3 & Motor 4 \\
+RL & Rear-Left & Motor 5 & Motor 6 \\
+RR & Rear-Right & Motor 7 & Motor 8 \\
+\bottomrule
+\end{tabular}
+\caption{Motor Indexing Scheme}
+\end{table}
+
+\subsubsection{Mirror Kinematics}
+
+ขาซ้ายและขาขวามี Kinematics สมมาตร:
+\begin{itemize}
+    \item \textbf{Left legs (FL, RL):} Motor A ที่ $x = -42.5$ mm, Motor B ที่ $x = +42.5$ mm
+    \item \textbf{Right legs (FR, RR):} Motor A ที่ $x = +42.5$ mm, Motor B ที่ $x = -42.5$ mm (Mirrored)
+\end{itemize}
+
+Trajectory transformation:
+\begin{equation}
+    \mathbf{P}_{F,right}(x, y) = \mathbf{P}_{F,left}(-x, y)
+\end{equation}
+
+\subsubsection{Multi-Motor Communication}
+
+ใช้ Threading สำหรับ Parallel communication:
+
+\begin{lstlisting}[language=Python, caption=Multi-Motor Control]
+import threading
+
+def control_motor_pair(motor_pair_id, trajectory):
+    """Control 2 motors (1 leg) in parallel"""
+    motor_A_id = motor_pair_id * 2 + 1
+    motor_B_id = motor_pair_id * 2 + 2
+    
+    for point in trajectory:
+        theta_A, theta_B = calculate_ik(point)
+        send_command(motor_A_id, theta_A)
+        send_command(motor_B_id, theta_B)
+        time.sleep(0.01)  # 100 Hz
+
+# Create 4 threads (1 per leg)
+threads = []
+for leg_id in range(4):
+    t = threading.Thread(
+        target=control_motor_pair,
+        args=(leg_id, trajectory[leg_id])
+    )
+    threads.append(t)
+    t.start()
+
+# Wait for all threads
+for t in threads:
+    t.join()
+\end{lstlisting}
+
+%=============================================================================
+\section{สรุปและข้อเสนอแนะ (Conclusion and Recommendations)}
+%=============================================================================
+
+\subsection{สรุปผลการพัฒนา}
+
+Phase 4.2 ประสบความสำเร็จในการบูรณาการฮาร์ดแวร์และระบบควบคุม:
+
+\begin{itemize}
+    \item[\checkmark] \textbf{Binary Protocol v1.1:} พัฒนาและทดสอบสำเร็จ (Success rate 96-99\%)
+    \item[\checkmark] \textbf{Single Leg Testing:} ทดสอบ 341+ cycles ได้สำเร็จ
+    \item[\checkmark] \textbf{Motor Jitter:} แก้ไขและลดลง ~90\%
+    \item[\checkmark] \textbf{Communication Stability:} Error rate $< 1$\%
+    \item[\checkmark] \textbf{Data Logging:} ระบบบันทึกและวิเคราะห์ข้อมูลสมบูรณ์
+\end{itemize}
+
+\subsection{ผลการทดสอบโดยรวม}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Target} & \textbf{Achieved} \\
+\midrule
+Position Accuracy (RMS) & $< 3$ deg & $< 2$ deg \\
+Update Rate & $\geq 50$ Hz & 100 Hz \\
+Success Rate & $> 90$\% & 96-99\% \\
+Communication Error & $< 5$\% & $< 1$\% \\
+Motor Temperature & $< 80$°C & 45-52°C \\
+Current Draw & $< 5$ A & 3.2 A (peak) \\
+\midrule
+\textbf{Overall Status} & & \checkmark \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{สรุปผลการทดสอบเทียบกับเป้าหมาย}
+\end{table}
+
+\subsection{บทเรียนที่ได้รับ}
+
+\begin{enumerate}
+    \item \textbf{Update Rate Optimization:}
+    \begin{itemize}
+        \item 100 Hz เหมาะสมที่สุด (Balance ระหว่างความเร็วและเสถียรภาพ)
+        \item 200 Hz สูงเกินไป (เกิด Motor jitter)
+        \item 50 Hz ต่ำเกินไป (Trajectory tracking ไม่ดี)
+    \end{itemize}
+    
+    \item \textbf{Trajectory Smoothing มีความสำคัญ:}
+    \begin{itemize}
+        \item Moving average filter ช่วยลด Jitter ได้ ~40\%
+        \item S-Curve profiling ลด Jerk และแรงกระแทก
+        \item Continuous trajectory ดีกว่า Discrete waypoints
+    \end{itemize}
+    
+    \item \textbf{Motor Parameter Tuning:}
+    \begin{itemize}
+        \item Position P-gain ต้องไม่สูงเกินไป (เกิด Oscillation)
+        \item Velocity Feedforward ช่วยลด Tracking error
+        \item Current limit ป้องกัน Overshoot
+    \end{itemize}
+    
+    \item \textbf{Communication Reliability:}
+    \begin{itemize}
+        \item CRC-16 จำเป็นมาก (ตรวจจับ Error ได้)
+        \item Retry logic ช่วยเพิ่มความเสถียร
+        \item DMA และ Buffer size มีผลต่อประสิทธิภาพ
+    \end{itemize}
+\end{enumerate}
+
+\subsection{ข้อเสนอแนะสำหรับการพัฒนาต่อไป}
+
+\subsubsection{Phase 5.1: Quadruped Scaling}
+\begin{itemize}
+    \item พัฒนา Motor indexing system (8 motors)
+    \item ออกแบบ Mirror kinematics สำหรับขาซ้าย-ขวา
+    \item ทดสอบ Multi-motor synchronization
+    \item พัฒนา Gait pattern coordination
+\end{itemize}
+
+\subsubsection{Phase 5.2: Gait Tuning \& Optimization}
+\begin{itemize}
+    \item ทดสอบ Gait modes ต่างๆ (Trot, Walk, Crawl)
+    \item พัฒนา Asymmetric trajectory generation
+    \item ปรับจูนพารามิเตอร์ (Step length, Lift height, Cycle time)
+    \item ทดสอบการเดินบนพื้นจริง
+\end{itemize}
+
+\subsubsection{Phase 6: Sensor Feedback (Future Work)}
+\begin{itemize}
+    \item ติดตั้ง IMU sensor (BNO086)
+    \item พัฒนา Balance controller ด้วย PD control
+    \item ชดเชยท่าทางการเดินด้วย Sensor feedback
+    \item ทดสอบบนพื้นเอียงและพื้นไม่เรียบ
+\end{itemize}
+
+%=============================================================================
+\section{เอกสารอ้างอิง (References)}
+%=============================================================================
+
+\begin{enumerate}
+    \item Phase 4.1: Controller Design - BLEGS Analysis Unit
+    \item Phase 3.1: Gait Control Simulation - BLEGS Analysis Unit
+    \item Binary Communication Protocols for Embedded Systems
+    \item CRC-16-CCITT Checksum Standard (ITU-T Recommendation V.41)
+    \item BLDC Motor Control and FOC Algorithms
+    \item Real-time Serial Communication Best Practices
+    \item Motor Control Parameter Tuning Guidelines
+    \item Data Logging and Analysis for Robotics Systems
+\end{enumerate}
+
+\end{document}

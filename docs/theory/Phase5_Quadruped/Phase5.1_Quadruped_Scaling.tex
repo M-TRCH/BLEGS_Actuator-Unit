@@ -1,0 +1,814 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\newfontfamily\thaifonttt{TH SarabunPSK}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+% Title
+\title{\textbf{Phase 5.1: Quadruped Scaling}\\
+\large การขยายระบบจากขาเดียวเป็นหุ่นยนต์สี่ขาแบบสมบูรณ์\\
+BLEGS Analysis Unit}
+
+\author{นายธีรโชติ เมืองจำนงค์\\
+BLEGS Quadruped Robot Project}
+
+\date{2 มกราคม 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{บทนำ (Introduction)}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+Phase 5.1 มีวัตถุประสงค์เพื่อขยายระบบควบคุมจากขาเดียว (Single Leg) เป็นหุ่นยนต์สี่ขาแบบสมบูรณ์ (Full Quadruped) โดยพัฒนาระบบ Motor indexing, Mirror kinematics สำหรับขาซ้าย-ขวา และ Multi-leg synchronization เพื่อให้หุ่นยนต์สามารถเดินได้จริงบนฮาร์ดแวร์
+
+\subsection{ขอบเขตการศึกษา}
+\begin{itemize}
+    \item การออกแบบระบบ Motor Indexing สำหรับ 8 มอเตอร์
+    \item การพัฒนา Mirror Kinematics สำหรับขาซ้าย-ขวา
+    \item การออกแบบ Gait Pattern สำหรับ Trot gait
+    \item การพัฒนา Multi-leg Synchronization ด้วย Threading
+    \item การทดสอบระบบ IK ทั้ง 4 ขา (Quadruped IK Testing)
+    \item การทดสอบหุ่นยนต์สี่ขาแบบสมบูรณ์บนฮาร์ดแวร์จริง
+\end{itemize}
+
+\subsection{ความเชื่อมโยงกับ Phase ก่อนหน้า}
+Phase 5.1 สร้างต่อจาก Phase 4.2 โดยนำระบบควบคุมขาเดียวมาขยายเป็น 4 ขา:
+\begin{itemize}
+    \item ใช้ Binary Protocol v1.1 จาก Phase 4.2
+    \item ใช้ Controller design และ Trajectory generator จาก Phase 4.1
+    \item ใช้ Gait pattern จากการจำลอง Phase 3.1
+    \item นำบทเรียนจากการแก้ Motor jitter มาปรับใช้ทั้ง 8 มอเตอร์
+\end{itemize}
+
+%=============================================================================
+\section{Motor Indexing System}
+%=============================================================================
+
+\subsection{ระบบการตั้งชื่อขา (Leg Naming Convention)}
+
+หุ่นยนต์สี่ขามีขาทั้งหมด 4 ข้าง ตั้งชื่อตามตำแหน่ง:
+
+\begin{itemize}
+    \item \textbf{FL (Front-Left):} ขาซ้ายหน้า
+    \item \textbf{FR (Front-Right):} ขาขวาหน้า
+    \item \textbf{RL (Rear-Left):} ขาซ้ายหลัง
+    \item \textbf{RR (Rear-Right):} ขาขวาหลัง
+\end{itemize}
+
+\subsection{Motor Indexing Scheme}
+
+แต่ละขามีมอเตอร์ 2 ตัว (Thigh และ Shank) รวมเป็น 8 มอเตอร์ ตั้งชื่อดังนี้:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Leg} & \textbf{Position} & \textbf{Thigh Motor} & \textbf{Shank Motor} & \textbf{Motor IDs} \\
+\midrule
+FL & Front-Left & Motor A & Motor B & 1, 2 \\
+FR & Front-Right & Motor A & Motor B & 3, 4 \\
+RL & Rear-Left & Motor A & Motor B & 5, 6 \\
+RR & Rear-Right & Motor A & Motor B & 7, 8 \\
+\bottomrule
+\end{tabular}
+\caption{Motor Indexing Scheme สำหรับหุ่นยนต์สี่ขา}
+\end{table}
+
+\subsection{การคำนวณ Motor ID}
+
+สูตรคำนวณ Motor ID จาก Leg index และ Joint type:
+
+\begin{align}
+    \text{Thigh Motor ID} &= 2 \times \text{Leg\_index} + 1 \\
+    \text{Shank Motor ID} &= 2 \times \text{Leg\_index} + 2
+\end{align}
+
+โดย Leg index คือหมายเลขประจำขาแต่ละข้าง และ Motor IDs คือรหัสมอเตอร์ที่คำนวณได้จากสูตรข้างต้น:
+\begin{itemize}
+    \item \textbf{FL (Leg index = 0):} คำนวณได้ Thigh Motor ID = $2 \times 0 + 1 = 1$ และ Shank Motor ID = $2 \times 0 + 2 = 2$ ดังนั้นขา FL ใช้ Motors 1 และ 2
+    \item \textbf{FR (Leg index = 1):} คำนวณได้ Thigh Motor ID = $2 \times 1 + 1 = 3$ และ Shank Motor ID = $2 \times 1 + 2 = 4$ ดังนั้นขา FR ใช้ Motors 3 และ 4
+    \item \textbf{RL (Leg index = 2):} คำนวณได้ Thigh Motor ID = $2 \times 2 + 1 = 5$ และ Shank Motor ID = $2 \times 2 + 2 = 6$ ดังนั้นขา RL ใช้ Motors 5 และ 6
+    \item \textbf{RR (Leg index = 3):} คำนวณได้ Thigh Motor ID = $2 \times 3 + 1 = 7$ และ Shank Motor ID = $2 \times 3 + 2 = 8$ ดังนั้นขา RR ใช้ Motors 7 และ 8
+\end{itemize}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Motor Indexing Helper Functions]
+class LegIndex:
+    """Leg index enumeration"""
+    FL = 0  # Front-Left
+    FR = 1  # Front-Right
+    RL = 2  # Rear-Left
+    RR = 3  # Rear-Right
+
+def get_motor_ids(leg_index):
+    """
+    Get motor IDs for a specific leg
+    
+    Parameters:
+    -----------
+    leg_index : int
+        Leg index (0-3)
+        
+    Returns:
+    --------
+    thigh_id : int
+        Thigh motor ID
+    shank_id : int
+        Shank motor ID
+    """
+    thigh_id = 2 * leg_index + 1
+    shank_id = 2 * leg_index + 2
+    return thigh_id, shank_id
+
+# Example usage
+fl_thigh, fl_shank = get_motor_ids(LegIndex.FL)  # Returns (1, 2)
+fr_thigh, fr_shank = get_motor_ids(LegIndex.FR)  # Returns (3, 4)
+\end{lstlisting}
+
+%=============================================================================
+\section{Mirror Kinematics}
+%=============================================================================
+
+\subsection{ความแตกต่างระหว่างขาซ้ายและขาขวา}
+
+กลไก 5-Bar Linkage ของขาซ้ายและขาขวามีความแตกต่างกัน:
+
+\subsubsection{Left Legs (FL, RL)}
+\begin{itemize}
+    \item \textbf{Motor A position:} $(-42.5, 0)$ mm
+    \item \textbf{Motor B position:} $(+42.5, 0)$ mm
+    \item \textbf{Coordinate frame:} Standard (same as Phase 1)
+\end{itemize}
+
+\subsubsection{Right Legs (FR, RR)}
+\begin{itemize}
+    \item \textbf{Motor A position:} $(+42.5, 0)$ mm (Mirrored)
+    \item \textbf{Motor B position:} $(-42.5, 0)$ mm (Mirrored)
+    \item \textbf{Coordinate frame:} X-axis flipped
+\end{itemize}
+
+\subsection{Trajectory Mirroring}
+
+เพื่อให้ขาขวาเคลื่อนที่สมมาตรกับขาซ้าย ต้องทำ Mirror transformation:
+
+\subsubsection{สมการ Mirroring}
+
+สำหรับ Trajectory $\mathbf{P}_F(x, y)$ ของขาซ้าย:
+
+\begin{equation}
+    \mathbf{P}_{F,right} = \begin{bmatrix} -x \\ y \end{bmatrix}
+\end{equation}
+
+\textbf{หมายเหตุ:} Mirror เฉพาะพิกัด X เท่านั้น (Y ไม่เปลี่ยน)
+
+\subsubsection{ตัวอย่าง}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccc}
+\toprule
+\textbf{Left Leg} & \textbf{Right Leg} & \textbf{Interpretation} \\
+\midrule
+$(+30, -200)$ & $(-30, -200)$ & ก้าวไปข้างหน้า (Forward) \\
+$(-30, -200)$ & $(+30, -200)$ & ก้าวไปข้างหลัง (Backward) \\
+$(0, -170)$ & $(0, -170)$ & ยกขาขึ้น (Lift) \\
+\bottomrule
+\end{tabular}
+\caption{ตัวอย่าง Trajectory Mirroring}
+\end{table}
+
+\subsection{IK Configuration สำหรับขาซ้าย-ขวา}
+
+การเลือก IK configuration ต้องพิจารณาความแตกต่างระหว่างขา:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cccc}
+\toprule
+\textbf{Leg Type} & \textbf{Motor Layout} & \textbf{IK Config} & \textbf{Elbow Direction} \\
+\midrule
+Left (FL, RL) & A=-42.5, B=+42.5 & Config 1 & Down-Down \\
+Right (FR, RR) & A=+42.5, B=-42.5 & Config 1 & Down-Down \\
+\bottomrule
+\end{tabular}
+\caption{IK Configuration สำหรับแต่ละขา}
+\end{table}
+
+\textbf{หมายเหตุ:} ใช้ Config 1 (Down-Down) ทั้งหมดเพราะ:
+\begin{itemize}
+    \item Torque สมดุล (จาก Phase 2.1)
+    \item มุมมอเตอร์อยู่ในช่วงปลอดภัย
+    \item Workspace กว้าง
+\end{itemize}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Mirror Kinematics Implementation]
+def mirror_trajectory_for_right_leg(trajectory_left):
+    """
+    Mirror trajectory from left leg to right leg
+    
+    Parameters:
+    -----------
+    trajectory_left : array (N, 2)
+        Trajectory for left leg [(x, y), ...]
+        
+    Returns:
+    --------
+    trajectory_right : array (N, 2)
+        Mirrored trajectory for right leg
+    """
+    trajectory_right = trajectory_left.copy()
+    trajectory_right[:, 0] = -trajectory_right[:, 0]  # Mirror X
+    return trajectory_right
+
+def calculate_ik_for_leg(leg_index, trajectory):
+    """
+    Calculate IK for a specific leg
+    
+    Parameters:
+    -----------
+    leg_index : int
+        Leg index (0-3: FL, FR, RL, RR)
+    trajectory : array (N, 2)
+        Foot trajectory [(x, y), ...]
+        
+    Returns:
+    --------
+    theta_A : array
+        Motor A angles (degrees)
+    theta_B : array
+        Motor B angles (degrees)
+    """
+    # Check if right leg (FR or RR)
+    if leg_index == LegIndex.FR or leg_index == LegIndex.RR:
+        # Mirror trajectory for right legs
+        trajectory = mirror_trajectory_for_right_leg(trajectory)
+    
+    # Calculate IK (Config 1 for all legs)
+    n_points = len(trajectory)
+    theta_A = np.zeros(n_points)
+    theta_B = np.zeros(n_points)
+    
+    for i in range(n_points):
+        P_F = trajectory[i]
+        theta_A[i], theta_B[i] = calculate_ik_analytical(P_F, config=1)
+    
+    return theta_A, theta_B
+\end{lstlisting}
+
+%=============================================================================
+\section{Gait Pattern Design}
+%=============================================================================
+
+\subsection{Trot Gait Pattern}
+
+Trot gait เป็น Gait pattern ที่เหมาะสำหรับหุ่นยนต์สี่ขา โดยมีลักษณะ:
+
+\begin{itemize}
+    \item \textbf{Diagonal pairs:} ขาทแยงมุมเคลื่อนที่พร้อมกัน
+    \item \textbf{Pair 1:} FR + RL (Front-Right + Rear-Left)
+    \item \textbf{Pair 2:} FL + RR (Front-Left + Rear-Right)
+    \item \textbf{Phase offset:} 180° (ครึ่งรอบ)
+\end{itemize}
+
+\subsection{Gait Timing}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ccccc}
+\toprule
+\textbf{Time} & \textbf{FL} & \textbf{FR} & \textbf{RL} & \textbf{RR} \\
+\midrule
+0 ms & Stance & Swing & Swing & Stance \\
+300 ms & Swing & Stance & Stance & Swing \\
+600 ms & Stance & Swing & Swing & Stance \\
+\bottomrule
+\end{tabular}
+\caption{Trot Gait Timing (Cycle = 600 ms)}
+\end{table}
+
+\textbf{Stance phase:} เท้าสัมผัสพื้น (Supporting)
+\\
+\textbf{Swing phase:} เท้ายกขึ้น (Transferring)
+
+\subsection{Phase Offset Calculation}
+
+สูตรคำนวณ Phase offset สำหรับแต่ละขา:
+
+\begin{align}
+    \phi_{FL} &= 0° \\
+    \phi_{FR} &= 180° \\
+    \phi_{RL} &= 180° \\
+    \phi_{RR} &= 0°
+\end{align}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Trot Gait Phase Offset]
+def get_gait_phase_offset(leg_index, gait_type='trot'):
+    """
+    Get phase offset for a specific leg in trot gait
+    
+    Parameters:
+    -----------
+    leg_index : int
+        Leg index (0-3: FL, FR, RL, RR)
+    gait_type : str
+        Gait pattern type ('trot', 'walk', 'crawl')
+        
+    Returns:
+    --------
+    phase_offset : float
+        Phase offset in radians
+    """
+    if gait_type == 'trot':
+        # Trot: FR+RL (180 deg), FL+RR (0 deg)
+        offsets = {
+            LegIndex.FL: 0.0,      # 0 deg
+            LegIndex.FR: np.pi,    # 180 deg
+            LegIndex.RL: np.pi,    # 180 deg
+            LegIndex.RR: 0.0       # 0 deg
+        }
+    elif gait_type == 'walk':
+        # Walk: Sequential (0, 90, 180, 270 deg)
+        offsets = {
+            LegIndex.FL: 0.0,
+            LegIndex.FR: np.pi/2,
+            LegIndex.RL: np.pi,
+            LegIndex.RR: 3*np.pi/2
+        }
+    else:
+        raise ValueError(f"Unknown gait type: {gait_type}")
+    
+    return offsets[leg_index]
+\end{lstlisting}
+
+%=============================================================================
+\section{Multi-Leg Synchronization}
+%=============================================================================
+
+\subsection{ความท้าทายในการซิงโครไนซ์}
+
+การควบคุมมอเตอร์ 8 ตัวพร้อมกัน @ 100 Hz มีความท้าทาย:
+
+\begin{enumerate}
+    \item \textbf{Latency:} ต้องส่งคำสั่งไปยังทุกมอเตอร์ภายใน < 10 ms
+    \item \textbf{Synchronization:} มอเตอร์ทุกตัวต้องได้รับคำสั่งในเวลาใกล้เคียงกัน
+    \item \textbf{Communication Bandwidth:} 800 packets/s (8 motors × 100 Hz)
+    \item \textbf{CPU Load:} IK calculation และ Communication ต้องไม่เกิน 10 ms/cycle
+\end{enumerate}
+
+\subsection{Threading Strategy}
+
+ใช้ Python Threading เพื่อควบคุมแต่ละขาแบบ Parallel:
+
+\subsubsection{Thread Structure}
+
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    block/.style={rectangle, draw, fill=blue!20, text width=5em, text centered, rounded corners, minimum height=2em},
+    arrow/.style={->, >=stealth, thick}
+]
+    % Main thread
+    \node [block, fill=red!20] (main) {Main Thread};
+    
+    % Leg threads
+    \node [block, below of=main, xshift=-4cm] (fl) {FL Thread};
+    \node [block, below of=main, xshift=-1.5cm] (fr) {FR Thread};
+    \node [block, below of=main, xshift=1.5cm] (rl) {RL Thread};
+    \node [block, below of=main, xshift=4cm] (rr) {RR Thread};
+    
+    % Motor pairs
+    \node [block, below of=fl, fill=green!20] (m12) {Motors 1-2};
+    \node [block, below of=fr, fill=green!20] (m34) {Motors 3-4};
+    \node [block, below of=rl, fill=green!20] (m56) {Motors 5-6};
+    \node [block, below of=rr, fill=green!20] (m78) {Motors 7-8};
+    
+    % Arrows
+    \draw [arrow] (main) -- (fl);
+    \draw [arrow] (main) -- (fr);
+    \draw [arrow] (main) -- (rl);
+    \draw [arrow] (main) -- (rr);
+    \draw [arrow] (fl) -- (m12);
+    \draw [arrow] (fr) -- (m34);
+    \draw [arrow] (rl) -- (m56);
+    \draw [arrow] (rr) -- (m78);
+\end{tikzpicture}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Multi-Leg Threading]
+import threading
+import time
+
+class LegController:
+    """Controller for one leg (2 motors)"""
+    
+    def __init__(self, leg_index, serial_port):
+        self.leg_index = leg_index
+        self.serial_port = serial_port
+        self.motor_A_id, self.motor_B_id = get_motor_ids(leg_index)
+        self.running = False
+        self.thread = None
+    
+    def control_loop(self, trajectory, gait_params):
+        """Main control loop for this leg"""
+        cycle_time = gait_params['cycle_time']  # 600 ms
+        update_rate = gait_params['update_rate']  # 100 Hz
+        dt = 1.0 / update_rate  # 0.01 s
+        
+        # Get phase offset for this leg
+        phase_offset = get_gait_phase_offset(self.leg_index, 'trot')
+        
+        # Mirror trajectory if right leg
+        if self.leg_index in [LegIndex.FR, LegIndex.RR]:
+            trajectory = mirror_trajectory_for_right_leg(trajectory)
+        
+        # Calculate IK for entire trajectory
+        theta_A, theta_B = calculate_ik_for_leg(
+            self.leg_index, trajectory
+        )
+        
+        # Control loop
+        n_points = len(trajectory)
+        t_start = time.time()
+        
+        while self.running:
+            t_current = time.time() - t_start
+            
+            # Calculate current point index with phase offset
+            phase = (2 * np.pi * t_current / cycle_time) + phase_offset
+            index = int((phase % (2*np.pi)) / (2*np.pi) * n_points)
+            index = min(index, n_points - 1)
+            
+            # Send commands to motors
+            send_position_command(
+                self.serial_port,
+                self.motor_A_id,
+                theta_A[index]
+            )
+            send_position_command(
+                self.serial_port,
+                self.motor_B_id,
+                theta_B[index]
+            )
+            
+            # Wait for next update
+            time.sleep(dt)
+    
+    def start(self, trajectory, gait_params):
+        """Start control loop in separate thread"""
+        self.running = True
+        self.thread = threading.Thread(
+            target=self.control_loop,
+            args=(trajectory, gait_params)
+        )
+        self.thread.start()
+    
+    def stop(self):
+        """Stop control loop"""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+
+# --- MAIN QUADRUPED CONTROLLER ---
+class QuadrupedController:
+    """Main controller for quadruped robot"""
+    
+    def __init__(self, serial_port):
+        self.serial_port = serial_port
+        
+        # Create leg controllers
+        self.legs = {
+            'FL': LegController(LegIndex.FL, serial_port),
+            'FR': LegController(LegIndex.FR, serial_port),
+            'RL': LegController(LegIndex.RL, serial_port),
+            'RR': LegController(LegIndex.RR, serial_port)
+        }
+    
+    def start_gait(self, trajectory, gait_params):
+        """Start all legs simultaneously"""
+        for leg_name, leg_controller in self.legs.items():
+            leg_controller.start(trajectory, gait_params)
+    
+    def stop_gait(self):
+        """Stop all legs"""
+        for leg_controller in self.legs.values():
+            leg_controller.stop()
+
+# --- USAGE EXAMPLE ---
+if __name__ == "__main__":
+    # Generate trajectory
+    trajectory = generate_elliptical_trajectory(
+        center=(0, -200),
+        step_length=60,
+        lift_height=30,
+        n_points=60
+    )
+    
+    # Gait parameters
+    gait_params = {
+        'cycle_time': 0.6,  # 600 ms
+        'update_rate': 100  # 100 Hz
+    }
+    
+    # Create controller
+    controller = QuadrupedController(serial_port='/dev/ttyUSB0')
+    
+    # Start gait
+    controller.start_gait(trajectory, gait_params)
+    
+    # Run for 30 seconds
+    time.sleep(30)
+    
+    # Stop gait
+    controller.stop_gait()
+\end{lstlisting}
+
+%=============================================================================
+\section{Quadruped IK Testing}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+
+ทดสอบระบบ Inverse Kinematics ทั้ง 4 ขาพร้อมกัน โดยไม่ส่งคำสั่งไปยังมอเตอร์จริง (Software testing only)
+
+\subsection{Test Script}
+
+สคริปต์ทดสอบ: \texttt{scripts/kinematics/Quadruped\_IK\_Test.py}
+
+\subsubsection{คุณสมบัติ}
+\begin{itemize}
+    \item Visualization แบบ Real-time (2×2 subplot)
+    \item แสดงทั้ง 4 ขาพร้อมกัน
+    \item มี Motor indices และ Link colors
+    \item ทดสอบ Trot gait pattern
+    \item ทดสอบ Mirror kinematics
+    \item อัตราการ Update: 50 Hz
+\end{itemize}
+
+\subsection{ผลการทดสอบ}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Test Item} & \textbf{Result} \\
+\midrule
+\textbf{IK Calculation} & \\
+- FL leg & \checkmark PASS \\
+- FR leg (mirrored) & \checkmark PASS \\
+- RL leg & \checkmark PASS \\
+- RR leg (mirrored) & \checkmark PASS \\
+\midrule
+\textbf{Trajectory Mirroring} & \\
+- Left legs (FL, RL) & \checkmark PASS \\
+- Right legs (FR, RR) & \checkmark PASS \\
+- Symmetry verification & \checkmark PASS \\
+\midrule
+\textbf{Gait Coordination} & \\
+- Trot pattern (FR+RL @ 0°) & \checkmark PASS \\
+- Trot pattern (FL+RR @ 180°) & \checkmark PASS \\
+- Phase synchronization & \checkmark PASS \\
+\midrule
+\textbf{Visualization} & \\
+- Real-time plotting & \checkmark PASS \\
+- Update rate (50 Hz) & \checkmark PASS \\
+- Link colors & \checkmark PASS \\
+\midrule
+\textbf{Overall Status} & \checkmark \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{ผลการทดสอบ Quadruped IK}
+\end{table}
+
+%=============================================================================
+\section{Full Quadruped Hardware Testing}
+%=============================================================================
+
+\subsection{การเตรียมฮาร์ดแวร์}
+
+\subsubsection{อุปกรณ์}
+\begin{itemize}
+    \item \textbf{Motors:} 8 units BLDC 5 N·m
+    \item \textbf{Motor Controllers:} 8 units MCU boards
+    \item \textbf{Power Supply:} 24V DC, 20A (หรือ Battery 6S LiPo)
+    \item \textbf{PC:} Python control software
+    \item \textbf{Communication:} USB-to-Serial @ 921600 baud
+\end{itemize}
+
+\subsubsection{การเชื่อมต่อ}
+\begin{itemize}
+    \item Power distribution: แหล่งจ่าย 24V แยกไปยัง Motor controller ทั้ง 8 ตัว
+    \item Serial communication: PC เชื่อมต่อผ่าน USB-Serial ไปยัง MCU hub และกระจายสัญญาณไปยัง Motor controller ทั้ง 8 ตัว
+    \item Motor indices: ตั้งค่าตาม Motor Indexing Scheme
+\end{itemize}
+
+\subsection{ขั้นตอนการทดสอบ}
+
+\subsubsection{Phase 1: Calibration}
+\begin{enumerate}
+    \item ตั้งหุ่นยนต์ในท่า Home position
+    \item Calibrate มอเตอร์ทุกตัว (SET\_ZERO command)
+    \item ตรวจสอบ Motor ID ของแต่ละมอเตอร์
+    \item ทดสอบ ENABLE/DISABLE ทุกมอเตอร์
+\end{enumerate}
+
+\subsubsection{Phase 2: Static Pose Testing}
+\begin{enumerate}
+    \item ทดสอบท่ายืน (Standing pose)
+    \item ทดสอบการยกขาทีละข้าง
+    \item ตรวจสอบ Torque และ Current
+    \item ตรวจสอบความสมดุล
+\end{enumerate}
+
+\subsubsection{Phase 3: Single Gait Cycle}
+\begin{enumerate}
+    \item ทดสอบ Trot gait 1 รอบ (600 ms)
+    \item ตรวจสอบ Phase synchronization
+    \item บันทึกข้อมูล Motor feedback
+    \item วิเคราะห์ Coordination errors
+\end{enumerate}
+
+\subsubsection{Phase 4: Continuous Gait}
+\begin{enumerate}
+    \item ทดสอบ Trot gait ต่อเนื่อง (30 steps)
+    \item ปรับจูน Gait parameters
+    \item ทดสอบบนพื้นราบ
+    \item บันทึกวิดีโอและข้อมูล
+\end{enumerate}
+
+\subsection{ผลการทดสอบ (29 ธันวาคม 2025)}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Test Parameter} & \textbf{Result} \\
+\midrule
+\textbf{Calibration} & \\
+- All motors calibrated & \checkmark PASS \\
+- Motor ID verification & \checkmark PASS \\
+- Enable/Disable test & \checkmark PASS \\
+\midrule
+\textbf{Static Pose} & \\
+- Standing pose stable & \checkmark PASS \\
+- Single leg lift & \checkmark PASS \\
+- Balance maintained & \checkmark PASS \\
+\midrule
+\textbf{Gait Execution} & \\
+- Trot pattern executed & \checkmark PASS \\
+- Phase synchronization & \checkmark PASS \\
+- Continuous walking & \checkmark PASS \\
+\midrule
+\textbf{Walking Performance} & \\
+- Gait Parameters & Step=30mm, Lift=15mm \\
+- Cycle Time & 600 ms (50 Hz update) \\
+- Total Steps & 30 steps \\
+- Speed & Slow but stable \\
+- Posture & Compromised posture \\
+\midrule
+\textbf{Overall Status} & \checkmark \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{ผลการทดสอบหุ่นยนต์สี่ขาแบบสมบูรณ์}
+\end{table}
+
+\subsection{ข้อสังเกตจากการทดสอบ}
+
+\subsubsection{จุดแข็ง}
+\begin{itemize}
+    \item[\checkmark] ระบบควบคุม 8 มอเตอร์ทำงานได้เสถียร
+    \item[\checkmark] Phase synchronization แม่นยำ
+    \item[\checkmark] Communication errors < 1\%
+    \item[\checkmark] หุ่นยนต์สามารถเดินได้จริง
+\end{itemize}
+
+\subsubsection{จุดที่ต้องปรับปรุง}
+\begin{itemize}
+    \item Compromised posture (ท่าทางไม่เหมาะสม)
+    \item ความเร็วช้า (30 mm step, ควรปรับเป็น 50-60 mm)
+    \item Lift height ต่ำ (15 mm, ควรปรับเป็น 30 mm)
+    \item การเดินยังไม่นุ่มนวลมาก
+\end{itemize}
+
+%=============================================================================
+\section{สรุปและข้อเสนอแนะ (Conclusion and Recommendations)}
+%=============================================================================
+
+\subsection{สรุปผลการพัฒนา}
+
+Phase 5.1 ประสบความสำเร็จในการขยายระบบเป็นหุ่นยนต์สี่ขาแบบสมบูรณ์:
+
+\begin{itemize}
+    \item[\checkmark] \textbf{Motor Indexing:} พัฒนาระบบตั้งชื่อมอเตอร์ 8 ตัวสำเร็จ
+    \item[\checkmark] \textbf{Mirror Kinematics:} ระบบ Mirror trajectory สำหรับขาขวาทำงานถูกต้อง
+    \item[\checkmark] \textbf{Gait Pattern:} Trot gait pattern มี Phase coordination ที่ดี
+    \item[\checkmark] \textbf{Multi-Leg Sync:} Threading strategy ทำงานเสถียร
+    \item[\checkmark] \textbf{IK Testing:} ทดสอบ IK ทั้ง 4 ขาสำเร็จ
+    \item[\checkmark] \textbf{Hardware Testing:} หุ่นยนต์เดินได้จริงบนฮาร์ดแวร์
+\end{itemize}
+
+\subsection{ความสำเร็จหลัก}
+
+\begin{enumerate}
+    \item \textbf{First Walk:} หุ่นยนต์สี่ขาสามารถเดินได้จริง (29 ธ.ค. 2025)
+    \item \textbf{Stable Control:} ระบบควบคุม 8 มอเตอร์พร้อมกัน @ 50-100 Hz
+    \item \textbf{Phase Coordination:} Trot gait มี Diagonal pair coordination ที่ดี
+    \item \textbf{Scalability:} ระบบสามารถขยายเป็น Gait modes อื่นได้
+\end{enumerate}
+
+\subsection{บทเรียนที่ได้รับ}
+
+\begin{itemize}
+    \item \textbf{Threading:} Python Threading เหมาะสำหรับ Multi-motor control เพราะสามารถแบ่งงานการควบคุมแต่ละขาออกเป็น Thread แยกได้
+    \item \textbf{Mirror Kinematics:} การ Mirror X-coordinate ทำงานได้ดี ทำให้ขาซ้ายและขวาเคลื่อนที่สมมาตรกัน
+    \item \textbf{Motor Indexing:} ระบบตั้งชื่อที่ดีช่วยลดความสับสน และทำให้การเขียนโค้ดเป็นระบบ
+    \item \textbf{Communication Bandwidth:} 921600 baud เพียงพอสำหรับ 8 motors @ 100 Hz เนื่องจากใช้ Bandwidth ไม่เกิน 10\% ของความจุสูงสุด
+    \item \textbf{Compromised Posture:} พารามิเตอร์เริ่มต้นต้องปรับจูน โดยจะทำใน Phase 5.2
+\end{itemize}
+
+\subsection{ข้อเสนอแนะสำหรับ Phase 5.2}
+
+\subsubsection{Gait Tuning Priorities}
+\begin{enumerate}
+    \item \textbf{เพิ่ม Step Length:} ปรับจาก 30 mm เป็น 50-60 mm เพื่อให้ขาเหยียดออกมากขึ้นและเพิ่มความเร็วในการเดิน
+    \item \textbf{เพิ่ม Lift Height:} ปรับจาก 15 mm เป็น 30 mm เพื่อให้เท้ายกพ้นสิ่งกีดขวางได้
+    \item \textbf{Asymmetric Trajectory:} ใช้ Stance 65\% / Swing 35\% เพื่อลดแรงกระแทก
+    \item \textbf{Multi-Mode Gait:} พัฒนา TROT, SMOOTH\_TROT, BACKWARD\_TROT, WALK, CRAWL เพื่อรองรับการใช้งานหลายรูปแบบ
+\end{enumerate}
+
+\subsubsection{Optimization Targets}
+\begin{itemize}
+    \item ความเร็วการเดิน: เป้าหมาย 80-100 mm/s
+    \item ความนุ่มนวล: ลด Impact force ด้วย Asymmetric timing
+    \item ความเสถียร: รักษา Success rate > 95\%
+    \item ประสิทธิภาพพลังงาน: ลด Current draw
+\end{itemize}
+
+\subsection{ข้อจำกัดที่ต้องระวัง}
+
+\begin{itemize}
+    \item \textbf{Foot Orientation:} ปลายเท้าชี้ไปด้านหน้า ซึ่งอาจส่งผลต่อแรงงัดเมื่อสัมผัสพื้น จะทำการวิเคราะห์เพิ่มเติมใน Phase 5.2
+    \item \textbf{Ground Contact:} ต้องพิจารณาความแตกต่างระหว่าง Heel-strike กับ Toe-first landing เพื่อหาวิธีที่เหมาะสม
+    \item \textbf{Power Budget:} 8 motors ใช้กระแส 1-3 A ต่อตัว จึงต้องมี Battery หรือ Power supply ที่เพียงพอ
+    \item \textbf{Thermal Management:} มอเตอร์ต้องไม่เกิน 80°C เพื่อป้องกันความเสียหาย
+\end{itemize}
+
+%=============================================================================
+\section{เอกสารอ้างอิง (References)}
+%=============================================================================
+
+\begin{enumerate}
+    \item Phase 4.2: Hardware Integration - BLEGS Analysis Unit
+    \item Phase 4.1: Controller Design - BLEGS Analysis Unit
+    \item Phase 3.1: Gait Control Simulation - BLEGS Analysis Unit
+    \item Phase 1.2: Inverse Kinematics Analytical - BLEGS Analysis Unit
+    \item Python Threading Documentation
+    \item Quadruped Gait Patterns and Coordination
+    \item Mirror Kinematics for Symmetric Robots
+    \item Multi-Motor Synchronization Techniques
+\end{enumerate}
+
+\end{document}

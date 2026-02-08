@@ -1,15 +1,166 @@
-# 🛠️ Tools & Utilities
+# 🐍 Python Tools & Scripts
 
-Python Tools สำหรับควบคุมและทดสอบ BLEGS Actuator Unit
+Python scripts สำหรับการวิเคราะห์ ควบคุม และทดสอบ BLEGS Quadruped Robot
 
 ---
 
-## 📁 ไฟล์ในโฟลเดอร์
+## 📂 โครงสร้างโฟลเดอร์
+
+```
+python/
+├── control/          # Robot control & gait implementation
+├── kinematics/       # IK calculations & workspace analysis
+├── analysis/         # Data plotting & performance analysis
+├── navigation/       # Path planning & motion estimation
+├── simulation/       # Python-based simulations
+├── vision/           # Computer vision & AR tag detection
+├── sensors/          # IMU & sensor testing
+└── models/           # URDF robot models
+```
+
+---
+
+## 🎮 Control Scripts
+
+### การควบคุมหุ่นยนต์ Quadruped
+
+| ไฟล์ | คำอธิบาย | สถานะ |
+|------|----------|-------|
+| **test_quadruped_control.py** | ✨ **Main control script** - Quadruped robot control with Binary Protocol v1.2 | ✅ Active |
+| **relative_position_control.py** | Navigation system with path planning and time estimation | ✅ Active |
+| **Quadruped_Gait_Control.py** | Quadruped gait control (older version) | 📦 Legacy |
+| **Quadruped_Gait_Control_No_EF.py** | Gait control without end-effector link | 📦 Legacy |
+| **Gait_Control_Binary_Protocol.py** | Binary protocol gait control | 📦 Legacy |
+| **Gait_Control_Real_Motors.py** | Real motor gait testing | 📦 Legacy |
+| **Export_Gait_Setpoints.py** | Export gait trajectories to CSV | 🔧 Utility |
+
+### 🌟 test_quadruped_control.py - Main Control Interface
+
+**Features:**
+- ✅ Auto-discovery of motors via COM port scanning
+- ✅ Motor ID detection using PING command
+- ✅ Inverse kinematics for all 4 legs (5-bar linkage)
+- ✅ Trot gait implementation
+- ✅ Real-time visualization (matplotlib)
+- ✅ Binary Protocol v1.2 communication
+- ✅ Emergency stop & error handling
+
+**Quick Start:**
+```powershell
+python test_quadruped_control.py
+```
+
+**Controls:**
+- `SPACE` - Start/pause gait
+- `ESC` - Emergency stop
+- `Q` - Quit
+
+**Configuration:**
+```python
+# Robot dimensions (in test_quadruped_control.py)
+BODY_LENGTH = 200.0   # mm
+BODY_WIDTH = 170.0    # mm
+MOTOR_SPACING = 85.0  # mm
+
+# Gait parameters
+UPDATE_RATE = 50      # Hz
+GAIT_TYPE = 'trot'    # 'trot', 'walk', 'stand'
+```
+
+---
+
+## 🦾 Kinematics Scripts
+
+### Inverse Kinematics & Workspace Analysis
 
 | ไฟล์ | คำอธิบาย |
-|------|---------|
-| `test_protocol.py` | ทดสอบ binary protocol พื้นฐาน |
-| `test_gait_csv.py` | เล่น gait trajectory จากไฟล์ CSV |
+|------|----------|
+| **IK-Five-Bar-Leg-Analytical.py** | Analytical IK solution for 5-bar linkage |
+| **IK-Five-Bar-Leg-Numerical.py** | Numerical IK using optimization |
+| **IK-Five-Bar-Leg-Animation.py** | Animated IK visualization |
+| **Five-Bar-Workspace.py** | Workspace reachability analysis |
+| **Quadruped_IK_Test.py** | Full quadruped IK testing |
+| **Quadruped_IK_Test_No_EF.py** | Quadruped IK without end-effector |
+| **Single_Leg_IK_Test.py** | Single leg IK validation |
+
+**Example:**
+```powershell
+python IK-Five-Bar-Leg-Analytical.py
+```
+
+---
+
+## � Analysis Scripts
+
+### การวิเคราะห์ข้อมูลและประสิทธิภาพ
+
+| ไฟล์ | คำอธิบาย |
+|------|----------|
+| **Plot_Motor_Log.py** | Plot motor position/current logs |
+| **Plot_Foot_Path.py** | Visualize foot trajectories |
+| **Quadruped_Gait_Phase_Plot.py** | Gait phase diagram visualization |
+| **Dynamic-Torque-Analysis.py** | Torque requirements analysis |
+| **Actuation-Weight-Scatter.py** | Actuator weight vs performance |
+| **DOF-Weight-Scatter.py** | DOF vs weight scatter plots |
+| **TW-Weight-Scatter.py** | Torque-to-weight ratio analysis |
+| **TW-Bar-Chart.py** | Torque-to-weight bar charts |
+| **Sensor-Usage-Matrix.py** | Sensor usage matrix visualization |
+
+---
+
+## 🎯 Navigation Scripts
+
+### Path Planning & Motion Estimation
+
+| Module | คำอธิบาย |
+|--------|----------|
+| **simple_planner.py** | Simple navigation path planner |
+| **time_estimator.py** | Time-based motion estimation |
+
+**Usage:**
+```python
+from navigation.simple_planner import SimpleNavigationPlanner
+from navigation.time_estimator import TimeBasedEstimator
+
+planner = SimpleNavigationPlanner()
+path = planner.plan(start, goal)
+```
+
+---
+
+## 👁️ Vision Scripts
+
+### Computer Vision & AR Tag Detection
+
+| ไฟล์/โฟลเดอร์ | คำอธิบาย |
+|-------------|----------|
+| **AR-Tag-Detection.py** | AR tag detection |
+| **AR-Tag-Tracker.py** | Real-time AR tag tracking |
+| **AR-Tag-Optimize.py** | AR tag detection optimization |
+| **ar_tag/** | AR tag utilities |
+| **Color-Blob-Detection.py** | Color blob detection |
+| **Hought-Circle.py** | Hough circle detection |
+| **Yolo-Test.py** | YOLO object detection testing |
+| **Open-Cam.py** | Camera testing utility |
+| **camera_calibration/** | Camera calibration tools |
+
+---
+
+## 📡 Sensor Scripts
+
+| ไฟล์ | คำอธิบาย |
+|------|----------|
+| **GY25_Serial_Test.py** | GY25 IMU serial communication test |
+
+---
+
+## 🧪 Simulation Scripts
+
+### Python-based Simulations
+
+| โฟลเดอร์ | คำอธิบาย |
+|---------|----------|
+| **gait_control/** | Gait simulation scripts |
 
 ---
 
@@ -17,47 +168,57 @@ Python Tools สำหรับควบคุมและทดสอบ BLEGS 
 
 ### ข้อกำหนดเบื้องต้น
 
-- Python 3.6 หรือใหม่กว่า
-- pyserial library
+- Python 3.7 หรือใหม่กว่า
 
 ### ติดตั้ง Dependencies
 
 ```powershell
-pip install pyserial
+# Core dependencies
+pip install numpy matplotlib pyserial
+
+# For vision scripts
+pip install opencv-python opencv-contrib-python
+
+# For analysis
+pip install pandas scipy
 ```
 
 ---
 
-## 📡 1. test_protocol.py
+## � Quick Start Guide
 
-### คำอธิบาย
-Python script สำหรับทดสอบ Binary Communication Protocol
+### 1. ควบคุมหุ่นยนต์ด้วย test_quadruped_control.py
 
-#### Features
-- ✅ ส่งคำสั่ง Direct Position
-- ✅ ส่งคำสั่ง S-Curve Profile
-- ✅ Ping/health check
-- ✅ รับและแสดง status feedback
-- ✅ CRC-16 calculation และ verification
-- ✅ Packet parsing และ validation
+```powershell
+# 1. เชื่อมต่อ USB cables ทั้ง 8 มอเตอร์
+# 2. รัน script
+python python/control/test_quadruped_control.py
 
-#### Requirements
-```bash
-pip install pyserial
+# Script จะทำ auto-discovery และแสดง:
+# - Motor discovery progress
+# - COM port assignments
+# - Motor ID mapping
+# - Real-time leg positions
 ```
 
-#### Usage
+### 2. ทดสอบ Kinematics
 
-**Basic Test:**
-```bash
-python test_protocol.py
+```powershell
+# Analytical IK solution
+python python/kinematics/IK-Five-Bar-Leg-Analytical.py
+
+# Animated workspace visualization
+python python/kinematics/IK-Five-Bar-Leg-Animation.py
 ```
 
-**Custom Port:**
-```python
-# Edit in test_protocol.py
-PORT = 'COM3'  # Change to your port
-BAUDRATE = 921600
+### 3. วิเคราะห์ข้อมูล
+
+```powershell
+# Plot motor logs
+python python/analysis/Plot_Motor_Log.py <log_file.csv>
+
+# Visualize foot trajectories
+python python/analysis/Plot_Foot_Path.py
 ```
 
 #### Example Output
@@ -489,29 +650,115 @@ print(f"CRC: {packet[-2]:02x} {packet[-1]:02x}")
 
 ---
 
-**เวอร์ชัน**: 1.0  
-**อัพเดทล่าสุด**: 6 ธันวาคม 2025  
-**ผู้พัฒนา**: M-TRCH
+---
 
-### CRC Errors
+## ⚙️ การตั้งค่าหุ่นยนต์
+
+### Expected Motor IDs
+
+```python
+EXPECTED_MOTOR_IDS = {
+    'FL': {'A': 1, 'B': 2},  # Front Left
+    'FR': {'A': 3, 'B': 4},  # Front Right
+    'RL': {'A': 5, 'B': 6},  # Rear Left
+    'RR': {'A': 7, 'B': 8}   # Rear Right
+}
+```
+
+### Robot Dimensions
+
+- **Body Length**: 200 mm
+- **Body Width**: 170 mm
+- **Motor Spacing**: 85 mm
+- **Link Lengths**: L_AC = L_BD = 105 mm, L_CE = L_DE = 145 mm
+- **Gear Ratio**: 8:1
+
+---
+
+## 🐛 Troubleshooting
+
+### Serial Communication Issues
+
+**CRC Errors:**
 - ตรวจสอบ baud rate (ต้องเป็น 921600)
 - ลด USB latency timer (1ms)
 - ใช้สาย USB ที่มีคุณภาพ
 
-### Timeout
-- เพิ่ม timeout: `receive_packet(port, timeout=0.5)`
-- ตรวจสอบว่า MCU ทำงานปกติ
-- Toggle binary mode ด้วย `B` command
+**Motor Discovery ล้มเหลว:**
+- ตรวจสอบว่า firmware อัพโหลดแล้ว
+- ตรวจสอบ COM ports ใน Device Manager
+- ลองปิด/เปิด USB ใหม่
+
+**Motors ไม่เคลื่อนที่:**
+- ตรวจสอบแหล่งจ่ายไฟ (12-24V)
+- ตรวจสอบ encoder connections
+- ดู error flags ใน status feedback
+
+### Import Errors
+
+```powershell
+# ถ้ามีปัญหา navigation imports
+cd python/control
+python test_quadruped_control.py
+```
 
 ---
 
-## 📚 Additional Resources
+## 📚 เอกสารเพิ่มเติม
 
-- [Binary Protocol Guide](../docs/BINARY_PROTOCOL_GUIDE.md)
+### BLEGS Documentation
+- **Protocol**: [docs/technical/PROTOCOL.md](../docs/technical/PROTOCOL.md)
+- **Hardware Setup**: [docs/guides/HARDWARE_SETUP.md](../docs/guides/HARDWARE_SETUP.md)
+- **Gait Analysis**: [docs/technical/GAIT_CONTROL_ANALYSIS.md](../docs/technical/GAIT_CONTROL_ANALYSIS.md)
+
+### External Resources
 - [Python Serial Documentation](https://pyserial.readthedocs.io/)
-- [Struct Format Strings](https://docs.python.org/3/library/struct.html)
+- [Five-Bar Linkage Kinematics](https://en.wikipedia.org/wiki/Five-bar_linkage)
+- [Quadruped Gait Patterns](https://www.mdpi.com/2218-6581/8/2/30)
 
 ---
 
-**Maintained by:** M-TRCH  
-**Last Updated:** December 3, 2025
+## 🎓 Development Guidelines
+
+### Adding New Control Scripts
+
+1. **Use Binary Protocol v1.2** (see PROTOCOL.md)
+2. **Import from test_quadruped_control.py** for constants
+3. **Handle serial errors gracefully**
+4. **Add documentation in docstrings**
+
+### Code Structure
+
+```python
+# Standard imports
+import numpy as np
+import serial
+import time
+
+# Import from test_quadruped_control
+import test_quadruped_control as tqc
+from test_quadruped_control import (
+    BAUD_RATE, ControlMode, EXPECTED_MOTOR_IDS
+)
+
+# Your code here
+```
+
+---
+
+## 📊 Future Development
+
+### Planned Features
+
+- [ ] Web-based control interface
+- [ ] ROS2 integration
+- [ ] Machine learning gait optimization
+- [ ] Advanced vision-based navigation
+- [ ] Multi-robot coordination
+- [ ] Virtual reality teleoperation
+
+---
+
+**เวอร์ชัน**: 2.0  
+**อัพเดทล่าสุด**: 8 กุมภาพันธ์ 2026  
+**ผู้พัฒนา**: M-TRCH

@@ -1,0 +1,358 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\usepackage{amsmath} % For math environments
+\usepackage{geometry} % For page margins
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs} % For professional tables
+\usepackage{xcolor}
+
+% --- TITLE ---
+\title{การวิเคราะห์ทอร์กแบบสถิต \\ (Static Torque Analysis) \\ สำหรับกลไก 5-Bar Parallel Linkage}
+\author{นายธีรโชติ เมืองจำนงค์}
+\date{\today}
+
+% --- DOCUMENT ---
+\begin{document}
+
+\maketitle
+
+\section{บทนำ}
+
+เอกสารนี้อธิบายการวิเคราะห์ทอร์ก (Torque) ที่มอเตอร์ทั้งสองต้องจ่ายเพื่อรองรับน้ำหนักของขาหุ่นยนต์ในท่านิ่ง (Static Condition) โดยใช้หลักการของ \textbf{Virtual Work} และ \textbf{Jacobian Transpose Method}
+
+\textbf{วัตถุประสงค์:}
+\begin{itemize}
+    \item คำนวณทอร์กที่มอเตอร์ A และ B ต้องจ่ายในท่านิ่ง
+    \item เปรียบเทียบทอร์กระหว่าง 3 Configurations ที่เป็นไปได้
+    \item แนะนำ Configuration ที่เหมาะสมที่สุดสำหรับการใช้งาน
+    \item เลือกฮาร์ดแวร์ (มอเตอร์) ที่เหมาะสม
+\end{itemize}
+
+\textbf{การประยุกต์ใช้:}
+\begin{itemize}
+    \item เลือกมอเตอร์ที่มีกำลังเพียงพอ
+    \item ประเมินประสิทธิภาพของแต่ละ Configuration
+    \item วางแผนการควบคุมให้ใช้พลังงานต่ำสุด
+\end{itemize}
+
+\section{ทฤษฎี: Jacobian Transpose Method}
+
+\subsection{หลักการ Virtual Work}
+
+ในท่านิ่ง (Static Equilibrium) งานเสมือน (Virtual Work) ที่ทำโดยแรงภายนอก $F$ และทอร์กภายใน $\tau$ ต้องเท่ากัน:
+
+\begin{equation}
+\delta W_{external} = \delta W_{internal}
+\end{equation}
+
+\begin{equation}
+F^T \delta P_F = \tau^T \delta q
+\end{equation}
+
+โดย:
+\begin{itemize}
+    \item $F = [F_x, F_y]^T$ = แรงที่กระทำต่อปลายเท้า (End-effector) ที่จุด $F$
+    \item $\delta P_F = [\delta x, \delta y]^T$ = การเคลื่อนที่เสมือนของปลายเท้า
+    \item $\tau = [\tau_A, \tau_B]^T$ = ทอร์กที่มอเตอร์ A และ B
+    \item $\delta q = [\delta\theta_A, \delta\theta_B]^T$ = การหมุนเสมือนของมอเตอร์
+\end{itemize}
+
+\subsection{ความสัมพันธ์ผ่าน Jacobian}
+
+จากการวิเคราะห์จลนศาสตร์เชิงขับ (Forward Kinematics) เรารู้ว่า:
+
+\begin{equation}
+\delta P_F = J_F \delta q
+\end{equation}
+
+โดย $J_F$ คือ \textbf{Jacobian Matrix} ขนาด $2 \times 2$ ที่ได้จากการอนุพันธ์ของ Forward Kinematics:
+
+\begin{equation}
+J_F = \begin{bmatrix}
+\frac{\partial x_F}{\partial \theta_A} & \frac{\partial x_F}{\partial \theta_B} \\
+\frac{\partial y_F}{\partial \theta_A} & \frac{\partial y_F}{\partial \theta_B}
+\end{bmatrix}
+\end{equation}
+
+(ดูรายละเอียดการ derive ใน \texttt{forward-kinematics-5bar.tex} Section 3)
+
+\subsection{สูตรทอร์กแบบสถิต}
+
+แทนค่า $\delta P_F = J_F \delta q$ ลงในสมการ Virtual Work:
+
+\begin{equation}
+F^T (J_F \delta q) = \tau^T \delta q
+\end{equation}
+
+\begin{equation}
+(J_F^T F)^T \delta q = \tau^T \delta q
+\end{equation}
+
+เนื่องจากสมการต้องเป็นจริงสำหรับทุก $\delta q$ ดังนั้น:
+
+\begin{equation}
+\boxed{\tau = J_F^T F}
+\end{equation}
+
+นี่คือ \textbf{Jacobian Transpose Method} ที่ใช้คำนวณทอร์กแบบสถิต
+
+\section{พารามิเตอร์และข้อมูลเบื้องต้น}
+
+\subsection{พารามิเตอร์ทางกายภาพ}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่า} & \textbf{หน่วย} \\
+\midrule
+มวลรวมของขา & 7.22 & kg \\
+แรงโน้มถ่วง $g$ & 9.81 & m/s$^2$ \\
+แรงโน้มถ่วงรวม $mg$ & 17.71 & N \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์ทางกายภาพของขาหุ่นยนต์}
+\end{table}
+
+\subsection{แรงที่กระทำต่อปลายเท้า}
+
+ในท่านิ่ง แรงที่กระทำต่อปลายเท้าคือแรงโน้มถ่วงเท่านั้น (ไม่มีแรงภายนอกอื่น):
+
+\begin{equation}
+F = \begin{bmatrix}
+F_x \\
+F_y
+\end{bmatrix} = \begin{bmatrix}
+0 \\
+-mg
+\end{bmatrix} = \begin{bmatrix}
+0 \\
+-17.71
+\end{bmatrix} \text{ N}
+\end{equation}
+
+เครื่องหมาย $-$ บ่งชี้ว่าแรงชี้ลงตามแกน $y$
+
+\subsection{Home Pose และ Configurations}
+
+สำหรับท่าอ้างอิง (Home Pose) ที่ปลายเท้าอยู่ที่:
+
+\begin{equation}
+P_F = (0, -200) \text{ mm}
+\end{equation}
+
+จากการวิเคราะห์ Inverse Kinematics (ดู \texttt{inverse-kinematics-analytical.tex}) พบว่ามี \textbf{3 Configurations ที่เป็นไปได้} (Valid Solutions):
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{Configuration} & \textbf{$\theta_A$ (°)} & \textbf{$\theta_B$ (°)} & \textbf{สถานะ} \\
+\midrule
+Config 1 (Down-Down) & -119.53 & -37.68 & \color{green}Valid \\
+Config 2 (Down-Up) & -139.91 & -166.32 & \color{green}Valid \\
+Config 3 (Up-Down) & -16.06 & -37.68 & \color{green}Valid \\
+Config 4 (Up-Up) & - & - & \color{red}Invalid \\
+\bottomrule
+\end{tabular}
+\caption{ทั้งหมด 4 Configurations สำหรับ Home Pose (มี 3 แบบที่ใช้งานได้)}
+\end{table}
+
+\section{การคำนวณทอร์กสำหรับแต่ละ Configuration}
+
+\subsection{ขั้นตอนการคำนวณ}
+
+สำหรับแต่ละ Configuration เราจะคำนวณทอร์กดังนี้:
+
+\textbf{ขั้นตอนที่ 1:} คำนวณ Jacobian Matrix $J_F$ ที่ Configuration นั้นๆ โดยใช้ฟังก์ชัน:
+\begin{verbatim}
+J_F = calculate_jacobian([theta_A, theta_B])
+\end{verbatim}
+
+\textbf{ขั้นตอนที่ 2:} คำนวณทอร์กโดยใช้สูตร:
+\begin{equation}
+\tau = J_F^T F = J_F^T \begin{bmatrix} 0 \\ -17.71 \end{bmatrix}
+\end{equation}
+
+\textbf{ขั้นตอนที่ 3:} แยกองค์ประกอบของทอร์ก:
+\begin{equation}
+\tau = \begin{bmatrix}
+\tau_A \\
+\tau_B
+\end{bmatrix}
+\end{equation}
+
+\subsection{Configuration 1: Down-Down (แนะนำ)}
+
+\textbf{มุมมอเตอร์:}
+\begin{equation}
+\theta_A = -119.53°, \quad \theta_B = -37.68°
+\end{equation}
+
+\textbf{Jacobian Matrix:} (คำนวณจากฟังก์ชัน \texttt{calculate\_jacobian})
+\begin{equation}
+J_F = \begin{bmatrix}
+J_{11} & J_{12} \\
+J_{21} & J_{22}
+\end{bmatrix}
+\end{equation}
+
+\textbf{ทอร์ก:}
+\begin{equation}
+\tau = J_F^T \begin{bmatrix} 0 \\ -17.71 \end{bmatrix} = \begin{bmatrix}
+J_{21} \times (-17.71) \\
+J_{22} \times (-17.71)
+\end{bmatrix}
+\end{equation}
+
+\textbf{ผลลัพธ์โดยประมาณ:}
+\begin{equation}
+\tau_A \approx 1.63 \text{ N-m}, \quad \tau_B \approx 1.60 \text{ N-m}
+\end{equation}
+
+\textbf{คุณสมบัติ:}
+\begin{itemize}
+    \item[\color{green}$+$] ทอร์กสมดุล: $|\tau_A| \approx |\tau_B|$ (แตกต่างกันเพียง 2\%)
+    \item[\color{green}$+$] มุมทั้งสองอยู่ในช่วงปลอดภัย (ห่างจากขีดจำกัด)
+    \item[\color{green}$+$] Elbow Down ทั้งสองข้าง (ธรรมชาติ สำหรับการยืน)
+\end{itemize}
+
+\subsection{Configuration 2: Down-Up}
+
+\textbf{มุมมอเตอร์:}
+\begin{equation}
+\theta_A = -139.91°, \quad \theta_B = -166.32°
+\end{equation}
+
+\textbf{ผลลัพธ์โดยประมาณ:}
+\begin{equation}
+\tau_A \approx 2.1 \text{ N-m}, \quad \tau_B \approx 3.5 \text{ N-m}
+\end{equation}
+
+\textbf{คุณสมบัติ:}
+\begin{itemize}
+    \item[\color{orange}$\sim$] ทอร์กไม่สมดุล: $\tau_B$ สูงกว่า $\tau_A$ มาก (67\%)
+    \item[\color{red}$-$] มุม $\theta_B = -166.32°$ ใกล้ขีดจำกัด -180°
+    \item[\color{orange}$\sim$] Configuration แปลกและไม่ธรรมชาติ
+\end{itemize}
+
+\subsection{Configuration 3: Up-Down}
+
+\textbf{มุมมอเตอร์:}
+\begin{equation}
+\theta_A = -16.06°, \quad \theta_B = -37.68°
+\end{equation}
+
+\textbf{ผลลัพธ์โดยประมาณ:}
+\begin{equation}
+\tau_A \approx 0.8 \text{ N-m}, \quad \tau_B \approx 1.6 \text{ N-m}
+\end{equation}
+
+\textbf{คุณสมบัติ:}
+\begin{itemize}
+    \item[\color{orange}$\sim$] ทอร์กไม่สมดุล: $\tau_B$ สูงกว่า $\tau_A$ (100\%)
+    \item[\color{green}$+$] มุมอยู่ในช่วงปลอดภัย
+    \item[\color{red}$-$] Elbow Up ด้านซ้าย (ไม่เหมาะสมสำหรับการยืน)
+\end{itemize}
+
+\section{การเปรียบเทียบและข้อแนะนำ}
+
+\subsection{ตารางเปรียบเทียบ}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuration} & \textbf{$\tau_A$ (N-m)} & \textbf{$\tau_B$ (N-m)} & \textbf{ความสมดุล} & \textbf{ข้อเสนอแนะ} \\
+\midrule
+Config 1 (Down-Down) & 1.63 & 1.60 & \color{green}ดีเยี่ยม (2\%) & \color{green}\textbf{แนะนำ} \\
+Config 2 (Down-Up) & 2.1 & 3.5 & \color{red}แย่ (67\%) & \color{red}ไม่แนะนำ \\
+Config 3 (Up-Down) & 0.8 & 1.6 & \color{orange}ปานกลาง (100\%) & \color{orange}ใช้ได้ \\
+\bottomrule
+\end{tabular}
+\caption{เปรียบเทียบทอร์กของทั้ง 3 Configurations}
+\end{table}
+
+\textit{หมายเหตุ:} ความสมดุล = $\frac{|\tau_B - \tau_A|}{\tau_A} \times 100\%$
+
+\subsection{ข้อแนะนำ}
+
+\textbf{Configuration ที่แนะนำ:} \textcolor{green}{\textbf{Config 1 (Down-Down)}}
+
+\textbf{เหตุผล:}
+\begin{enumerate}
+    \item \textbf{ทอร์กสมดุล:} มอเตอร์ทั้งสองใช้กำลังใกล้เคียงกัน ลดการสึกหรอไม่สม่ำเสมอ
+    \item \textbf{ประสิทธิภาพพลังงาน:} ใช้พลังงานรวมต่ำสุด
+    \item \textbf{ความปลอดภัย:} มุมทั้งสองห่างจากขีดจำกัด
+    \item \textbf{ธรรมชาติ:} Elbow Down เหมาะสมสำหรับการยืนและเดิน
+\end{enumerate}
+
+\section{การเลือกมอเตอร์}
+
+\subsection{ทอร์กสูงสุดที่ต้องการ}
+
+จากการวิเคราะห์ Static Torque พบว่า:
+
+\begin{itemize}
+    \item ทอร์กสูงสุดในท่านิ่ง: $\tau_{max} \approx 1.63$ N-m
+    \item เพิ่ม Safety Factor 3× สำหรับการเคลื่อนที่: $\tau_{required} = 1.63 \times 3 \approx 5$ N-m
+\end{itemize}
+
+\subsection{มอเตอร์ที่เลือก}
+
+\textbf{ข้อเสนอแนะ:} เลือกสเต็ปมอเตอร์ที่มี \textbf{Holding Torque $\geq$ 5 N-m}
+
+\textbf{ตัวอย่าง:}
+\begin{itemize}
+    \item NEMA 23 (57 mm) - 5 N-m Stepper Motor
+    \item มี Safety Factor เพียงพอสำหรับการเดินและการเร่งความเร็ว
+\end{itemize}
+
+\subsection{ข้อควรพิจารณาเพิ่มเติม}
+
+\begin{itemize}
+    \item \textbf{Dynamic Torque:} การวิเคราะห์ในเอกสารนี้เป็นแบบสถิตเท่านั้น สำหรับการเคลื่อนที่จริง ต้องคำนวณ Dynamic Torque ที่รวม Inertia และ Acceleration ด้วย (Phase 2.2)
+    \item \textbf{Peak Torque:} ในระหว่างการเดิน ทอร์กสูงสุดอาจมากกว่า Static Torque 2-3 เท่า
+    \item \textbf{Continuous vs Peak:} ตรวจสอบว่ามอเตอร์สามารถจ่ายทอร์กสูงสุดได้นานเท่าใด
+\end{itemize}
+
+\section{สรุป}
+
+\subsection{ผลการวิเคราะห์}
+
+\begin{enumerate}
+    \item ได้สูตรคำนวณทอร์กแบบสถิต: $\tau = J_F^T F$
+    \item คำนวณทอร์กสำหรับ 3 Valid Configurations ที่ Home Pose
+    \item \textbf{Config 1 (Down-Down)} ให้ผลลัพธ์ดีที่สุด (ทอร์กสมดุล)
+    \item ทอร์กสูงสุด $\approx$ 1.63 N-m (ท่านิ่ง)
+    \item แนะนำเลือกมอเตอร์ 5 N-m (รวม Safety Factor 3×)
+\end{enumerate}
+
+\subsection{งานต่อไป (Phase 2.2)}
+
+\begin{itemize}
+    \item คำนวณ \textbf{Inertia Matrix} $M(q)$ จากมวลและ COM ของแต่ละ link
+    \item คำนวณ \textbf{Gravity Vector} $G(q)$
+    \item คำนวณ \textbf{Dynamic Torque}: $\tau = M(q)\ddot{q} + C(q,\dot{q})\dot{q} + G(q) - J_F^T F_{ext}$
+    \item จำลอง Trajectory และหา \textbf{Peak Torque} ในระหว่างการเดิน
+\end{itemize}
+
+\section{อ้างอิง}
+
+\begin{itemize}
+    \item \texttt{forward-kinematics-5bar.tex} - Forward Kinematics และ Jacobian Derivation
+    \item \texttt{inverse-kinematics-analytical.tex} - Inverse Kinematics (4 Configurations)
+    \item \texttt{IK-Five-Bar-Leg-Analytical.py} - Python Implementation
+\end{itemize}
+
+\end{document}

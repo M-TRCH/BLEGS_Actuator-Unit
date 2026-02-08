@@ -1,0 +1,578 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\newfontfamily\thaifonttt{TH SarabunPSK} % For monospace Thai
+\usepackage{amsmath} % For math environments
+\usepackage{amssymb} % For checkmark symbol
+\usepackage{geometry} % For page margins
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs} % For professional tables
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+% Title
+\title{\textbf{Phase 3: Gait Control Simulation}\\
+\large การจำลองการควบคุมการเดินของหุ่นยนต์สี่ขา\\
+BLEGS Analysis Unit}
+
+\author{นายธีรโชติ เมืองจำนงค์\\
+BLEGS Quadruped Robot Project}
+
+\date{8 ธันวาคม 2025}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{บทนำ (Introduction)}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+Phase 3 มีวัตถุประสงค์เพื่อพัฒนาระบบจำลองการควบคุมการเดินของหุ่นยนต์สี่ขาในสภาพแวดล้อม PyBullet physics simulation โดยใช้รูปแบบการเดินแบบ Trot gait พร้อมระบบควบคุมการทรงตัว
+
+\subsection{ขอบเขตการศึกษา}
+\begin{itemize}
+    \item การสร้างโมเดล URDF สำหรับหุ่นยนต์สี่ขาแบบ Simplified 2-DOF
+    \item การใช้งาน PyBullet physics engine สำหรับการจำลอง
+    \item การพัฒนา Trot gait pattern ด้วย state machine
+    \item การออกแบบระบบควบคุมการทรงตัวแบบ PD controller
+    \item การบูรณาการ Inverse Kinematics สำหรับการควบคุมตำแหน่งเท้า
+\end{itemize}
+
+\subsection{ความเชื่อมโยงกับ Phase ก่อนหน้า}
+Phase 3 ใช้ความรู้จาก Phase 1 (Kinematics) และ Phase 2 (Dynamics) โดย:
+\begin{itemize}
+    \item ใช้ความยาวขาจาก Phase 1: Thigh = 105 mm, Shank = 145 mm
+    \item ใช้ข้อมูล workspace จาก Phase 2 ในการกำหนดขอบเขตการเคลื่อนที่
+    \item ปรับโมเดลจาก 5-bar linkage เป็น simplified 2-DOF เพื่อหลีกเลี่ยงปัญหา closed-loop constraints
+\end{itemize}
+
+%=============================================================================
+\section{โมเดลหุ่นยนต์ (Robot Model)}
+%=============================================================================
+
+\subsection{โครงสร้าง URDF}
+
+\subsubsection{Base Link}
+ตัวถังหุ่นยนต์มีขนาด $490 \times 260 \times 92.5$ mm โดยมีมวล 1.62 kg
+
+\subsubsection{ตำแหน่ง Hip Joints}
+พิกัดตำแหน่งสะโพกแต่ละขาเทียบกับจุดศูนย์กลางตัวถัง:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{ขา} & \textbf{X (m)} & \textbf{Y (m)} & \textbf{Z (m)} \\
+\midrule
+Front-Right (FR) & $+0.19875$ & $-0.1535$ & $0$ \\
+Front-Left (FL)  & $+0.19875$ & $+0.1535$ & $0$ \\
+Rear-Right (RR)  & $-0.16000$ & $-0.1535$ & $0$ \\
+Rear-Left (RL)   & $-0.16000$ & $+0.1535$ & $0$ \\
+\bottomrule
+\end{tabular}
+\caption{ตำแหน่ง Hip joints ของหุ่นยนต์}
+\end{table}
+
+\subsubsection{Kinematic Chain แต่ละขา}
+แต่ละขาประกอบด้วย 4 joints และ 4 links:
+
+\begin{enumerate}
+    \item \textbf{Hip Joint} (Fixed): ไม่มีการหมุน (ลดจาก 3-DOF เป็น 2-DOF)
+    \item \textbf{Thigh Joint} (Revolute): หมุนรอบแกน Y, ขอบเขต $[-1.5, +1.5]$ rad
+    \item \textbf{Shank Joint} (Revolute): หมุนรอบแกน Y, ขอบเขต $[-2.5, 0]$ rad
+    \item \textbf{Foot Joint} (Fixed): เชื่อมต่อกับ foot link
+\end{enumerate}
+
+\subsection{พารามิเตอร์ทางกายภาพ}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{ส่วนประกอบ} & \textbf{ความยาว (mm)} & \textbf{มวล (kg)} \\
+\midrule
+Hip Link    & $50 \times 50 \times 50$ (box) & $0.385$ \\
+Thigh Link  & $105$ (cylinder) & $0.105$ \\
+Shank Link  & $145$ (cylinder) & $0.145$ \\
+Foot Link   & $r = 20$ (sphere) & $0.010$ \\
+\midrule
+\textbf{รวมต่อขา} & \textbf{250} & \textbf{0.645} \\
+\textbf{รวมทั้งหมด (4 ขา + Base)} & - & \textbf{4.20} \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์ทางกายภาพของหุ่นยนต์}
+\end{table}
+
+\subsection{ความแตกต่างจาก 5-Bar Linkage}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{คุณสมบัติ} & \textbf{5-Bar (Phase 1-2)} & \textbf{Simplified (Phase 3)} \\
+\midrule
+DOF ต่อขา & 3 (Hip + 2 motors) & 2 (Thigh + Shank) \\
+Hip Joint & Revolute (Abduction) & Fixed \\
+Closed Loop & ใช่ (AC-E-D) & ไม่ (Serial chain) \\
+PyBullet Support & ไม่รองรับ & รองรับ \\
+ความยาวขา & $105 + 145 = 250$ mm & $105 + 145 = 250$ mm \\
+\bottomrule
+\end{tabular}
+\caption{เปรียบเทียบโมเดล 5-bar และ Simplified}
+\end{table}
+
+%=============================================================================
+\section{Trot Gait Pattern}
+%=============================================================================
+
+\subsection{หลักการ Trot Gait}
+Trot gait เป็นรูปแบบการเดินที่ขาคู่เฉียง (diagonal pairs) เคลื่อนที่พร้อมกัน:
+
+\begin{itemize}
+    \item \textbf{Pair 1}: Front-Right (FR) + Rear-Left (RL)
+    \item \textbf{Pair 2}: Front-Left (FL) + Rear-Right (RR)
+\end{itemize}
+
+\subsection{State Machine}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=3cm,
+    state/.style={rectangle, draw, rounded corners, minimum width=3cm, minimum height=1.5cm, align=center},
+    arrow/.style={->, >=stealth, thick}
+]
+    % States
+    \node[state] (state0) {\textbf{State 0}\\Swing: FR+RL\\Stance: FL+RR};
+    \node[state, right=of state0] (state1) {\textbf{State 1}\\Swing: FL+RR\\Stance: FR+RL};
+    
+    % Arrows
+    \draw[arrow] (state0) to[bend left=30] node[above] {$t \geq T_{step}$} (state1);
+    \draw[arrow] (state1) to[bend left=30] node[below] {$t \geq T_{step}$} (state0);
+\end{tikzpicture}
+\caption{State machine สำหรับ Trot gait}
+\end{figure}
+
+\subsection{Trajectory Generation}
+
+\subsubsection{Swing Phase (ยกขา)}
+สำหรับขาที่อยู่ใน swing phase:
+
+\begin{align}
+    \text{progress} &= \frac{t}{T_{step}} \quad \text{where } 0 \leq t < T_{step} \\
+    x_{move} &= L_{step} \cdot (2 \cdot \text{progress} - 1) \\
+    z_{move} &= H_{lift} \cdot \sin(\text{progress} \cdot \pi) \\
+    \mathbf{p}_{foot} &= \mathbf{p}_{home} + \begin{bmatrix} x_{move} \\ 0 \\ z_{move} \end{bmatrix}
+\end{align}
+
+โดย:
+\begin{itemize}
+    \item $L_{step} = 0.05$ m (ระยะก้าว)
+    \item $H_{lift} = 0.05$ m (ความสูงยกขา)
+    \item $T_{step} = 0.6$ s (เวลาต่อรอบ)
+\end{itemize}
+
+\subsubsection{Stance Phase (ขาค้ำ)}
+สำหรับขาที่อยู่ใน stance phase:
+
+\begin{align}
+    x_{shift} &= L_{step} \cdot (1 - 2 \cdot \text{progress}) \\
+    \mathbf{p}_{foot} &= \mathbf{p}_{home} + \begin{bmatrix} x_{shift} \\ 0 \\ 0 \end{bmatrix}
+\end{align}
+
+%=============================================================================
+\section{ระบบควบคุมการทรงตัว (Balance Control)}
+%=============================================================================
+
+\subsection{PD Controller}
+
+ระบบควบคุมการทรงตัวใช้ PD controller แยกสำหรับ Pitch และ Roll:
+
+\subsubsection{Pitch Control (หน้า-หลัง)}
+\begin{align}
+    e_{pitch}(t) &= 0 - \theta_{pitch}(t) \\
+    \dot{e}_{pitch}(t) &= \frac{e_{pitch}(t) - e_{pitch}(t-1)}{\Delta t} \\
+    u_{pitch}(t) &= K_{p,pitch} \cdot e_{pitch}(t) + K_{d,pitch} \cdot \dot{e}_{pitch}(t)
+\end{align}
+
+\subsubsection{Roll Control (ซ้าย-ขวา)}
+\begin{align}
+    e_{roll}(t) &= 0 - \theta_{roll}(t) \\
+    \dot{e}_{roll}(t) &= \frac{e_{roll}(t) - e_{roll}(t-1)}{\Delta t} \\
+    u_{roll}(t) &= K_{p,roll} \cdot e_{roll}(t) + K_{d,roll} \cdot \dot{e}_{roll}(t)
+\end{align}
+
+\subsection{การปรับแก้ตำแหน่งเท้า}
+ค่า correction จาก PD controller ถูกนำไปปรับตำแหน่งเป้าหมายของเท้า:
+
+\begin{align}
+    \mathbf{p}_{corrected} = \begin{bmatrix} x + u_{pitch} \\ y + u_{roll} \\ z \end{bmatrix}
+\end{align}
+
+\subsection{ค่า Gain}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{Pitch} & \textbf{Roll} \\
+\midrule
+$K_p$ (Proportional Gain) & $0.006$ & $0.006$ \\
+$K_d$ (Derivative Gain)    & $0.012$ & $0.012$ \\
+\bottomrule
+\end{tabular}
+\caption{ค่า PD gains สำหรับระบบควบคุมการทรงตัว}
+\end{table}
+
+%=============================================================================
+\section{Inverse Kinematics}
+%=============================================================================
+
+\subsection{PyBullet IK Solver}
+ใช้ฟังก์ชัน \texttt{calculateInverseKinematics()} จาก PyBullet:
+
+\begin{lstlisting}[language=Python, caption=การเรียกใช้ IK solver]
+joint_angles = p.calculateInverseKinematics(
+    robotId,
+    foot_link_id,
+    target_position_world,
+    jointDamping=[0.5] * num_joints,
+    maxNumIterations=50
+)
+\end{lstlisting}
+
+\subsection{พารามิเตอร์ IK}
+\begin{itemize}
+    \item \textbf{Joint Damping}: $0.5$ (เพิ่มความนุ่มนวล)
+    \item \textbf{Max Iterations}: $50$ (ความแม่นยำ vs ความเร็ว)
+    \item \textbf{Target Frame}: World coordinates
+\end{itemize}
+
+%=============================================================================
+\section{Joint Control}
+%=============================================================================
+
+\subsection{Position Control Mode}
+ใช้ \texttt{setJointMotorControlArray()} ในโหมด \texttt{POSITION\_CONTROL}:
+
+\begin{lstlisting}[language=Python, caption=การควบคุม joint motors]
+p.setJointMotorControlArray(
+    robotId,
+    joint_ids,
+    p.POSITION_CONTROL,
+    targetPositions=target_angles,
+    forces=forces,
+    positionGains=position_gains,
+    velocityGains=velocity_gains
+)
+\end{lstlisting}
+
+\subsection{Dual-Gain Strategy}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{โหมด} & \textbf{Position Gain} & \textbf{Velocity Gain} & \textbf{Max Force (Nm)} \\
+\midrule
+Warm-up & $0.5$ & $0.7$ & $10$ \\
+Walking & $0.3$ & $0.5$ & $9$ \\
+\bottomrule
+\end{tabular}
+\caption{ค่า control gains สำหรับแต่ละโหมด}
+\end{table}
+
+\textbf{เหตุผล:}
+\begin{itemize}
+    \item \textbf{Warm-up}: ต้องการความแข็งแรงสูงเพื่อทรงตัว
+    \item \textbf{Walking}: ลด gain เพื่อความนุ่มนวลและ compliance
+\end{itemize}
+
+%=============================================================================
+\section{Implementation Details}
+%=============================================================================
+
+\subsection{โครงสร้างโค้ด}
+
+\begin{lstlisting}[language=Python, caption=โครงสร้างหลักของโปรแกรม]
+# 1. Initialize PyBullet
+p.connect(p.GUI)
+p.setGravity(0, 0, -9.81)
+
+# 2. Load URDF
+robotId = p.loadURDF(urdf_path)
+
+# 3. Setup joint mappings
+joint_name_to_id = {...}
+link_name_to_id = {...}
+
+# 4. Main simulation loop
+while True:
+    # 4.1 Update state machine
+    if is_walking:
+        state_timer += time_step
+        if state_timer >= STEP_TIME:
+            gait_state = (gait_state + 1) % 2
+    
+    # 4.2 Generate target positions
+    target_positions = calculate_gait_trajectory(...)
+    
+    # 4.3 Balance control
+    corrections = balance_controller(...)
+    
+    # 4.4 Inverse kinematics
+    joint_angles = p.calculateInverseKinematics(...)
+    
+    # 4.5 Send commands to motors
+    p.setJointMotorControlArray(...)
+    
+    # 4.6 Step simulation
+    p.stepSimulation()
+\end{lstlisting}
+
+\subsection{Simulation Parameters}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่า} \\
+\midrule
+Simulation Frequency & $240$ Hz \\
+Time Step & $1/240 = 0.00417$ s \\
+Warm-up Duration & $2.0$ s \\
+Gait Cycle Time & $0.6$ s \\
+Step Length & $0.05$ m \\
+Lift Height & $0.05$ m \\
+Standing Height & $-0.20$ m \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์การจำลอง}
+\end{table}
+
+%=============================================================================
+\section{ผลการทดสอบ (Results)}
+%=============================================================================
+
+\subsection{การทดสอบเบื้องต้น}
+
+\subsubsection{URDF Loading}
+\begin{itemize}
+    \item[\checkmark] โหลด URDF สำเร็จ
+    \item[\checkmark] ตรวจพบ 16 joints ถูกต้อง
+    \item[\checkmark] Joint/Link naming ถูกต้อง (แก้ไข ASCII 160 issue)
+\end{itemize}
+
+\subsubsection{Warm-up Phase}
+\begin{itemize}
+    \item[\checkmark] หุ่นยนต์ทรงตัวได้ภายใน 2 วินาที
+    \item[\checkmark] ตำแหน่ง home position ถูกต้อง
+    \item[\checkmark] ไม่มี joint limit violations
+\end{itemize}
+
+\subsubsection{Trot Gait Execution}
+\begin{itemize}
+    \item[\checkmark] State transitions ทำงานถูกต้อง
+    \item[\checkmark] Diagonal pairs ประสานกันอย่างราบรื่น
+    \item[\checkmark] Swing/Stance phases สลับกันถูกต้อง
+\end{itemize}
+
+\subsubsection{Balance Control}
+\begin{itemize}
+    \item[\checkmark] Pitch error $< \pm 5°$ ในระหว่างเดิน
+    \item[\checkmark] Roll error $< \pm 5°$ ในระหว่างเดิน
+    \item[\checkmark] ไม่มีการสั่นหรือ oscillation
+\end{itemize}
+
+\subsection{Performance Metrics}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Gait Cycle Frequency & $1.67$ Hz \\
+Theoretical Forward Speed & $83$ mm/s \\
+Leg Clearance & $50$ mm \\
+Duty Factor & $50\%$ \\
+CPU Usage (240 Hz) & $\approx 15-25\%$ \\
+Stability (Pitch/Roll) & $< \pm 5°$ \\
+\bottomrule
+\end{tabular}
+\caption{ผลการวัดประสิทธิภาพ}
+\end{table}
+
+%=============================================================================
+\section{ข้อจำกัดและปัญหา (Limitations)}
+%=============================================================================
+
+\subsection{ข้อจำกัดของโมเดล}
+
+\begin{enumerate}
+    \item \textbf{Simplified Kinematics}
+    \begin{itemize}
+        \item ขาดการหมุน Hip (abduction/adduction)
+        \item จำกัดการเคลื่อนที่ในแนวขอบ (lateral mobility)
+    \end{itemize}
+    
+    \item \textbf{Terrain Limitations}
+    \begin{itemize}
+        \item ทดสอบบนพื้นเรียบเท่านั้น
+        \item ไม่มีการปรับตัวกับความลาดเอียง
+        \item ไม่มีการหลบหลีกสิ่งกีดขวาง
+    \end{itemize}
+    
+    \item \textbf{Gait Variety}
+    \begin{itemize}
+        \item รองรับเฉพาะ Trot gait
+        \item ไม่มีการเปลี่ยน gait แบบไดนามิก
+    \end{itemize}
+\end{enumerate}
+
+\subsection{ปัญหาที่พบและแก้ไข}
+
+\begin{enumerate}
+    \item \textbf{ASCII 160 in URDF}: แก้ไขด้วย string replacement
+    \item \textbf{Base Position Error}: แก้ค่า \texttt{base\_x\_rear} จาก $+0.16$ เป็น $-0.16$
+    \item \textbf{Joint Stiffness}: ลด position gains จาก $0.5$ เป็น $0.3$
+\end{enumerate}
+
+%=============================================================================
+\section{การพัฒนาในอนาคต (Future Work)}
+%=============================================================================
+
+\subsection{Short-term Improvements}
+\begin{enumerate}
+    \item เพิ่มการควบคุมทิศทางด้วย keyboard/joystick
+    \item ปรับความเร็วได้แบบ real-time
+    \item เพิ่มความสามารถในการหมุนตัว (turn-in-place)
+\end{enumerate}
+
+\subsection{Medium-term Goals}
+\begin{enumerate}
+    \item พัฒนา gait patterns เพิ่มเติม (walk, gallop, bound)
+    \item เพิ่มระบบ terrain adaptation
+    \item ใช้ foot force feedback
+\end{enumerate}
+
+\subsection{Long-term Vision}
+\begin{enumerate}
+    \item ใช้ Reinforcement Learning ปรับปรุง gait
+    \item ระบบหลบหลีกสิ่งกีดขวางแบบ real-time
+    \item นำไปใช้กับ hardware จริง (Phase 4)
+\end{enumerate}
+
+%=============================================================================
+\section{สรุป (Conclusion)}
+%=============================================================================
+
+Phase 3 ประสบความสำเร็จในการพัฒนาระบบจำลองการควบคุมการเดินของหุ่นยนต์สี่ขาด้วย PyBullet โดย:
+
+\begin{enumerate}
+    \item สร้างโมเดล URDF แบบ simplified 2-DOF ที่หลีกเลี่ยงปัญหา closed-loop
+    \item พัฒนา Trot gait pattern ด้วย state machine ที่ทำงานได้อย่างราบรื่น
+    \item ออกแบบระบบควบคุมการทรงตัวแบบ PD controller ที่มีประสิทธิภาพ
+    \item บูรณาการ IK และ joint control ได้สำเร็จ
+\end{enumerate}
+
+ผลการทดสอบแสดงให้เห็นว่าระบบสามารถควบคุมการเดินได้อย่างเสถียร มีความแม่นยำสูง และพร้อมสำหรับการพัฒนาต่อยอดในอนาคต
+
+%=============================================================================
+\section{เอกสารอ้างอิง (References)}
+%=============================================================================
+
+\begin{enumerate}
+    \item PyBullet Documentation. \textit{PyBullet Quickstart Guide}. Available: \url{https://pybullet.org}
+    
+    \item Raibert, M. H. (1986). \textit{Legged Robots That Balance}. MIT Press.
+    
+    \item Phase 1 Documentation: \textit{Forward Kinematics of 5-Bar Linkage}. BLEGS Project, November 2024.
+    
+    \item Phase 2 Documentation: \textit{Dynamic Torque Analysis}. BLEGS Project, November 2024.
+    
+    \item GitHub Repository: M-TRCH/BLEGS\_Analysis-Unit, Branch: Test-Phase3
+\end{enumerate}
+
+%=============================================================================
+\appendix
+\section{รหัสโปรแกรมที่สำคัญ (Code Appendix)}
+%=============================================================================
+
+\subsection{Main Simulation Loop}
+
+\begin{lstlisting}[language=Python, caption=Main loop implementation]
+while True:
+    sim_time += time_step
+    basePos, baseOrn = p.getBasePositionAndOrientation(robotId)
+    
+    # Warm-up logic
+    if not is_walking and sim_time >= WARMUP_TIME:
+        is_walking = True
+        state_timer = 0.0
+    
+    # State machine
+    if is_walking:
+        state_timer += time_step
+        if state_timer >= STEP_TIME:
+            state_timer = 0.0
+            gait_state = (gait_state + 1) % 2
+    
+    # Trajectory generation
+    target_foot_positions_REL = {}
+    if is_walking:
+        # Swing/Stance logic
+        ...
+        # Balance control
+        euler_angles = p.getEulerFromQuaternion(baseOrn)
+        pitch_correction = pd_control_pitch(euler_angles[1])
+        roll_correction = pd_control_roll(euler_angles[0])
+    
+    # IK and motor control
+    for foot_link_name, target_pos in target_foot_positions_REL.items():
+        # Apply corrections
+        corrected_pos[0] += pitch_correction
+        corrected_pos[1] += roll_correction
+        
+        # IK
+        joint_angles = p.calculateInverseKinematics(...)
+        
+        # Send commands
+        p.setJointMotorControlArray(...)
+    
+    p.stepSimulation()
+    time.sleep(time_step)
+\end{lstlisting}
+
+\end{document}

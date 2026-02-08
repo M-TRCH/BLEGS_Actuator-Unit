@@ -1,0 +1,870 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\newfontfamily\thaifonttt{TH SarabunPSK}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+% Title
+\title{\textbf{Phase 5.2: Gait Tuning and Optimization}\\
+\large การปรับจูนและพัฒนาหลายโหมดการเดิน\\
+BLEGS Analysis Unit}
+
+\author{นายธีรโชติ เมืองจำนงค์\\
+BLEGS Quadruped Robot Project}
+
+\date{2 มกราคม 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{บทนำ (Introduction)}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+Phase 5.2 มีวัตถุประสงค์เพื่อปรับจูนพารามิเตอร์การเดินของหุ่นยนต์สี่ขา พัฒนาหลายโหมดการเดิน และเพิ่มประสิทธิภาพการเดินให้นุ่มนวลและเสถียรยิ่งขึ้น โดยเฉพาะการพัฒนา Asymmetric Trajectory Generation เพื่อลดแรงกระแทกและเพิ่มความนุ่มนวล
+
+\subsection{ขอบเขตการศึกษา}
+\begin{itemize}
+    \item การวิเคราะห์ปัญหาจากการทดสอบ Phase 5.1 (Compromised posture)
+    \item การพัฒนา Asymmetric Trajectory Generation (Stance/Swing phase)
+    \item การออกแบบโหมดการเดินหลายแบบ (6 modes)
+    \item การทดสอบ Forward และ Backward trot
+    \item การวิเคราะห์ผลกระทบของ Foot orientation
+    \item การเปรียบเทียบประสิทธิภาพของแต่ละโหมด
+\end{itemize}
+
+\subsection{ความเชื่อมโยงกับ Phase ก่อนหน้า}
+Phase 5.2 ปรับปรุงผลการทดสอบจาก Phase 5.1:
+\begin{itemize}
+    \item แก้ปัญหา Compromised posture ด้วยการปรับ Gait parameters
+    \item เพิ่มความนุ่มนวลด้วย Asymmetric trajectory
+    \item พัฒนาหลายโหมดการเดินเพื่อความยืดหยุ่น
+\end{itemize}
+
+%=============================================================================
+\section{ปัญหาจาก Phase 5.1}
+%=============================================================================
+
+\subsection{ผลการทดสอบเริ่มต้น}
+
+จากการทดสอบ Phase 5.1 (29 ธันวาคม 2025) พบว่า:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่าที่ใช้} & \textbf{ผลลัพธ์} \\
+\midrule
+Step Length & 30 mm & น้อยเกินไป \\
+Lift Height & 15 mm & ต่ำเกินไป \\
+Cycle Time & 600 ms & เหมาะสม \\
+Update Rate & 50 Hz & เหมาะสม \\
+\midrule
+\textbf{Posture} & \multicolumn{2}{c}{Compromised (ท่าประนีประนอม)} \\
+\textbf{Speed} & \multicolumn{2}{c}{ช้า (~50 mm/s)} \\
+\textbf{Smoothness} & \multicolumn{2}{c}{ยอมรับได้ แต่ยังไม่นุ่มนวลมาก} \\
+\bottomrule
+\end{tabular}
+\caption{สรุปผลการทดสอบ Phase 5.1}
+\end{table}
+
+\subsection{การวิเคราะห์สาเหตุ}
+
+\subsubsection{Compromised Posture}
+
+ปัญหา Compromised Posture หรือท่าทางประนีประนอม เกิดจากหลายปัจจัยดังนี้:
+
+\begin{enumerate}
+    \item \textbf{Step length ต่ำ (30 mm):} ระยะก้าวที่สั้นเกินไปทำให้ขาของหุ่นยนต์ไม่สามารถเหยียดออกได้เต็มที่ ส่งผลให้ท่าทางโดยรวมมีลักษณะหดตัวและเกร็ง ซึ่งไม่เหมาะสมสำหรับการเดินระยะไกลหรือการทรงตัวที่ดี
+    
+    \item \textbf{Lift height ต่ำ (15 mm):} ระยะยกเท้าที่ต่ำเกินไปทำให้เท้ามีความเสี่ยงที่จะกระทบพื้นในช่วง Swing phase โดยเฉพาะเมื่อพื้นไม่เรียบหรือมีสิ่งกีดขวางเล็กน้อย นอกจากนี้ยังทำให้การเคลื่อนที่ดูไม่เป็นธรรมชาติ
+    
+    \item \textbf{Center position ไม่เหมาะสม:} ตำแหน่งศูนย์กลางของ Trajectory อาจไม่ตรงกับตำแหน่งที่เหมาะสมสำหรับการเดินจริง ทำให้เกิดการกระจายน้ำหนักที่ไม่สมดุลระหว่างขาทั้งสี่
+\end{enumerate}
+
+\subsubsection{Lack of Smoothness}
+
+ปัญหาการเดินที่ไม่นุ่มนวลเกิดจากหลายสาเหตุดังนี้:
+
+\begin{enumerate}
+    \item \textbf{Symmetric trajectory (50\%-50\%):} การใช้ Trajectory แบบสมมาตรที่แบ่งเวลาเท่ากันระหว่าง Stance phase และ Swing phase ไม่สอดคล้องกับธรรมชาติของการเดินที่ต้องการเวลาในการรองรับน้ำหนัก (Stance) มากกว่าการเหวี่ยงขา (Swing) การแบ่งเวลาแบบนี้ทำให้เกิดการเปลี่ยน phase อย่างกะทันหัน
+    
+    \item \textbf{แรงกระแทกสูง (Sudden Impact):} เมื่อเท้าสัมผัสพื้นในตอนสิ้นสุด Swing phase ความเร็วของเท้ายังคงสูงอยู่ ทำให้เกิดแรงกระแทกที่รุนแรง ส่งผลต่อความเสถียรของหุ่นยนต์และอาจสร้างความเสียหายต่อกลไกในระยะยาว
+    
+    \item \textbf{Jerk สูง:} Jerk คืออัตราการเปลี่ยนแปลงของความเร่ง ($\frac{da}{dt}$) เมื่อ Jerk มีค่าสูง หมายความว่าความเร่งเปลี่ยนแปลงอย่างรวดเร็ว ซึ่งสร้างแรงกระตุกให้กับระบบ ทำให้การเคลื่อนที่ไม่ราบรื่น และอาจทำให้มอเตอร์ต้องทำงานหนักขึ้นเพื่อติดตาม Trajectory
+\end{enumerate}
+
+%=============================================================================
+\section{Asymmetric Trajectory Generation}
+%=============================================================================
+
+\subsection{แนวคิด Asymmetric Trajectory}
+
+Asymmetric Trajectory แบ่งเวลาไม่เท่ากันระหว่าง Stance และ Swing phase:
+
+\begin{itemize}
+    \item \textbf{Stance Phase (65\%):} เท้าสัมผัสพื้น - ใช้เวลานาน
+    \begin{itemize}
+        \item ลดแรงกระแทกเมื่อเท้าสัมผัสพื้น
+        \item กระจายแรงในช่วงเวลาที่ยาวขึ้น
+        \item ให้เวลาสำหรับการปรับทรงตัว
+    \end{itemize}
+    
+    \item \textbf{Swing Phase (35\%):} เท้ายกขึ้น - ใช้เวลาสั้น
+    \begin{itemize}
+        \item เคลื่อนที่เร็ว (ไม่มีแรงปฏิกิริยาจากพื้น)
+        \item ลด Cycle time โดยรวม
+        \item ลด Airtime ของหุ่นยนต์
+    \end{itemize}
+\end{itemize}
+
+\subsection{Time Warping Function}
+
+ใช้ฟังก์ชัน $\tau(t)$ เพื่อแปลงเวลาเชิงเส้นเป็น Asymmetric time:
+
+\subsubsection{สมการ Time Warping}
+
+กำหนด:
+\begin{itemize}
+    \item $T$ = Gait cycle time (600 ms)
+    \item $\alpha$ = Stance ratio (0.65 = 65\%)
+    \item $\beta$ = Swing ratio (0.35 = 35\%)
+    \item $t \in [0, T]$ = เวลาจริง (Linear time)
+\end{itemize}
+
+ฟังก์ชัน $\tau(t)$:
+
+\begin{equation}
+    \tau(t) = \begin{cases}
+        \frac{t}{\alpha T} \cdot \pi & \text{if } 0 \leq t < \alpha T \text{ (Stance)} \\
+        \pi + \frac{t - \alpha T}{\beta T} \cdot \pi & \text{if } \alpha T \leq t < T \text{ (Swing)}
+    \end{cases}
+\end{equation}
+
+สำหรับ $\alpha = 0.65, \beta = 0.35$:
+
+\begin{equation}
+    \tau(t) = \begin{cases}
+        \frac{t}{0.65T} \cdot \pi & \text{if } 0 \leq t < 0.65T \\
+        \pi + \frac{t - 0.65T}{0.35T} \cdot \pi & \text{if } 0.65T \leq t < T
+    \end{cases}
+\end{equation}
+
+\subsection{Asymmetric Elliptical Trajectory}
+
+ใช้ $\tau(t)$ ในสมการ Ellipse:
+
+\begin{align}
+    x_F(t) &= x_c + a \cos(\tau(t) + \phi) \\
+    y_F(t) &= y_c - b |\sin(\tau(t) + \phi)|
+\end{align}
+
+โดย:
+\begin{itemize}
+    \item $x_c, y_c$ = จุดศูนย์กลางวงรี
+    \item $a$ = กึ่งแกนใหญ่ (Step length / 2)
+    \item $b$ = กึ่งแกนเล็ก (Lift height / 2)
+    \item $\phi$ = Phase offset สำหรับแต่ละขา
+\end{itemize}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Asymmetric Trajectory Generator]
+def generate_asymmetric_trajectory(
+    center, step_length, lift_height,
+    n_points=60, stance_ratio=0.65, reverse=False
+):
+    """
+    Generate asymmetric elliptical trajectory
+    
+    Parameters:
+    -----------
+    center : tuple
+        Center position (x_c, y_c) in mm
+    step_length : float
+        Step length in mm
+    lift_height : float
+        Lift height in mm
+    n_points : int
+        Number of points in trajectory
+    stance_ratio : float
+        Ratio of stance phase (0.0-1.0), default 0.65
+    reverse : bool
+        If True, reverse X direction (backward walking)
+        
+    Returns:
+    --------
+    trajectory : ndarray (n_points, 2)
+        Trajectory points [(x, y), ...]
+    """
+    x_c, y_c = center
+    a = step_length / 2
+    b = lift_height / 2
+    swing_ratio = 1.0 - stance_ratio
+    
+    # Time array
+    t = np.linspace(0, 1, n_points)
+    
+    # Time warping function
+    tau = np.zeros_like(t)
+    for i, ti in enumerate(t):
+        if ti < stance_ratio:
+            # Stance phase
+            tau[i] = (ti / stance_ratio) * np.pi
+        else:
+            # Swing phase
+            tau[i] = np.pi + ((ti - stance_ratio) / swing_ratio) * np.pi
+    
+    # Generate trajectory
+    x = x_c + a * np.cos(tau)
+    y = y_c - b * np.abs(np.sin(tau))
+    
+    # Reverse if backward walking
+    if reverse:
+        x = 2*x_c - x  # Mirror X around center
+    
+    trajectory = np.column_stack([x, y])
+    return trajectory
+\end{lstlisting}
+
+%=============================================================================
+\section{Multi-Mode Gait Development}
+%=============================================================================
+
+\subsection{ภาพรวมโหมดการเดิน}
+
+พัฒนาโหมดการเดินทั้งหมด 6 โหมด:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccccp{5cm}}
+\toprule
+\textbf{Mode} & \textbf{Direction} & \textbf{Step} & \textbf{Lift} & \textbf{Cycle} & \textbf{Characteristics} \\
+\midrule
+TROT & Forward & 50 mm & 15 mm & 400 ms & เดินเร็ว แต่มีแรงกระแทกสูง \\
+SMOOTH\_TROT & Forward & 50 mm & 30 mm & 600 ms & สมดุลระหว่างความเร็วและความนุ่มนวล (แนะนำ) \\
+BACKWARD\_TROT & Backward & 50 mm & 30 mm & 600 ms & เดินถอยหลังนุ่มนวล \\
+WALK & Forward & 40 mm & 25 mm & 800 ms & เดินช้าแต่เสถียรมาก \\
+CRAWL & Forward & 30 mm & 20 mm & 1200 ms & เสถียรที่สุด เหมาะสำหรับพื้นไม่เรียบ \\
+STAND & Static & -- & -- & -- & ท่ายืนนิ่งสำหรับทดสอบและปรับเทียบ \\
+\bottomrule
+\end{tabular}
+\caption{สรุปโหมดการเดินทั้ง 6 โหมด พร้อมพารามิเตอร์และลักษณะการใช้งาน}
+\end{table}
+
+\subsection{Mode 1: TROT (Standard Trot)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Step Length:} 50 mm
+    \item \textbf{Lift Height:} 15 mm
+    \item \textbf{Cycle Time:} 400 ms (20 steps)
+    \item \textbf{Update Rate:} 50 Hz
+    \item \textbf{Trajectory:} Symmetric (50\%-50\%)
+\end{itemize}
+
+\subsubsection{ลักษณะและการใช้งาน}
+
+โหมด TROT เป็นโหมดการเดินที่ให้ความเร็วสูงสุดประมาณ 100 มิลลิเมตรต่อวินาที เหมาะสำหรับการเคลื่อนที่รวดเร็วบนพื้นเรียบ อย่างไรก็ตาม โหมดนี้มีข้อจำกัดที่สำคัญคือแรงกระแทกที่สูงเนื่องจากใช้ Symmetric trajectory และระยะยกเท้าที่ต่ำเพียง 15 มิลลิเมตร ท่าทางการเดินจึงค่อนข้างก้าวร้าวและอาจสร้างความเครียดให้กับกลไกมากกว่าโหมดอื่น
+
+\textbf{ข้อดี:} ความเร็วสูง, เหมาะสำหรับพื้นเรียบ
+
+\textbf{ข้อจำกัด:} แรงกระแทกสูง, ท่าทางไม่นุ่มนวล
+
+\subsection{Mode 2: SMOOTH\_TROT (Recommended)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Step Length:} 50 mm
+    \item \textbf{Lift Height:} 30 mm
+    \item \textbf{Cycle Time:} 600 ms (30 steps)
+    \item \textbf{Update Rate:} 50 Hz
+    \item \textbf{Trajectory:} Asymmetric (65\% Stance / 35\% Swing)
+\end{itemize}
+
+\subsubsection{ลักษณะและการใช้งาน}
+
+โหมด SMOOTH\_TROT เป็นโหมดที่แนะนำสำหรับการใช้งานทั่วไป โดยให้ความเร็วประมาณ 80 มิลลิเมตรต่อวินาที ซึ่งถือว่าเป็นความเร็วที่เหมาะสมสำหรับการเดินปกติ จุดเด่นของโหมดนี้คือการใช้ Asymmetric trajectory ที่แบ่ง Stance phase 65\% และ Swing phase 35\% ซึ่งช่วยลดแรงกระแทกได้ประมาณ 40\% เมื่อเทียบกับโหมด TROT
+
+นอกจากนี้ การเพิ่มระยะยกเท้าเป็น 30 มิลลิเมตร ทำให้เท้าสามารถข้ามสิ่งกีดขวางเล็กน้อยได้ดีขึ้น และท่าทางการเดินโดยรวมมีความนุ่มนวลและเป็นธรรมชาติมากขึ้น
+
+\textbf{ข้อดี:} สมดุลระหว่างความเร็วและความนุ่มนวล, แรงกระแทกต่ำ, ท่าทางเป็นธรรมชาติ
+
+\textbf{การใช้งาน:} เหมาะสำหรับการเดินทั่วไปในสภาพแวดล้อมปกติ
+
+\subsection{Mode 3: BACKWARD\_TROT (Reverse)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Step Length:} 50 mm (reversed)
+    \item \textbf{Lift Height:} 30 mm
+    \item \textbf{Cycle Time:} 600 ms (30 steps)
+    \item \textbf{Update Rate:} 50 Hz
+    \item \textbf{Trajectory:} Asymmetric (65\% Stance / 35\% Swing)
+    \item \textbf{Reverse Flag:} \texttt{reverse=True}
+\end{itemize}
+
+\subsubsection{ลักษณะและการใช้งาน}
+
+โหมด BACKWARD\_TROT เป็นโหมดที่ให้ผลลัพธ์ดีที่สุดจากการทดสอบ โดยให้ความเร็วประมาณ 80 มิลลิเมตรต่อวินาที (ถอยหลัง) จุดเด่นที่สุดคือโหมดนี้ให้ความนุ่มนวลสูงที่สุดในทุกโหมด และมี Impact force ต่ำมาก ซึ่งสันนิษฐานว่าเป็นเพราะทิศทางปลายเท้า (Foot orientation) ที่ชี้ไปด้านหน้า ทำให้การเดินถอยหลังสัมผัสพื้นแบบ Toe-first ซึ่งลดแรงกระแทกได้ดีกว่าการเดินหน้า (Heel-strike)
+
+\textbf{ข้อดี:} นุ่มนวลที่สุด, Impact force ต่ำมาก, เหมาะสำหรับทดสอบและปรับจูน
+
+\textbf{ข้อสังเกตพิเศษ:} การเดินถอยหลังให้ผลดีกว่าเดินหน้า ซึ่งน่าจะเกี่ยวข้องกับทิศทางปลายเท้า (ดูรายละเอียดในหัวข้อ 5: Foot Orientation Effect)
+
+\subsection{Mode 4: WALK (Sequential Gait)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Step Length:} 40 mm
+    \item \textbf{Lift Height:} 25 mm
+    \item \textbf{Cycle Time:} 800 ms
+    \item \textbf{Gait Pattern:} Sequential โดยลำดับขา FL, FR, RL, RR
+    \item \textbf{Phase Offset:} 0°, 90°, 180°, 270°
+\end{itemize}
+
+\subsubsection{ลักษณะและการใช้งาน}
+
+โหมด WALK ใช้รูปแบบการเดินแบบ Sequential คือขายกทีละข้าง (FL, FR, RL, RR) โดยมี Phase offset 0°, 90°, 180°, 270° ตามลำดับ รูปแบบการเดินนี้มีขา 3 ข้างยืดพื้นเสมอ ทำให้มีความเสถียรสูงมาก แต่ข้อเสียคือความเร็วที่ต่ำกว่าโหมด Trot
+
+โหมดนี้ให้ความเร็วประมาณ 50 มิลลิเมตรต่อวินาที ซึ่งเหมาะสำหรับการเดินบนพื้นไม่เรียบที่ต้องการความมั่นคงสูง หรือใช้เป็นโหมดเริ่มต้นเมื่อยังไม่คุ้นเคยกับการทำงานของหุ่นยนต์
+
+\textbf{ข้อดี:} ความเสถียรสูง (มีขา 3 ข้างยืดพื้นเสมอ), แรงกระแทกต่ำ
+
+\textbf{ข้อจำกัด:} ความเร็วต่ำกว่าโหมด Trot
+
+\subsection{Mode 5: CRAWL (Very Slow)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Step Length:} 30 mm
+    \item \textbf{Lift Height:} 20 mm
+    \item \textbf{Cycle Time:} 1200 ms
+    \item \textbf{Gait Pattern:} Sequential
+\end{itemize}
+
+\subsubsection{ลักษณะและการใช้งาน}
+
+โหมด CRAWL เป็นโหมดการเดินที่ช้าที่สุด โดยให้ความเร็วประมาณ 25 มิลลิเมตรต่อวินาที แต่แลกมาด้วยความเสถียรที่สูงที่สุดในทุกโหมด รูปแบบการเดินเป็นแบบ Sequential เช่นเดียวกับ WALK แต่ใช้ Cycle time ยาวถึง 1200 มิลลิวินาที ทำให้การเคลื่อนที่ช้ามากแต่ควบคุมได้ง่าย
+
+โหมดนี้เหมาะสำหรับการเดินบนพื้นไม่เรียบที่ต้องการความระมัดระวังสูงสุด เช่น พื้นลื่นหรือพื้นเอียง ที่ต้องการการรักษาสมดุลอย่างต่อเนื่อง
+
+\textbf{ข้อดี:} เสถียรที่สุด, เหมาะสำหรับพื้นไม่เรียบ
+
+\textbf{ข้อจำกัด:} ความเร็วต่ำมาก
+
+\subsection{Mode 6: STAND (Static Testing)}
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item \textbf{Position:} $(0, -200)$ mm (ทุกขา)
+    \item \textbf{Purpose:} ทดสอบท่ายืน และ Calibration
+\end{itemize}
+
+%=============================================================================
+\section{Foot Orientation Effect}
+%=============================================================================
+
+\subsection{การสังเกตจากการทดสอบ}
+
+จากการทดสอบ 30 ธันวาคม 2025 พบข้อสังเกตที่น่าสนใจ:
+
+\begin{quote}
+\textit{``การเดินถอยหลังแบบนุ่มนวลให้ผลดีที่สุด สมดุลทั้งความเร็วและความนุ่มนวล อาจจะเป็นเพราะ\textbf{มุมปลายเท้า} ซึ่งปัจจุบันหุ่นยนต์มีปลายเท้าทั้งสี่ชี้ไปด้านหน้า (ลิงก์ EF จาก 5-bar linkage) \textbf{อาจส่งผลต่อแรงงัดเมื่อเท้าสัมผัสพื้นขณะเดิน}``}
+\end{quote}
+
+\subsection{การวิเคราะห์}
+
+\subsubsection{Foot Structure}
+จากกลไก 5-Bar linkage (Phase 1):
+\begin{itemize}
+    \item จุด E = จุดตัดของแขนล่างทั้งสอง
+    \item จุด F = ปลายเท้าจริง (ยื่นออกจาก E ตามแนว DE)
+    \item ระยะ $L_{EF} = 40$ mm
+    \item ทิศทาง: D, E, F collinear (อยู่บนเส้นตรงเดียวกัน)
+\end{itemize}
+
+\textbf{ผลลัพธ์:} ปลายเท้าทั้ง 4 ข้างชี้ไปด้านหน้าเสมอ
+
+\subsubsection{Ground Contact Analysis}
+
+\textbf{Forward Walking (เดินหน้า):}
+\begin{itemize}
+    \item เท้าสัมผัสพื้นแบบ \textbf{Heel-strike}
+    \item ปลายเท้าชี้ไปข้างหน้า ทำให้มุมปะทะกับพื้นมาก
+    \item แรงกระแทกสูง (แรงงัด Moment arm ยาว)
+    \item Impact force กระจุกตัว
+\end{itemize}
+
+\begin{tikzpicture}[scale=1.2]
+    % Ground
+    \draw[thick] (-2,0) -- (2,0);
+    \draw[pattern=north east lines] (-2,0) rectangle (2,-0.2);
+    
+    % Foot (forward)
+    \draw[thick, blue, ->] (0,0.5) -- (1.2,0.3) node[right] {F (Foot tip)};
+    \draw[thick, blue] (-0.5,0.8) -- (0,0.5);
+    \node[above] at (-0.5,0.8) {E};
+    
+    % Impact arrow
+    \draw[thick, red, ->] (1.2,0.3) -- (1.2,-0.3) node[right] {Impact};
+    
+    % Angle
+    \draw[dashed] (0,0.5) -- (1.5,0.5);
+    \draw (0.8,0.5) arc (0:-10:0.8);
+    \node at (1.2,0.7) {$\theta$ (large)};
+    
+    \node[below] at (0,-0.5) {Forward: Heel-strike};
+\end{tikzpicture}
+
+\textbf{Backward Walking (เดินถอย):}
+\begin{itemize}
+    \item เท้าสัมผัสพื้นแบบ \textbf{Toe-first}
+    \item ปลายเท้าชี้ไปข้างหน้า แต่สัมผัสพื้นด้วยปลาย
+    \item มุมปะทะกับพื้นน้อย
+    \item แรงกระจายดีกว่า (Moment arm สั้น)
+\end{itemize}
+
+\begin{tikzpicture}[scale=1.2]
+    % Ground
+    \draw[thick] (-2,0) -- (2,0);
+    \draw[pattern=north east lines] (-2,0) rectangle (2,-0.2);
+    
+    % Foot (backward, toe-first)
+    \draw[thick, blue, ->] (0,0.5) -- (1.2,0.15);
+    \draw[thick, blue] (-0.5,0.8) -- (0,0.5);
+    \node[above] at (-0.5,0.8) {E};
+    \node[right] at (1.2,0.15) {F};
+    
+    % Impact arrow
+    \draw[thick, red, ->] (1.2,0.15) -- (1.2,-0.3) node[right] {Impact};
+    
+    % Angle
+    \draw[dashed] (0,0.5) -- (1.5,0.5);
+    \draw (0.8,0.5) arc (0:-20:0.8);
+    \node at (1.1,0.65) {$\theta$ (small)};
+    
+    \node[below] at (0,-0.5) {Backward: Toe-first};
+\end{tikzpicture}
+
+\subsection{สมมติฐาน (Hypothesis)}
+
+\begin{equation}
+    F_{impact} \propto \sin(\theta_{contact})
+\end{equation}
+
+โดย:
+\begin{itemize}
+    \item $\theta_{contact}$ = มุมระหว่างเท้ากับพื้น
+    \item Forward walking: เมื่อ $\theta_{contact}$ ใหญ่ จะทำให้ $F_{impact}$ สูง
+    \item Backward walking: เมื่อ $\theta_{contact}$ เล็ก จะทำให้ $F_{impact}$ ต่ำ
+\end{itemize}
+
+\textbf{สรุป:} Foot orientation มีผลต่อ Impact force และความนุ่มนวลของการเดิน
+
+\subsection{การปรับปรุงในอนาคต}
+
+\subsubsection{Phase 6.5: Passive Compliance}
+\begin{itemize}
+    \item ติดตั้ง Rubber tip ที่ปลายเท้า
+    \item ใช้ Compliant material ดูดซับแรงกระแทก
+    \item ออกแบบ Foot shape ที่เหมาะสม
+\end{itemize}
+
+\subsubsection{Phase 6.6: Foot Orientation Testing}
+\begin{itemize}
+    \item ทดสอบปลายเท้าที่มุมต่างๆ
+    \item วัด Impact force ด้วย Force sensor
+    \item หาทิศทางที่เหมาะสมที่สุด
+\end{itemize}
+
+\subsubsection{Phase 7.0: Active Foot Control}
+\begin{itemize}
+    \item เพิ่ม DOF ที่ข้อเท้า (Ankle joint)
+    \item ควบคุมมุมปลายเท้าแบบ Active
+    \item ปรับมุมตาม Ground contact phase
+\end{itemize}
+
+%=============================================================================
+\section{ผลการทดสอบและการเปรียบเทียบ}
+%=============================================================================
+
+\subsection{ตารางเปรียบเทียบ}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Mode} & \textbf{Speed} & \textbf{Impact} & \textbf{Smoothness} & \textbf{Stability} & \textbf{Rating} \\
+ & (mm/s) & Force & (ระดับ 1-5) & (ระดับ 1-5) & (Total) \\
+\midrule
+TROT & 100 & High & 2/5 & 3/5 & 3/5 \\
+SMOOTH\_TROT & 80 & Medium & 4/5 & 4/5 & \textbf{4.5/5} \\
+BACKWARD\_TROT & 80 & Low & 5/5 & 4/5 & \textbf{5/5} \\
+WALK & 50 & Low & 4/5 & 5/5 & 4/5 \\
+CRAWL & 25 & Very Low & 3/5 & 5/5 & 3.5/5 \\
+\bottomrule
+\end{tabular}
+\caption{เปรียบเทียบประสิทธิภาพของแต่ละโหมดการเดิน}
+\end{table}
+
+\subsection{กราฟเปรียบเทียบ}
+
+\begin{tikzpicture}
+    \begin{axis}[
+        xlabel={Speed (mm/s)},
+        ylabel={Smoothness (1-5)},
+        width=12cm, height=8cm,
+        grid=major,
+        legend pos=north west,
+        legend style={font=\small},
+        xmin=0, xmax=120,
+        ymin=0, ymax=6
+    ]
+    
+    % Data points
+    \addplot[only marks, mark=*, mark size=3pt, blue] 
+        coordinates {(100,2)};
+    \addlegendentry{TROT}
+    
+    \addplot[only marks, mark=*, mark size=3pt, green] 
+        coordinates {(80,4)};
+    \addlegendentry{SMOOTH\_TROT}
+    
+    \addplot[only marks, mark=*, mark size=3pt, red] 
+        coordinates {(80,5)};
+    \addlegendentry{BACKWARD\_TROT}
+    
+    \addplot[only marks, mark=*, mark size=3pt, orange] 
+        coordinates {(50,4)};
+    \addlegendentry{WALK}
+    
+    \addplot[only marks, mark=*, mark size=3pt, purple] 
+        coordinates {(25,3)};
+    \addlegendentry{CRAWL}
+    
+    % Optimal region
+    \addplot[fill=green!20, opacity=0.3] 
+        coordinates {(60,3.5) (100,3.5) (100,5) (60,5)};
+    \node at (axis cs:80,4.7) {Optimal Region};
+    
+    \end{axis}
+\end{tikzpicture}
+
+\subsection{ผลสรุป}
+
+\begin{enumerate}
+    \item \textbf{BACKWARD\_TROT:} ดีที่สุด (5/5) - นุ่มนวลที่สุด, Impact ต่ำที่สุด
+    \item \textbf{SMOOTH\_TROT:} ดีมาก (4.5/5) - สมดุลระหว่างความเร็วและความนุ่มนวล, แนะนำสำหรับการใช้งานทั่วไป
+    \item \textbf{WALK:} ดี (4/5) - เสถียรมาก แต่ช้า
+    \item \textbf{TROT:} ปานกลาง (3/5) - เร็วแต่ aggressive
+    \item \textbf{CRAWL:} ปานกลาง (3.5/5) - เสถียรมากแต่ช้ามาก
+\end{enumerate}
+
+%=============================================================================
+\section{Implementation Details}
+%=============================================================================
+
+\subsection{ตัวอย่างโค้ด: Multi-Mode Gait Controller}
+
+\begin{lstlisting}[language=Python, caption=Multi-Mode Gait Controller]
+class GaitMode:
+    """Enumeration of gait modes"""
+    TROT = 1
+    SMOOTH_TROT = 2
+    BACKWARD_TROT = 3
+    WALK = 4
+    CRAWL = 5
+    STAND = 6
+
+class GaitParameters:
+    """Gait parameters for each mode"""
+    
+    @staticmethod
+    def get_params(mode):
+        """Get parameters for a specific gait mode"""
+        params = {
+            GaitMode.TROT: {
+                'step_length': 50,
+                'lift_height': 15,
+                'cycle_time': 0.4,
+                'n_steps': 20,
+                'asymmetric': False,
+                'reverse': False
+            },
+            GaitMode.SMOOTH_TROT: {
+                'step_length': 50,
+                'lift_height': 30,
+                'cycle_time': 0.6,
+                'n_steps': 30,
+                'asymmetric': True,
+                'stance_ratio': 0.65,
+                'reverse': False
+            },
+            GaitMode.BACKWARD_TROT: {
+                'step_length': 50,
+                'lift_height': 30,
+                'cycle_time': 0.6,
+                'n_steps': 30,
+                'asymmetric': True,
+                'stance_ratio': 0.65,
+                'reverse': True
+            },
+            GaitMode.WALK: {
+                'step_length': 40,
+                'lift_height': 25,
+                'cycle_time': 0.8,
+                'n_steps': 40,
+                'gait_type': 'walk',
+                'asymmetric': False
+            },
+            GaitMode.CRAWL: {
+                'step_length': 30,
+                'lift_height': 20,
+                'cycle_time': 1.2,
+                'n_steps': 60,
+                'gait_type': 'walk',
+                'asymmetric': False
+            },
+            GaitMode.STAND: {
+                'position': (0, -200),
+                'static': True
+            }
+        }
+        return params.get(mode, params[GaitMode.STAND])
+
+# Usage
+params = GaitParameters.get_params(GaitMode.SMOOTH_TROT)
+print(f"Step: {params['step_length']} mm")
+print(f"Lift: {params['lift_height']} mm")
+print(f"Cycle: {params['cycle_time']} s")
+\end{lstlisting}
+
+\subsection{Runtime Mode Switching}
+
+\begin{lstlisting}[language=Python, caption=Keyboard Control for Mode Switching]
+import keyboard
+
+def gait_control_with_keyboard():
+    """Main control loop with keyboard mode switching"""
+    
+    # Initialize
+    current_mode = GaitMode.STAND
+    controller = QuadrupedController(serial_port='/dev/ttyUSB0')
+    
+    print("Keyboard Controls:")
+    print("[1] TROT")
+    print("[2] SMOOTH_TROT (Recommended)")
+    print("[3] BACKWARD_TROT")
+    print("[4] WALK")
+    print("[5] CRAWL")
+    print("[6] STAND")
+    print("[Q] QUIT")
+    
+    while True:
+        # Check keyboard input
+        if keyboard.is_pressed('1'):
+            current_mode = GaitMode.TROT
+            print("Mode: TROT")
+        elif keyboard.is_pressed('2'):
+            current_mode = GaitMode.SMOOTH_TROT
+            print("Mode: SMOOTH_TROT")
+        elif keyboard.is_pressed('3'):
+            current_mode = GaitMode.BACKWARD_TROT
+            print("Mode: BACKWARD_TROT")
+        elif keyboard.is_pressed('4'):
+            current_mode = GaitMode.WALK
+            print("Mode: WALK")
+        elif keyboard.is_pressed('5'):
+            current_mode = GaitMode.CRAWL
+            print("Mode: CRAWL")
+        elif keyboard.is_pressed('6'):
+            current_mode = GaitMode.STAND
+            print("Mode: STAND")
+        elif keyboard.is_pressed('q'):
+            print("Quit")
+            break
+        
+        # Get parameters for current mode
+        params = GaitParameters.get_params(current_mode)
+        
+        # Generate trajectory
+        if params.get('static', False):
+            # Stand mode
+            trajectory = [params['position']]
+        else:
+            # Moving modes
+            if params.get('asymmetric', False):
+                trajectory = generate_asymmetric_trajectory(
+                    center=(0, -200),
+                    step_length=params['step_length'],
+                    lift_height=params['lift_height'],
+                    n_points=params['n_steps'],
+                    stance_ratio=params.get('stance_ratio', 0.5),
+                    reverse=params.get('reverse', False)
+                )
+            else:
+                trajectory = generate_elliptical_trajectory(
+                    center=(0, -200),
+                    step_length=params['step_length'],
+                    lift_height=params['lift_height'],
+                    n_points=params['n_steps']
+                )
+        
+        # Execute gait
+        controller.execute_gait(trajectory, params)
+        time.sleep(0.01)
+    
+    # Cleanup
+    controller.stop()
+\end{lstlisting}
+
+%=============================================================================
+\section{สรุปและข้อเสนอแนะ (Conclusion and Recommendations)}
+%=============================================================================
+
+\subsection{สรุปผลการพัฒนา}
+
+Phase 5.2 ประสบความสำเร็จในการปรับจูนและพัฒนาหลายโหมดการเดิน:
+
+\begin{itemize}
+    \item[\checkmark] \textbf{Asymmetric Trajectory:} พัฒนาสำเร็จ (Stance 65\% / Swing 35\%)
+    \item[\checkmark] \textbf{Multi-Mode Gait:} พัฒนา 6 โหมดการเดิน
+    \item[\checkmark] \textbf{Smooth Walking:} SMOOTH\_TROT ให้ผลดีมาก (4.5/5)
+    \item[\checkmark] \textbf{Backward Walking:} BACKWARD\_TROT ให้ผลดีที่สุด (5/5)
+    \item[\checkmark] \textbf{Impact Reduction:} ลดแรงกระแทกได้ ~40\%
+    \item[\checkmark] \textbf{Foot Orientation Analysis:} ค้นพบความสัมพันธ์กับ Impact force
+\end{itemize}
+
+\subsection{ความสำเร็จหลัก}
+
+\begin{enumerate}
+    \item \textbf{Asymmetric Timing:} ลด Impact force และเพิ่มความนุ่มนวล
+    \item \textbf{Multi-Direction Capability:} เดินหน้า-ถอยหลังได้นุ่มนวล
+    \item \textbf{Foot Orientation Effect:} ค้นพบว่า Toe-first landing นุ่มนวลกว่า Heel-strike
+    \item \textbf{Flexibility:} สามารถสลับโหมดได้ทันที (Runtime switching)
+\end{enumerate}
+
+\subsection{บทเรียนที่ได้รับ}
+
+\begin{enumerate}
+    \item \textbf{Asymmetric Trajectory สำคัญมาก:}
+    \begin{itemize}
+        \item เมื่อ Stance phase นานขึ้น จะช่วยลดแรงกระแทก
+        \item เมื่อ Swing phase สั้น จะช่วยเพิ่มความเร็ว
+        \item Balance ที่ดีระหว่าง Speed และ Smoothness
+    \end{itemize}
+    
+    \item \textbf{Foot Orientation มีผลอย่างมาก:}
+    \begin{itemize}
+        \item Backward walking นุ่มนวลกว่า Forward walking
+        \item Toe-first landing ดีกว่า Heel-strike
+        \item ควรพิจารณา Active foot control ในอนาคต
+    \end{itemize}
+    
+    \item \textbf{Parameter Tuning ต้องทำบนฮาร์ดแวร์จริง:}
+    \begin{itemize}
+        \item Simulation ไม่สามารถทำนาย Impact force ได้แม่นยำ
+        \item Ground contact physics มีความซับซ้อน
+        \item ต้องทดสอบหลายพารามิเตอร์
+    \end{itemize}
+\end{enumerate}
+
+\subsection{ข้อเสนอแนะสำหรับการพัฒนาต่อไป}
+
+\subsubsection{Phase 6: Sensor Feedback System}
+\begin{itemize}
+    \item ติดตั้ง IMU sensor (BNO086)
+    \item พัฒนา Balance controller ด้วย PD control
+    \item ชดเชยท่าทางการเดินด้วย Real-time feedback
+    \item ทดสอบบนพื้นเอียงและพื้นไม่เรียบ
+\end{itemize}
+
+\subsubsection{Phase 6.5: Passive Compliance}
+\begin{itemize}
+    \item ออกแบบ Rubber tip สำหรับปลายเท้า
+    \item ทดสอบ Compliant materials ต่างๆ
+    \item วัด Impact force reduction
+\end{itemize}
+
+\subsubsection{Phase 7: Active Foot Control}
+\begin{itemize}
+    \item เพิ่ม DOF ที่ข้อเท้า (จาก 3-DOF per leg เพิ่มเป็น 3+1 DOF)
+    \item ควบคุมมุมปลายเท้าแบบ Active
+    \item ปรับมุมตาม Ground contact phase
+    \item ทดสอบประสิทธิภาพการเดินที่เพิ่มขึ้น
+\end{itemize}
+
+\subsection{คำแนะนำสำหรับผู้ใช้งาน}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Use Case} & \textbf{Recommended Mode} \\
+\midrule
+ทั่วไป & SMOOTH\_TROT (สมดุลดี) \\
+ทดสอบ/ปรับจูน & BACKWARD\_TROT (นุ่มนวลที่สุด) \\
+ต้องการความเร็ว & TROT (เร็วที่สุด) \\
+พื้นไม่เรียบ & WALK (เสถียรมาก) \\
+พื้นลื่น/เอียง & CRAWL (เสถียรที่สุด) \\
+\bottomrule
+\end{tabular}
+\caption{คำแนะนำการเลือกโหมดการเดิน}
+\end{table}
+
+%=============================================================================
+\section{เอกสารอ้างอิง (References)}
+%=============================================================================
+
+\begin{enumerate}
+    \item Phase 5.1: Quadruped Scaling - BLEGS Analysis Unit
+    \item Phase 4.2: Hardware Integration - BLEGS Analysis Unit
+    \item Phase 3.1: Gait Control Simulation - BLEGS Analysis Unit
+    \item Asymmetric Gait Patterns for Legged Robots
+    \item Impact Force Analysis in Quadruped Locomotion
+    \item Foot-Ground Contact Dynamics
+    \item Time Warping Functions for Trajectory Generation
+    \item Multi-Mode Gait Control Strategies
+\end{enumerate}
+
+\end{document}

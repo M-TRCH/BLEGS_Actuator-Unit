@@ -1,0 +1,421 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\usepackage{amsmath} % For math environments
+\usepackage{geometry} % For page margins
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs} % For professional tables
+\usepackage{xcolor}
+\usepackage{siunitx}
+\usepackage{float}
+
+% --- TITLE ---
+\title{การวิเคราะห์ทอร์กแบบไดนามิก \\ (Dynamic Torque Analysis) \\ สำหรับกลไก 5-Bar Parallel Linkage}
+\author{นายธีรโชติ เมืองจำนงค์}
+\date{\today}
+
+% --- DOCUMENT ---
+\begin{document}
+
+\maketitle
+
+\section{บทนำ}
+
+เอกสารนี้นำเสนอการวิเคราะห์ทอร์กแบบไดนามิก (Dynamic Torque Analysis) สำหรับกลไก 5-Bar Parallel Linkage ที่ใช้ในหุ่นยนต์สี่ขา 8-DOF โดยคำนึงถึงผลของแรงเฉื่อย (Inertial Effects) แรงโน้มถ่วง (Gravity Forces) และการกระจายน้ำหนักของหุ่นยนต์ทั้งระบบ การวิเคราะห์นี้คำนวณความต้องการทอร์กแบบไดนามิกสำหรับการเดินแบบวิถีรูปไข่ (Elliptical Gait) ที่ความถี่ 1 Hz เพื่อตรวจสอบความเหมาะสมของมอเตอร์ที่เลือก
+
+\subsection{วัตถุประสงค์}
+
+วัตถุประสงค์หลักของการวิเคราะห์นี้คือการคำนวณความต้องการทอร์กแบบไดนามิกสำหรับมอเตอร์แต่ละตัวในกลไก 5-Bar Parallel Linkage ระหว่างการเดินแบบวิถีรูปไข่ การวิเคราะห์นี้ขยายผลจากการวิเคราะห์ทอร์กแบบสถิต (Static Torque Analysis) โดยพิจารณาเพิ่มเติม:
+
+\begin{itemize}
+    \item ผลของแรงเฉื่อยจากความเร่งของลิงก์ (Inertial effects from link accelerations)
+    \item ส่วนสมทบของโมเมนต์ความเฉื่อยในการหมุน (Rotational inertia contributions)
+    \item การกระจายน้ำหนักหุ่นยนต์ทั้งหมด (มวลรวม 6.70 kg)
+    \item การเคลื่อนที่แบบไดนามิกที่ความถี่ 1 Hz
+\end{itemize}
+
+\subsection{ข้อมูลหุ่นยนต์}
+
+\textbf{ลักษณะหุ่นยนต์:}
+\begin{itemize}
+    \item \textbf{ประเภท:} หุ่นยนต์สี่ขา 8 องศาอิสระ (8-DOF Quadruped Mobile Robot)
+    \item \textbf{กลไกขา:} 5-Bar Parallel Linkage
+    \item \textbf{มวลรวม:} 6.70 kg แบ่งเป็น:
+    \begin{itemize}
+        \item แบตเตอรี่และอิเล็กทรอนิกส์: 2.00 kg
+        \item โครงสร้าง/แชสซี: 1.62 kg
+        \item มอเตอร์ (8 ตัว): 3.08 kg
+    \end{itemize}
+    \item \textbf{มวลต่อขา:} 1.675 kg (กระจายเท่ากันทั้ง 4 ขา)
+\end{itemize}
+
+\section{พารามิเตอร์กลไก}
+
+\subsection{ขนาดลิงก์}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{ลิงก์} & \textbf{ความยาว (mm)} & \textbf{คำอธิบาย} \\ 
+\midrule
+$L_{AC}$ & 105 & ลิงก์มอเตอร์ซ้าย (L1) \\
+$L_{BD}$ & 105 & ลิงก์มอเตอร์ขวา (L2) \\
+$L_{CE}$ & 145 & ลิงก์เชื่อมซ้าย (L3) \\
+$L_{DE}$ & 145 & ลิงก์เชื่อมขวา (L4) \\
+$L_{EF}$ & 40 & ออฟเซ็ตปลายเท้า \\
+\bottomrule
+\end{tabular}
+\caption{ขนาดความยาวของลิงก์}
+\end{table}
+
+\subsection{ตำแหน่งมอเตอร์}
+
+\begin{align}
+P_A &= (-42.5, 0) \text{ mm} \quad \text{(มอเตอร์ซ้าย)} \\
+P_B &= (42.5, 0) \text{ mm} \quad \text{(มอเตอร์ขวา)}
+\end{align}
+
+\subsection{คุณสมบัติมวล (จาก CAD)}
+
+\textbf{วัสดุ:} PA12-HP Nylon ความหนาแน่น $\rho = 1120$ kg/m³
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{ลิงก์} & \textbf{มวล} & \textbf{ความยาว} & \textbf{อัตราส่วน COM} & \textbf{ตำแหน่ง COM} & \textbf{$I_{zz}$} \\ 
+& (g) & (mm) & (\%) & (mm) & (kg·m²) \\
+\midrule
+L1 (AC) & 24.88 & 105 & 33.56 & 35.24 & $\approx 0$ \\
+L2 (BD) & 35.33 & 105 & 23.63 & 24.81 & $1 \times 10^{-5}$ \\
+L3 (CE) & 20.56 & 145 & 50.00 & 72.50 & $5 \times 10^{-5}$ \\
+L4 (DE) & 25.06 & 145 & 61.73 & 89.51 & $8 \times 10^{-5}$ \\
+\bottomrule
+\end{tabular}
+\caption{คุณสมบัติมวลของลิงก์ที่สกัดจากโมเดล CAD}
+\end{table}
+
+\textbf{หม้ายเหตุ:}
+\begin{itemize}
+    \item COM (Center of Mass) = ศูนย์กลางมวล
+    \item $I_{zz}$ = โมเมนต์ความเฉื่อยรอบแกน z
+    \item อัตราส่วน COM วัดจากข้อต่อเริ่มต้นของลิงก์
+\end{itemize}
+
+\section{การกำหนดวิถีการเดิน}
+
+\subsection{วิถีรูปไข่ (Elliptical Gait Pattern)}
+
+วิถีการเคลื่อนที่ของปลายเท้าเป็นรูปวงรีด้วยพารามิเตอร์ดังนี้:
+
+\begin{align}
+x_F(t) &= a \cos(\omega t) \\
+y_F(t) &= y_{\text{home}} + b \sin(\omega t)
+\end{align}
+
+\textbf{พารามิเตอร์:}
+\begin{itemize}
+    \item แกนกึ่งยาว (Semi-major axis): $a = 60$ mm (ความยาวก้าว)
+    \item แกนกึ่งสั้น (Semi-minor axis): $b = 30$ mm (ความสูงก้าว)
+    \item ตำแหน่งยืน (Home position): $y_{\text{home}} = -200$ mm
+    \item ความถี่เชิงมุม (Angular frequency): $\omega = 2\pi f = 2\pi$ rad/s
+    \item ความถี่การเดิน (Gait frequency): $f = 1.0$ Hz
+    \item เวลา 1 รอบ (Cycle time): $T = 1.0$ s
+\end{itemize}
+
+\textbf{หมายเหตุ:} อัตราส่วนแกนยาว:แกนสั้น = 2:1 เพื่อให้ได้วิถีรูปไข่ที่เหมาะสมกับการเดิน
+
+\section{แบบจำลองไดนามิก}
+
+\subsection{สมการการเคลื่อนที่}
+
+สมการไดนามิกสำหรับระบบคือ:
+
+\begin{equation}
+\boldsymbol{\tau} = \mathbf{M}(\mathbf{q})\ddot{\mathbf{q}} + \mathbf{C}(\mathbf{q}, \dot{\mathbf{q}})\dot{\mathbf{q}} + \mathbf{G}(\mathbf{q})
+\end{equation}
+
+สำหรับการวิเคราะห์นี้ เราทำให้พจน์โคริโอลิสเป็นแบบง่าย จึงได้:
+
+\begin{equation}
+\boldsymbol{\tau} = \mathbf{M}(\mathbf{q})\ddot{\mathbf{q}} + \mathbf{G}(\mathbf{q})
+\end{equation}
+
+โดยที่:
+\begin{itemize}
+    \item $\boldsymbol{\tau} = [\tau_A, \tau_B]^T$ = ทอร์กที่ข้อต่อ
+    \item $\mathbf{q} = [\theta_A, \theta_B]^T$ = มุมข้อต่อ
+    \item $\mathbf{M}(\mathbf{q})$ = เมทริกซ์ความเฉื่อย (Inertia matrix) ขนาด $2 \times 2$
+    \item $\mathbf{G}(\mathbf{q})$ = เวกเตอร์แรงโน้มถ่วง (Gravity vector) ขนาด $2 \times 1$
+\end{itemize}
+
+\subsection{เมทริกซ์ความเฉื่อย (Inertia Matrix)}
+
+เมทริกซ์ความเฉื่อยคำนวณโดยใช้วิธี Composite Rigid Body:
+
+\begin{equation}
+\mathbf{M}(\mathbf{q}) = \sum_{i=1}^{4} \left[ m_i \mathbf{J}_{v,i}^T \mathbf{J}_{v,i} + I_{zz,i} \mathbf{J}_{\omega,i}^T \mathbf{J}_{\omega,i} \right]
+\end{equation}
+
+โดยที่:
+\begin{itemize}
+    \item $m_i$ = มวลของลิงก์ที่ $i$
+    \item $\mathbf{J}_{v,i}$ = Jacobian ความเร็วเชิงเส้นของ COM ของลิงก์ที่ $i$ (ขนาด $2 \times 2$)
+    \item $\mathbf{J}_{\omega,i}$ = Jacobian ความเร็วเชิงมุมของลิงก์ที่ $i$ (ขนาด $1 \times 2$)
+    \item $I_{zz,i}$ = โมเมนต์ความเฉื่อยรอบแกน z
+\end{itemize}
+
+\subsection{เวกเตอร์แรงโน้มถ่วง (Gravity Vector)}
+
+ทอร์กจากแรงโน้มถ่วงรวมส่วนสมทบจากทุกลิงก์และน้ำหนักหุ่นยนต์ที่กระจาย:
+
+\begin{equation}
+\mathbf{G}(\mathbf{q}) = \sum_{i=1}^{4} m_i g \mathbf{J}_{v,i}^T \begin{bmatrix} 0 \\ -1 \end{bmatrix} + m_{\text{leg}} g \mathbf{J}_F^T \begin{bmatrix} 0 \\ -1 \end{bmatrix}
+\end{equation}
+
+โดยที่:
+\begin{itemize}
+    \item $g = 9.81$ m/s² = ความเร่งโน้มถ่วง
+    \item $m_{\text{leg}} = 1.675$ kg = มวลที่กระจายต่อขา
+    \item $\mathbf{J}_F$ = Jacobian ของปลายเท้า (End-effector) ขนาด $2 \times 2$
+\end{itemize}
+
+\textbf{คำอธิบาย:} เวกเตอร์ $\begin{bmatrix} 0 \\ -1 \end{bmatrix}$ แสดงทิศของแรงโน้มถ่วงในแกน y (ชี้ลง)
+
+\subsection{การคำนวณ Jacobian}
+
+\subsubsection{ลิงก์ที่ 1 (AC) - ลิงก์มอเตอร์ซ้าย}
+
+\begin{align}
+\mathbf{J}_{v,1} &= \begin{bmatrix} -r_1 \sin\theta_A & 0 \\ r_1 \cos\theta_A & 0 \end{bmatrix} \\
+\mathbf{J}_{\omega,1} &= \begin{bmatrix} 1 & 0 \end{bmatrix}
+\end{align}
+
+โดยที่ $r_1 = 0.03524$ m (ตำแหน่ง COM จากข้อต่อ A)
+
+\subsubsection{ลิงก์ที่ 2 (BD) - ลิงก์มอเตอร์ขวา}
+
+\begin{align}
+\mathbf{J}_{v,2} &= \begin{bmatrix} 0 & -r_2 \sin\theta_B \\ 0 & r_2 \cos\theta_B \end{bmatrix} \\
+\mathbf{J}_{\omega,2} &= \begin{bmatrix} 0 & 1 \end{bmatrix}
+\end{align}
+
+โดยที่ $r_2 = 0.02481$ m (ตำแหน่ง COM จากข้อต่อ B)
+
+\subsubsection{ลิงก์ที่ 3 และ 4 (CE, DE) - ลิงก์เชื่อม}
+
+สำหรับลิงก์เชื่อม Jacobian จะคำนวณด้วยวิธีเชิงตัวเลขตามท่าทางปัจจุบัน โดยคำนึงถึงจลนศาสตร์แบบเชื่อมโยงของกลไกแบบขนาน (Parallel Mechanism)
+
+\section{การหาอนุพันธ์เชิงตัวเลข}
+
+ความเร็วและความเร่งข้อต่อคำนวณโดยใช้วิธี Central Difference:
+
+\subsection{ความเร็ว (Central Difference)}
+
+\begin{equation}
+\dot{\mathbf{q}}_i = \frac{\mathbf{q}_{i+1} - \mathbf{q}_{i-1}}{2\Delta t}
+\end{equation}
+
+\subsection{ความเร่ง (Central Difference)}
+
+\begin{equation}
+\ddot{\mathbf{q}}_i = \frac{\mathbf{q}_{i+1} - 2\mathbf{q}_i + \mathbf{q}_{i-1}}{(\Delta t)^2}
+\end{equation}
+
+โดยที่ $\Delta t = T/N = 1.0/60 \approx 0.0167$ s
+
+\textbf{หมายเหตุ:} วิธี Central Difference ให้ความแม่นยำสูงกว่า Forward หรือ Backward Difference
+
+\section{ผลการวิเคราะห์}
+
+\subsection{ทอร์กไดนามิกสูงสุด}
+
+การวิเคราะห์คำนวณทอร์กไดนามิกตลอด 1 รอบการเดิน (60 จุดข้อมูล) ค่าทอร์กสูงสุดคือ:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{มอเตอร์} & \textbf{ทอร์กสูงสุด (N·m)} & \textbf{ตำแหน่งที่เกิด} \\ 
+\midrule
+มอเตอร์ A (ซ้าย) & 1.9273 & ระหว่างการเดิน \\
+มอเตอร์ B (ขวา) & 1.6478 & ระหว่างการเดิน \\
+\bottomrule
+\end{tabular}
+\caption{ความต้องการทอร์กไดนามิกสูงสุด (ผลจากการจำลอง)}
+\end{table}
+
+\subsection{เปรียบเทียบทอร์กแบบสถิตกับไดนามิก}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{มอเตอร์} & \textbf{ทอร์กสถิต} & \textbf{ทอร์กไดนามิกสูงสุด} & \textbf{อัตราส่วน} \\ 
+& (N·m) & (N·m) & (ไดนามิก/สถิต) \\
+\midrule
+มอเตอร์ A & 0.9172 & 1.9273 & 2.10× \\
+มอเตอร์ B & 1.5628 & 1.6478 & 1.05× \\
+\bottomrule
+\end{tabular}
+\caption{การเปรียบเทียบทอร์กแบบสถิตและไดนามิก}
+\end{table}
+
+\subsection{การตรวจสอบความเหมาะสมของมอเตอร์}
+
+ข้อกำหนดมอเตอร์เป้าหมาย: \textbf{5.0 N·m}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{มอเตอร์} & \textbf{ทอร์กสูงสุด} & \textbf{ค่า Safety Factor} & \textbf{สถานะ} \\ 
+& (N·m) & & \\
+\midrule
+มอเตอร์ A & 1.9273 & 2.59× & \textcolor{green}{ผ่าน} \\
+มอเตอร์ B & 1.6478 & 3.03× & \textcolor{green}{ผ่าน} \\
+\bottomrule
+\end{tabular}
+\caption{การวิเคราะห์ค่า Safety Factor ของมอเตอร์}
+\end{table}
+
+\textbf{เกณฑ์การประเมิน Safety Factor:}
+\begin{itemize}
+    \item $SF \geq 2.0$ - ผ่าน (มอเตอร์เพียงพอ)
+    \item $1.5 \leq SF < 2.0$ - เตือน (ค่า Safety Factor ต่ำ)
+    \item $SF < 1.5$ - ไม่ผ่าน (มอเตอร์ไม่เพียงพอ)
+\end{itemize}
+
+\section{ข้อกำหนดมอเตอร์}
+
+\subsection{พารามิเตอร์มอเตอร์ที่เลือก}
+
+\begin{itemize}
+    \item \textbf{ทอร์กขาออก:} 5.0 N·m (ข้อกำหนดเป้าหมาย)
+    \item \textbf{อัตราทดเกียร์:} 8:1
+    \item \textbf{ความเร็วขาออก:} 120 RPM (12.57 rad/s)
+    \item \textbf{ความเร็วขาเข้า:} 960 RPM (ก่อนผ่านเกียร์บอกซ์)
+\end{itemize}
+
+\subsection{การตรวจสอบความเร็ว}
+
+ความเร็วข้อต่อสูงสุดระหว่างรอบการเดินไม่ควรเกิน:
+
+\begin{equation}
+|\dot{\theta}_{\text{max}}| \leq 12.57 \text{ rad/s}
+\end{equation}
+
+\section{การวิเคราะห์องค์ประกอบของทอร์ก}
+
+ทอร์กไดนามิกรวมสามารถแยกเป็นองค์ประกอบได้ดังนี้:
+
+\subsection{ทอร์กเฉื่อย (Inertial Torque)}
+
+\begin{equation}
+\boldsymbol{\tau}_{\text{inertia}} = \mathbf{M}(\mathbf{q})\ddot{\mathbf{q}}
+\end{equation}
+
+คำนึงถึงความเร่งของลิงก์และโมเมนต์ความเฉื่อยในการหมุน
+
+\subsection{ทอร์กโน้มถ่วง (Gravitational Torque)}
+
+\begin{equation}
+\boldsymbol{\tau}_{\text{gravity}} = \mathbf{G}(\mathbf{q})
+\end{equation}
+
+ประกอบด้วย:
+\begin{itemize}
+    \item น้ำหนักตัวลิงก์เอง (รวม 105.83 g)
+    \item น้ำหนักหุ่นยนต์ที่กระจาย (1.675 kg ต่อขา)
+\end{itemize}
+
+\section{สรุปและข้อเสนอแนะ}
+
+\subsection{ผลการศึกษาที่สำคัญ}
+
+\begin{enumerate}
+    \item คำนวณความต้องการทอร์กไดนามิกสำหรับการเดินแบบวิถีรูปไข่ที่ความถี่ 1 Hz
+    \item กระจายน้ำหนักหุ่นยนต์ทั้งหมด (6.70 kg) อย่างถูกต้องทั้ง 4 ขา
+    \item คำนวณค่า Safety Factor สำหรับมอเตอร์ขนาด 5.0 N·m
+    \item ตรวจสอบขีดจำกัดความเร็วตามความสามารถของมอเตอร์
+\end{enumerate}
+
+\subsection{ข้อเสนอแนะ}
+
+\begin{itemize}
+    \item กรอกค่าทอร์กจริงจากการรันโปรแกรมจำลอง
+    \item ตรวจสอบว่าค่า Safety Factor ผ่านเกณฑ์การออกแบบ ($SF \geq 2.0$)
+    \item หากค่า Safety Factor ต่ำ ให้พิจารณา:
+    \begin{itemize}
+        \item ลดความถี่การเดิน
+        \item ลดความยาวก้าว
+        \item เลือกมอเตอร์ที่มีทอร์กสูงขึ้น
+        \item ปรับวิถีการเดินให้ราบรื่นขึ้น
+    \end{itemize}
+    \item ดำเนินการต่อไปยัง Phase 3: การสร้างโมเดล URDF และการหาค่าที่เหมาะที่สุดของวิถี
+\end{itemize}
+
+\subsection{ขั้นตอนต่อไป}
+
+\begin{enumerate}
+    \item รันโปรแกรม \texttt{Dynamic-Torque-Analysis.py} เพื่อรับผลลัพธ์เชิงตัวเลข
+    \item อัปเดตตารางด้วยค่าทอร์กสูงสุดที่ได้จริง
+    \item ตรวจสอบความเหมาะสมของมอเตอร์กับเกณฑ์ความปลอดภัย
+    \item สร้างกราฟแสดง:
+    \begin{itemize}
+        \item มุมข้อต่อตามเวลา
+        \item ความเร็วและความเร่งข้อต่อ
+        \item องค์ประกอบทอร์ก (เฉื่อยและโน้มถ่วง)
+        \item ทอร์กไดนามิกรวมพร้อมขีดจำกัดมอเตอร์
+    \end{itemize}
+    \item บันทึกผลการศึกษาและดำเนินการเลือกฮาร์ดแวร์
+\end{enumerate}
+
+\section{เอกสารอ้างอิง}
+
+\begin{enumerate}
+    \item โมเดล CAD - คุณสมบัติวัสดุ PA12-HP Nylon
+    \item Phase 2.1 - ผลการวิเคราะห์ทอร์กแบบสถิต (Static Torque Analysis)
+    \item Craig, J.J., "Introduction to Robotics: Mechanics and Control"
+    \item Merlet, J.P., "Parallel Robots"
+\end{enumerate}
+
+\appendix
+
+\section{การใช้งานโปรแกรม Python}
+
+การวิเคราะห์ทอร์กไดนามิกถูก implement ใน:
+
+\begin{verbatim}
+scripts/analysis/Dynamic-Torque-Analysis.py
+\end{verbatim}
+
+\textbf{ฟังก์ชันสำคัญ:}
+\begin{itemize}
+    \item \texttt{calculate\_inertia\_matrix(thetas)} - คำนวณ $\mathbf{M}(\mathbf{q})$
+    \item \texttt{calculate\_gravity\_vector(thetas)} - คำนวณ $\mathbf{G}(\mathbf{q})$
+    \item \texttt{calculate\_jacobian\_COM(thetas, link\_id)} - Jacobian ของ COM
+    \item \texttt{calculate\_trajectory\_derivatives()} - การหาอนุพันธ์เชิงตัวเลข
+\end{itemize}
+
+\section{อัลกอริทึมการเลือก Configuration}
+
+เพื่อให้การเคลื่อนที่ราบรื่น โปรแกรมแก้ inverse kinematics จะเลือก configuration ที่ทำให้ระยะทางเชิงมุมจากท่าก่อนหน้าน้อยที่สุด:
+
+\begin{equation}
+\text{config}^* = \arg\min_{\text{config}} \sum_{j=A,B} \min(|\theta_j - \theta_j^{\text{prev}}|, 2\pi - |\theta_j - \theta_j^{\text{prev}}|)
+\end{equation}
+
+วิธีนี้ป้องกันการกระโดดแบบไม่ต่อเนื่องระหว่าง configuration แบบ elbow-up และ elbow-down
+
+\end{document}

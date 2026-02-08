@@ -1,0 +1,653 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\newfontfamily\thaifonttt{TH SarabunPSK}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false
+}
+
+% Title
+\title{\textbf{Phase 4.1: Controller Design}\\
+\large การออกแบบระบบควบคุมตำแหน่งสำหรับหุ่นยนต์สี่ขา\\
+BLEGS Analysis Unit}
+
+\author{นายธีรโชติ เมืองจำนงค์\\
+BLEGS Quadruped Robot Project}
+
+\date{2 มกราคม 2026}
+
+\begin{document}
+
+\maketitle
+\newpage
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{บทนำ (Introduction)}
+%=============================================================================
+
+\subsection{วัตถุประสงค์}
+Phase 4.1 มีวัตถุประสงค์เพื่อออกแบบและพัฒนาระบบควบคุมตำแหน่งสำหรับมอเตอร์ของหุ่นยนต์สี่ขา โดยใช้วิธีการควบคุมแบบ Direct Position Control ร่วมกับ S-Curve Motion Profiling เพื่อให้การเคลื่อนที่ของหุ่นยนต์มีความนุ่มนวลและแม่นยำ
+
+\subsection{ขอบเขตการศึกษา}
+\begin{itemize}
+    \item การออกแบบระบบควบคุมตำแหน่งแบบ Direct Position Control
+    \item การพัฒนา S-Curve Motion Profile Generator
+    \item การบูรณาการระบบควบคุมกับ Inverse Kinematics
+    \item การทดสอบระบบควบคุมกับขาเดียว (Single Leg Testing)
+    \item การวิเคราะห์ประสิทธิภาพและความแม่นยำของระบบควบคุม
+\end{itemize}
+
+\subsection{ความเชื่อมโยงกับ Phase ก่อนหน้า}
+Phase 4.1 ใช้ความรู้และผลลัพธ์จาก Phase ก่อนหน้าดังนี้:
+\begin{itemize}
+    \item \textbf{Phase 1 (Kinematics):} ใช้ฟังก์ชัน IK analytical สำหรับแปลงตำแหน่งปลายเท้าเป็นมุมมอเตอร์
+    \item \textbf{Phase 2 (Dynamics):} ใช้ข้อมูล Torque analysis เพื่อเลือกมอเตอร์ที่เหมาะสม (5 N·m)
+    \item \textbf{Phase 3 (Simulation):} ใช้ Trajectory pattern จากการจำลองมาประยุกต์ในฮาร์ดแวร์จริง
+\end{itemize}
+
+%=============================================================================
+\section{หลักการควบคุมตำแหน่ง (Position Control Theory)}
+%=============================================================================
+
+\subsection{Direct Position Control}
+
+Direct Position Control คือวิธีการควบคุมที่ส่งคำสั่งตำแหน่งเป้าหมายไปยังมอเตอร์โดยตรง โดยมอเตอร์จะมีระบบควบคุมภายใน (Internal Controller) ที่รับผิดชอบในการเคลื่อนที่ไปยังตำแหน่งเป้าหมาย
+
+\subsubsection{ข้อดี}
+\begin{itemize}
+    \item \textbf{ความเรียบง่าย:} ไม่ต้องพัฒนา Controller Loop ที่ซับซ้อน
+    \item \textbf{ความเสถียร:} ระบบควบคุมภายในของมอเตอร์ได้รับการปรับจูนแล้ว
+    \item \textbf{ความแม่นยำ:} มอเตอร์ใช้ Encoder feedback เพื่อรักษาความแม่นยำ
+    \item \textbf{การตอบสนอง:} Update rate สูง (100-1000 Hz) ภายในมอเตอร์
+\end{itemize}
+
+\subsubsection{ข้อจำกัด}
+\begin{itemize}
+    \item ต้องอาศัยคุณภาพของ Internal Controller ของมอเตอร์
+    \item ควบคุม Torque และ Velocity โดยตรงได้ยากกว่า
+    \item ต้องระวังการส่งคำสั่งที่เร็วเกินไป (Command saturation)
+\end{itemize}
+
+\subsection{ระดับของระบบควบคุม (Control Hierarchy)}
+
+ระบบควบคุมของหุ่นยนต์สี่ขาแบ่งเป็น 3 ระดับ:
+
+\begin{enumerate}
+    \item \textbf{High-Level Controller (Gait Controller):} \\
+    สร้าง Trajectory ของปลายเท้าในพื้นที่ Cartesian (x, y)
+    \begin{itemize}
+        \item Input: Gait parameters (step length, lift height, cycle time)
+        \item Output: $\mathbf{P}_F(t) = [x_F(t), y_F(t)]^T$ สำหรับแต่ละขา
+    \end{itemize}
+    
+    \item \textbf{Mid-Level Controller (Inverse Kinematics):} \\
+    แปลงตำแหน่งปลายเท้าเป็นมุมมอเตอร์
+    \begin{itemize}
+        \item Input: $\mathbf{P}_F(t)$ จาก Gait Controller
+        \item Process: Analytical IK (Phase 1.2)
+        \item Output: $\boldsymbol{\theta}(t) = [\theta_A(t), \theta_B(t)]^T$
+    \end{itemize}
+    
+    \item \textbf{Low-Level Controller (Motor Controller):} \\
+    ส่งคำสั่งตำแหน่งไปยังมอเตอร์
+    \begin{itemize}
+        \item Input: $\boldsymbol{\theta}(t)$ จาก IK
+        \item Process: Communication protocol (Binary/Serial)
+        \item Output: Motor position commands
+    \end{itemize}
+\end{enumerate}
+
+%=============================================================================
+\section{S-Curve Motion Profiling}
+%=============================================================================
+
+\subsection{หลักการ S-Curve Profile}
+
+S-Curve Motion Profile เป็นวิธีการสร้าง Trajectory ที่มีความเร่งเปลี่ยนแปลงอย่างต่อเนื่อง (Continuous Acceleration) เพื่อลดแรงกระแทก (Jerk) และทำให้การเคลื่อนที่นุ่มนวล
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item $p_0$ = ตำแหน่งเริ่มต้น (Start position)
+    \item $p_f$ = ตำแหน่งเป้าหมาย (Final position)
+    \item $v_{max}$ = ความเร็วสูงสุด (Maximum velocity)
+    \item $a_{max}$ = ความเร่งสูงสุด (Maximum acceleration)
+    \item $j_{max}$ = Jerk สูงสุด (Maximum jerk)
+    \item $t_f$ = เวลารวม (Total time)
+\end{itemize}
+
+\subsection{สมการ S-Curve Profile}
+
+S-Curve Profile แบ่งการเคลื่อนที่เป็น 7 ขั้นตอน แต่ในการประยุกต์ใช้จริง เรา simplify เป็น 3 ขั้นตอนหลัก:
+
+\subsubsection{ขั้นที่ 1: Acceleration Phase (0 ≤ t ≤ t₁)}
+ความเร่งเพิ่มขึ้นแบบ smooth จาก 0 ถึง $a_{max}$
+
+\begin{align}
+    a(t) &= a_{max} \sin\left(\frac{\pi t}{2t_1}\right) \\
+    v(t) &= \frac{2a_{max}t_1}{\pi}\left[1 - \cos\left(\frac{\pi t}{2t_1}\right)\right] \\
+    p(t) &= p_0 + \frac{2a_{max}t_1}{\pi}\left[t - \frac{2t_1}{\pi}\sin\left(\frac{\pi t}{2t_1}\right)\right]
+\end{align}
+
+\subsubsection{ขั้นที่ 2: Constant Velocity Phase (t₁ ≤ t ≤ t₂)}
+เคลื่อนที่ด้วยความเร็วคงที่
+
+\begin{align}
+    a(t) &= 0 \\
+    v(t) &= v_{cruise} \\
+    p(t) &= p_1 + v_{cruise}(t - t_1)
+\end{align}
+
+\subsubsection{ขั้นที่ 3: Deceleration Phase (t₂ ≤ t ≤ t_f)}
+ความเร่งลดลงแบบ smooth จาก $-a_{max}$ ถึง 0
+
+\begin{align}
+    a(t) &= -a_{max} \sin\left(\frac{\pi (t - t_2)}{2t_3}\right) \\
+    v(t) &= v_{cruise} - \frac{2a_{max}t_3}{\pi}\left[1 - \cos\left(\frac{\pi (t-t_2)}{2t_3}\right)\right] \\
+    p(t) &= p_2 + v_{cruise}(t-t_2) - \frac{2a_{max}t_3}{\pi}\left[(t-t_2) - \frac{2t_3}{\pi}\sin\left(\frac{\pi (t-t_2)}{2t_3}\right)\right]
+\end{align}
+
+\subsection{การประยุกต์ใช้ในระบบจริง}
+
+ในการพัฒนาระบบควบคุมหุ่นยนต์ เราใช้วิธี S-Curve แบบง่าย โดยใช้ \textbf{Sinusoidal Velocity Profile}:
+
+\begin{equation}
+    v(t) = v_{max} \sin\left(\frac{\pi t}{t_f}\right)
+\end{equation}
+
+ตำแหน่งจะได้จากการ integrate:
+
+\begin{equation}
+    p(t) = p_0 + (p_f - p_0) \left[\frac{t}{t_f} - \frac{1}{2\pi}\sin\left(\frac{2\pi t}{t_f}\right)\right]
+\end{equation}
+
+ข้อดี:
+\begin{itemize}
+    \item สมการเรียบง่าย คำนวณเร็ว
+    \item Jerk ต่ำ (ความเร่งเปลี่ยนแปลงอย่างต่อเนื่อง)
+    \item เหมาะสำหรับ Gait trajectory ที่เป็นวงรอบ (Cyclic motion)
+\end{itemize}
+
+%=============================================================================
+\section{การออกแบบ Trajectory Generator}
+%=============================================================================
+
+\subsection{Elliptical Foot Trajectory}
+
+สำหรับการเดินของหุ่นยนต์สี่ขา เราใช้ Trajectory รูปวงรีสำหรับแต่ละขา:
+
+\subsubsection{พารามิเตอร์}
+\begin{itemize}
+    \item $x_c, y_c$ = จุดศูนย์กลางของวงรี (Center position)
+    \item $a$ = กึ่งแกนใหญ่ (Semi-major axis) = Step length / 2
+    \item $b$ = กึ่งแกนเล็ก (Semi-minor axis) = Lift height / 2
+    \item $T$ = Gait cycle time
+    \item $\phi$ = Phase offset สำหรับแต่ละขา
+\end{itemize}
+
+\subsubsection{สมการ Trajectory}
+\begin{align}
+    x_F(t) &= x_c + a \cos\left(\frac{2\pi t}{T} + \phi\right) \\
+    y_F(t) &= y_c - b \left|\sin\left(\frac{2\pi t}{T} + \phi\right)\right|
+\end{align}
+
+โดยใช้ $|\sin|$ เพื่อให้วงรีอยู่ด้านล่างเท่านั้น (ไม่ยกขาเหนือจุดศูนย์กลาง)
+
+\subsection{Asymmetric Trajectory (Advanced)}
+
+สำหรับการเดินที่นุ่มนวลยิ่งขึ้น เราพัฒนา Asymmetric Trajectory ที่แบ่งเวลาไม่เท่ากัน:
+
+\begin{itemize}
+    \item \textbf{Stance Phase (65\%):} เท้าสัมผัสพื้น - ใช้เวลานาน เพื่อลดแรงกระแทก
+    \item \textbf{Swing Phase (35\%):} เท้ายกขึ้น - ใช้เวลาสั้น เพื่อเคลื่อนที่เร็ว
+\end{itemize}
+
+\subsubsection{สมการ Time Warping}
+
+ใช้ฟังก์ชัน $\tau(t)$ เพื่อแปลงเวลาเชิงเส้นเป็น Asymmetric time:
+
+\begin{equation}
+    \tau(t) = \begin{cases}
+        \frac{t}{0.65T} \cdot \pi & \text{if } 0 \leq t < 0.65T \text{ (Stance)} \\
+        \pi + \frac{t - 0.65T}{0.35T} \cdot \pi & \text{if } 0.65T \leq t < T \text{ (Swing)}
+    \end{cases}
+\end{equation}
+
+แล้วใช้ในสมการ:
+\begin{align}
+    x_F(t) &= x_c + a \cos(\tau(t) + \phi) \\
+    y_F(t) &= y_c - b |\sin(\tau(t) + \phi)|
+\end{align}
+
+%=============================================================================
+\section{การบูรณาการกับ Inverse Kinematics}
+%=============================================================================
+
+\subsection{ขั้นตอนการแปลง Trajectory}
+
+\begin{enumerate}
+    \item \textbf{Trajectory Generation:} \\
+    สร้าง $\mathbf{P}_F(t) = [x_F(t), y_F(t)]^T$ จาก Gait parameters
+    
+    \item \textbf{Inverse Kinematics:} \\
+    แปลงเป็นมุมมอเตอร์โดยใช้ฟังก์ชัน IK analytical:
+    \begin{equation}
+        [\theta_A(t), \theta_B(t)] = \text{IK\_analytical}(\mathbf{P}_F(t), \text{config})
+    \end{equation}
+    
+    \item \textbf{Position Command:} \\
+    ส่งคำสั่งไปยังมอเตอร์:
+    \begin{equation}
+        \text{Motor}_A \leftarrow \theta_A(t), \quad \text{Motor}_B \leftarrow \theta_B(t)
+    \end{equation}
+\end{enumerate}
+
+\subsection{การเลือก Configuration}
+
+จาก Phase 1.2 เรามี 4 Configurations ที่เป็นไปได้ แต่เราเลือกใช้:
+
+\begin{itemize}
+    \item \textbf{Configuration 1 (Down-Down):} เหมาะสำหรับการเดิน
+    \begin{itemize}
+        \item Torque สมดุล (จาก Phase 2.1)
+        \item มุมมอเตอร์อยู่ในช่วงที่ปลอดภัย
+        \item Workspace กว้าง
+    \end{itemize}
+\end{itemize}
+
+\subsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=Trajectory to Motor Angles]
+import numpy as np
+from kinematics import calculate_ik_analytical
+
+def trajectory_to_motor_angles(x_traj, y_traj, config=1):
+    """
+    Convert Cartesian trajectory to motor angles
+    
+    Parameters:
+    -----------
+    x_traj : array-like
+        X coordinates of foot trajectory (mm)
+    y_traj : array-like
+        Y coordinates of foot trajectory (mm)
+    config : int
+        IK configuration (1, 2, 3, or 4)
+        
+    Returns:
+    --------
+    theta_A : array
+        Motor A angles (degrees)
+    theta_B : array
+        Motor B angles (degrees)
+    """
+    n_points = len(x_traj)
+    theta_A = np.zeros(n_points)
+    theta_B = np.zeros(n_points)
+    
+    for i in range(n_points):
+        P_F = np.array([x_traj[i], y_traj[i]])
+        theta_A[i], theta_B[i] = calculate_ik_analytical(P_F, config)
+    
+    return theta_A, theta_B
+
+# Example: Generate elliptical trajectory
+t = np.linspace(0, 1, 100)  # 100 points per cycle
+x_center, y_center = 0, -200
+step_length, lift_height = 60, 30
+
+x_traj = x_center + (step_length/2) * np.cos(2*np.pi*t)
+y_traj = y_center - (lift_height/2) * np.abs(np.sin(2*np.pi*t))
+
+# Convert to motor angles
+theta_A, theta_B = trajectory_to_motor_angles(x_traj, y_traj, config=1)
+\end{lstlisting}
+
+%=============================================================================
+\section{ข้อกำหนดทางเทคนิค (Technical Specifications)}
+%=============================================================================
+
+\subsection{พารามิเตอร์การควบคุม}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่า} & \textbf{หน่วย} \\
+\midrule
+Update Rate & 50-100 & Hz \\
+Control Loop Time & 10-20 & ms \\
+Communication Baud Rate & 921600 & baud \\
+Position Resolution & 0.01 & degrees \\
+Maximum Velocity & 300 & deg/s \\
+Maximum Acceleration & 1000 & deg/s² \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์การควบคุมระบบ}
+\end{table}
+
+\subsection{Gait Parameters (Single Leg Testing)}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{พารามิเตอร์} & \textbf{ค่า} & \textbf{หน่วย} \\
+\midrule
+\textbf{Trajectory Parameters} & & \\
+Center Position & $(0, -200)$ & mm \\
+Step Length & 60 & mm \\
+Lift Height & 30 & mm \\
+\midrule
+\textbf{Timing Parameters} & & \\
+Gait Cycle Time & 600 & ms \\
+Update Rate & 100 & Hz \\
+Points per Cycle & 60 & points \\
+\midrule
+\textbf{Test Parameters} & & \\
+Total Cycles & 341+ & cycles \\
+Total Test Time & 205 & seconds \\
+Success Rate & 96-99 & \% \\
+\bottomrule
+\end{tabular}
+\caption{พารามิเตอร์การทดสอบขาเดียว}
+\end{table}
+
+%=============================================================================
+\section{การทดสอบและผลลัพธ์ (Testing and Results)}
+%=============================================================================
+
+\subsection{Single Leg Testing}
+
+การทดสอบขาเดียวดำเนินการกับขาซ้ายหน้า (Front-Left) โดยใช้ Binary Protocol v1.1
+
+\subsubsection{ขั้นตอนการทดสอบ}
+\begin{enumerate}
+    \item เริ่มต้นที่ Home position: $P_F = (0, -200)$ mm
+    \item สร้าง Elliptical trajectory (60×30 mm)
+    \item แปลงเป็นมุมมอเตอร์ด้วย IK (Config 1)
+    \item ส่งคำสั่งไปยังมอเตอร์ @ 100 Hz
+    \item บันทึกข้อมูล feedback จากมอเตอร์
+    \item วิเคราะห์ความแม่นยำและ error
+\end{enumerate}
+
+\subsubsection{ผลการทดสอบ}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc}
+\toprule
+\textbf{เกณฑ์} & \textbf{ผลลัพธ์} \\
+\midrule
+Total Cycles Tested & 341+ cycles \\
+Success Rate & 96-99\% \\
+Position Error (RMS) & $< 2$ degrees \\
+Maximum Error & $< 5$ degrees \\
+Communication Errors & $< 1$\% \\
+Motor Response Time & $< 10$ ms \\
+\midrule
+\textbf{สถานะ} & \checkmark \textbf{PASS} \\
+\bottomrule
+\end{tabular}
+\caption{ผลการทดสอบการควบคุมขาเดียว}
+\end{table}
+
+\subsection{การแก้ปัญหา Motor Jitter}
+
+\subsubsection{ปัญหาที่พบ}
+ในช่วงแรกของการทดสอบ พบว่ามอเตอร์มีอาการสั่น (Jitter) เมื่อรับคำสั่งตำแหน่งใหม่
+
+\subsubsection{สาเหตุ}
+\begin{itemize}
+    \item ส่งคำสั่งเร็วเกินไป (Update rate สูงเกินจำเป็น)
+    \item คำสั่งตำแหน่งมีการกระโดดแบบ step change
+    \item ระบบควบคุมภายในมอเตอร์ตอบสนองแบบ aggressive
+\end{itemize}
+
+\subsubsection{วิธีแก้ไข}
+\begin{enumerate}
+    \item ลด Update rate จาก 200 Hz เหลือ 100 Hz
+    \item เพิ่ม S-Curve profiling ให้กับ trajectory
+    \item ปรับจูนพารามิเตอร์ของมอเตอร์ (ใน MCU firmware):
+    \begin{itemize}
+        \item ลด Position P-gain
+        \item เพิ่ม Velocity feedforward
+        \item ปรับ Current limit
+    \end{itemize}
+    \item ใช้ Trajectory smoothing filter (Moving average)
+\end{enumerate}
+
+\subsubsection{ผลลัพธ์หลังแก้ไข}
+\begin{itemize}
+    \item Motor jitter ลดลงเกือบหมด
+    \item การเคลื่อนที่นุ่มนวลและต่อเนื่อง
+    \item Success rate เพิ่มขึ้นจาก 85\% เป็น 96-99\%
+\end{itemize}
+
+%=============================================================================
+\section{การพัฒนา Binary Protocol}
+%=============================================================================
+
+\subsection{ภาพรวม Communication Protocol}
+
+Binary Protocol ถูกพัฒนาเพื่อการสื่อสารที่มีประสิทธิภาพระหว่าง PC และ Motor Controller (MCU)
+
+\subsubsection{คุณสมบัติ}
+\begin{itemize}
+    \item \textbf{Efficiency:} ใช้ Binary format (compact กว่า ASCII)
+    \item \textbf{Reliability:} มี CRC-16 checksum
+    \item \textbf{Speed:} Baud rate 921600 (ส่งข้อมูลได้เร็ว)
+    \item \textbf{Flexibility:} รองรับคำสั่งหลายประเภท
+\end{itemize}
+
+\subsection{โครงสร้าง Packet}
+
+\subsubsection{Command Packet (คอมพิวเตอร์ส่งไปยังไมโครคอนโทรลเลอร์)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccl}
+\toprule
+\textbf{Field} & \textbf{Size (bytes)} & \textbf{Type} & \textbf{Description} \\
+\midrule
+Header & 1 & uint8 & 0xAA (Start marker) \\
+Command & 1 & uint8 & Command ID \\
+Motor ID & 1 & uint8 & Motor index (1-8) \\
+Position & 4 & float32 & Target position (degrees) \\
+CRC-16 & 2 & uint16 & Checksum \\
+\midrule
+\textbf{Total} & \textbf{9} & & \\
+\bottomrule
+\end{tabular}
+\caption{โครงสร้าง Command Packet}
+\end{table}
+
+\subsubsection{Response Packet (ไมโครคอนโทรลเลอร์ตอบกลับไปยังคอมพิวเตอร์)}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lccl}
+\toprule
+\textbf{Field} & \textbf{Size (bytes)} & \textbf{Type} & \textbf{Description} \\
+\midrule
+Header & 1 & uint8 & 0xBB (Start marker) \\
+Motor ID & 1 & uint8 & Motor index (1-8) \\
+Current Pos & 4 & float32 & Current position (degrees) \\
+Current Vel & 4 & float32 & Current velocity (deg/s) \\
+Current & 4 & float32 & Motor current (A) \\
+Status & 1 & uint8 & Status flags \\
+CRC-16 & 2 & uint16 & Checksum \\
+\midrule
+\textbf{Total} & \textbf{17} & & \\
+\bottomrule
+\end{tabular}
+\caption{โครงสร้าง Response Packet}
+\end{table}
+
+\subsection{Command Types}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{clc}
+\toprule
+\textbf{ID} & \textbf{Command} & \textbf{Description} \\
+\midrule
+0x01 & SET\_POSITION & ส่งคำสั่งตำแหน่งเป้าหมาย \\
+0x02 & GET\_FEEDBACK & ขอข้อมูล feedback จากมอเตอร์ \\
+0x03 & ENABLE\_MOTOR & เปิดใช้งานมอเตอร์ \\
+0x04 & DISABLE\_MOTOR & ปิดใช้งานมอเตอร์ \\
+0x05 & SET\_ZERO & ตั้งตำแหน่งปัจจุบันเป็นศูนย์ \\
+0x06 & EMERGENCY\_STOP & หยุดฉุกเฉิน \\
+\bottomrule
+\end{tabular}
+\caption{รายการ Command Types}
+\end{table}
+
+\subsection{CRC-16 Checksum}
+
+ใช้ CRC-16-CCITT polynomial สำหรับตรวจจับ error:
+
+\begin{equation}
+    \text{Polynomial} = x^{16} + x^{12} + x^5 + 1 = \text{0x1021}
+\end{equation}
+
+\subsubsection{ตัวอย่างโค้ด Python}
+
+\begin{lstlisting}[language=Python, caption=CRC-16 Implementation]
+def crc16_ccitt(data):
+    """
+    Calculate CRC-16-CCITT checksum
+    
+    Parameters:
+    -----------
+    data : bytes
+        Input data
+        
+    Returns:
+    --------
+    crc : int
+        CRC-16 checksum (16-bit)
+    """
+    crc = 0xFFFF
+    polynomial = 0x1021
+    
+    for byte in data:
+        crc ^= (byte << 8)
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ polynomial) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    
+    return crc
+\end{lstlisting}
+
+%=============================================================================
+\section{สรุปและข้อเสนอแนะ (Conclusion and Recommendations)}
+%=============================================================================
+
+\subsection{สรุปผลการออกแบบ}
+
+Phase 4.1 ได้ออกแบบและพัฒนาระบบควบคุมตำแหน่งสำหรับหุ่นยนต์สี่ขาได้สำเร็จ โดยมีผลลัพธ์ดังนี้:
+
+\begin{itemize}
+    \item[\checkmark] \textbf{Controller Design:} Direct Position Control + S-Curve Profiling
+    \item[\checkmark] \textbf{Trajectory Generation:} Elliptical และ Asymmetric trajectory
+    \item[\checkmark] \textbf{IK Integration:} ใช้ Analytical IK (Config 1) สำเร็จ
+    \item[\checkmark] \textbf{Binary Protocol:} รองรับการสื่อสารที่เสถียร (Success rate 96-99\%)
+    \item[\checkmark] \textbf{Single Leg Testing:} ทดสอบ 341+ cycles สำเร็จ
+\end{itemize}
+
+\subsection{จุดเด่นของระบบ}
+
+\begin{enumerate}
+    \item \textbf{ความนุ่มนวล:} S-Curve profiling ลด Jerk และแรงกระแทก
+    \item \textbf{ความแม่นยำ:} Position error < 2 degrees (RMS)
+    \item \textbf{ความเสถียร:} Success rate สูง (96-99\%)
+    \item \textbf{ความเร็ว:} Update rate 100 Hz เพียงพอสำหรับ Gait control
+    \item \textbf{ความยืดหยุ่น:} รองรับ Gait pattern หลายแบบ
+\end{enumerate}
+
+\subsection{บทเรียนที่ได้รับ}
+
+\begin{itemize}
+    \item \textbf{Update Rate:} ไม่จำเป็นต้องสูงเกินจำเป็น - 100 Hz เพียงพอ
+    \item \textbf{Trajectory Smoothing:} สำคัญมากสำหรับการลด Motor jitter
+    \item \textbf{Motor Tuning:} การปรับจูนพารามิเตอร์มอเตอร์ (P-gain, Feedforward) มีผลมาก
+    \item \textbf{Error Handling:} ต้องมี Checksum และ Timeout protection
+\end{itemize}
+
+\subsection{ข้อเสนอแนะสำหรับ Phase ถัดไป}
+
+\subsubsection{Phase 4.2: Hardware Integration}
+\begin{itemize}
+    \item ขยายระบบควบคุมจาก 1 ขา (2 motors) เป็น 4 ขา (8 motors)
+    \item พัฒนา Multi-motor synchronization
+    \item ทดสอบ Trot gait บนฮาร์ดแวร์จริง
+    \item เพิ่ม Emergency stop และ Safety features
+\end{itemize}
+
+\subsubsection{Phase 5: Quadruped Scaling}
+\begin{itemize}
+    \item พัฒนา Motor indexing system
+    \item ออกแบบ Mirror kinematics สำหรับขาซ้าย-ขวา
+    \item ทดสอบ Multi-leg coordination
+    \item ปรับจูน Gait parameters สำหรับการเดินบนพื้นจริง
+\end{itemize}
+
+\subsection{ข้อจำกัดที่ควรระวัง}
+
+\begin{itemize}
+    \item \textbf{IK Singularities:} หลีกเลี่ยงตำแหน่งที่ IK มี multiple solutions หรือ undefined
+    \item \textbf{Workspace Limits:} ตรวจสอบว่า Trajectory อยู่ภายใน reachable workspace
+    \item \textbf{Communication Latency:} ต้องมีการชดเชย Latency ในระบบ Real-time
+    \item \textbf{Power Management:} ต้องมี Battery monitoring และ Low voltage protection
+\end{itemize}
+
+%=============================================================================
+\section{เอกสารอ้างอิง (References)}
+%=============================================================================
+
+\begin{enumerate}
+    \item Phase 1.2: Inverse Kinematics Analytical - BLEGS Analysis Unit
+    \item Phase 2.1: Static Torque Analysis - BLEGS Analysis Unit
+    \item Phase 3.1: Gait Control Simulation - BLEGS Analysis Unit
+    \item S-Curve Motion Profile Theory and Applications
+    \item Binary Communication Protocols for Embedded Systems
+    \item CRC-16-CCITT Checksum Standard
+\end{enumerate}
+
+\end{document}

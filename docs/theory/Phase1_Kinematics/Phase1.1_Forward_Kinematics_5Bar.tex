@@ -1,0 +1,264 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\usepackage{amsmath} % For math environments
+\usepackage{geometry} % For page margins
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+% --- TITLE ---
+\title{การวิเคราะห์จลนศาสตร์ขาหุ่นยนต์ \\ (กลไก 5-Bar Linkage แบบมี Offset)}
+\author{นายธีรโชติ เมืองจำนงค์}
+\date{\today}
+
+% --- DOCUMENT ---
+\begin{document}
+
+\maketitle
+
+\section{พารามิเตอร์ทางจลนศาสตร์}
+เอกสารนี้สรุปพารามิเตอร์และการคำนวณสำหรับกลไกขาหุ่นยนต์แบบ 5-Bar Parallel Linkage
+
+\textbf{ภาพรวม:} กลไก 5-Bar Parallel Linkage คือระบบแขนกลที่ประกอบด้วย:
+\begin{itemize}
+    \item แขนต่อ 4 แท่ง (4 links): AC, BD, CE, DE
+    \item ข้อต่อ 5 จุด: A, B, C, D, E
+    \item มอเตอร์ควบคุม 2 ตัว ที่จุด A และ B
+    \item ปลายเท้า (End-effector) ที่จุด F ซึ่งยื่นออกจากจุด E
+\end{itemize}
+
+กลไกนี้ใช้ในการควบคุมตำแหน่งปลายเท้าของหุ่นยนต์โดยการปรับมุมมอเตอร์ทั้งสอง
+
+\subsection{ระบบพิกัด}
+\textit{คำอธิบาย:} เราใช้ระบบพิกัด Cartesian 2D โดยตั้งจุดกำเนิดไว้กึ่งกลางระหว่างมอเตอร์ทั้งสอง เพื่อให้ระบบสมมาตรและสะดวกต่อการคำนวณ
+
+\begin{itemize}
+    \item \textbf{จุดกำเนิด:} $(0, 0)$ - กึ่งกลางระหว่างมอเตอร์
+    \item \textbf{แกน X:} แนวนอน (ขวาเป็นบวก)
+    \item \textbf{แกน Y:} แนวตั้ง (ขึ้นเป็นบวก)
+    \item \textbf{จุด A (มอเตอร์ซ้าย):} $\mathbf{P}_A = (-42.5, 0)$ mm
+    \item \textbf{จุด B (มอเตอร์ขวา):} $\mathbf{P}_B = (42.5, 0)$ mm
+    \item \textbf{ระยะห่างมอเตอร์:} $|AB| = 85$ mm
+\end{itemize}
+
+\subsection{ความยาวของแขนต่อ (Link Lengths)}
+\textit{คำอธิบาย:} กลไก 5-Bar Linkage ประกอบด้วยแขนต่อ 4 แท่ง ออกแบบแบบสมมาตรเพื่อความเสถียรและควบคุมง่าย
+
+\textbf{ชั้นบน (Upper Links)} - ต่อจากมอเตอร์ไปยังข้อเข่า:
+\begin{itemize}
+    \item \textbf{Link AC (ซ้าย):} $L_1 = L_{AC} = 105$ mm
+    \item \textbf{Link BD (ขวา):} $L_2 = L_{BD} = 105$ mm
+\end{itemize}
+
+\textbf{ชั้นล่าง (Lower Links)} - ต่อจากข้อเข่าไปยังจุด E:
+\begin{itemize}
+    \item \textbf{Link CE (ซ้าย):} $L_3 = L_{CE} = 145$ mm
+    \item \textbf{Link DE (ขวา):} $L_4 = L_{DE} = 145$ mm
+\end{itemize}
+
+\textit{หมายเหตุ:} $L_1 = L_2$ และ $L_3 = L_4$ เพื่อความสมมาตร
+
+\subsection{End-Effector (ปลายเท้า)}
+\textit{คำอธิบาย:} ปลายเท้าของหุ่นยนต์มี 2 จุดสำคัญ:
+
+\textbf{จุด E} - จุดตัดของแขนล่างทั้งสอง (CE และ DE):
+\begin{itemize}
+    \item เป็นจุดที่แขนล่างทั้งสองมาบรรจบกัน
+    \item ใช้ในการคำนวณทางคณิตศาสตร์
+    \item ต้องอยู่ภายใน Workspace ที่เป็นไปได้
+\end{itemize}
+
+\textbf{จุด F} - ปลายเท้าจริง (Actual End-Effector):
+\begin{itemize}
+    \item ยื่นออกจากจุด E ตามแนวเส้นตรง DE
+    \item ระยะ Offset: $L_{EF} = 40$ mm
+    \item เพิ่มพื้นที่การทำงาน (Workspace) ของหุ่นยนต์
+\end{itemize}
+
+\textbf{เงื่อนไขสำคัญ:} จุด D, E, F ต้องอยู่บนเส้นตรงเดียวกัน (collinear) เสมอ
+
+\begin{itemize}
+    \item \textbf{จุดคำนวณ:} จุด \textbf{E}
+    \item \textbf{ปลายเท้าจริง:} จุด \textbf{F}
+    \item \textbf{ระยะออฟเซ็ต (EF):} $L_{EF} = 40$ mm
+    \item \textbf{เงื่อนไข:} จุด \textbf{D, E, F} อยู่บนเส้นตรงเดียวกัน (collinear)
+\end{itemize}
+
+
+\section{การหา Forward Kinematics (FK)}
+วัตถุประสงค์: หาพิกัดของปลายเท้า $\mathbf{P}_F(x_f, y_f)$ จากมุมมอเตอร์ $\theta_A$ และ $\theta_B$
+
+\textbf{Forward Kinematics (FK)} คือการคำนวณหาตำแหน่งปลายเท้าเมื่อเรารู้มุมของมอเตอร์ทั้งสอง เช่น ถ้ามอเตอร์ A หมุน 30 องศา และมอเตอร์ B หมุน 45 องศา ปลายเท้าจะอยู่ที่ไหน? นี่คือปัญหาพื้นฐานในการควบคุมหุ่นยนต์
+
+\subsection{ขั้นตอนที่ 1: พิกัดของข้อเข่า ($P_C, P_D$)}
+\textit{วิธีการ:} คำนวณตำแหน่งข้อเข่าทั้งสองข้าง (จุด C และ D) จากมุมมอเตอร์โดยใช้ตรีโกณมิติ
+
+\textbf{มุมมอเตอร์:}
+\begin{itemize}
+    \item $\theta_A$ - มุมของมอเตอร์ซ้าย (จุด A) วัดจากแกน X+
+    \item $\theta_B$ - มุมของมอเตอร์ขวา (จุด B) วัดจากแกน X+
+    \item ทิศทางบวก: หมุนทวนเข็มนาฬิกา (CCW)
+\end{itemize}
+
+\textbf{สมการคำนวณ:}
+\begin{align*}
+    \mathbf{P}_A &= (-42.5, 0) \\
+    \mathbf{P}_B &= (42.5, 0) \\
+    \mathbf{P}_C &= \mathbf{P}_A + L_1 \begin{bmatrix} \cos \theta_A \\ \sin \theta_A \end{bmatrix} = \begin{bmatrix} -42.5 + 105 \cos \theta_A \\ 105 \sin \theta_A \end{bmatrix} \\
+    \mathbf{P}_D &= \mathbf{P}_B + L_2 \begin{bmatrix} \cos \theta_B \\ \sin \theta_B \end{bmatrix} = \begin{bmatrix} 42.5 + 105 \cos \theta_B \\ 105 \sin \theta_B \end{bmatrix}
+\end{align*}
+
+\subsection{ขั้นตอนที่ 2: จุดตัดแขนล่าง ($P_E$)}
+\textit{วิธีการ:} หาจุด E โดยการหาจุดตัดของวงกลมสองวง (Circle-Circle Intersection)
+
+\textbf{วงกลมที่ 1:} ศูนย์กลางที่ $\mathbf{P}_C$, รัศมี $L_3 = 145$ mm
+\begin{equation}
+    |\mathbf{P}_E - \mathbf{P}_C| = L_{CE} = 145
+\end{equation}
+
+\textbf{วงกลมที่ 2:} ศูนย์กลางที่ $\mathbf{P}_D$, รัศมี $L_4 = 145$ mm
+\begin{equation}
+    |\mathbf{P}_E - \mathbf{P}_D| = L_{DE} = 145
+\end{equation}
+
+\textbf{ระบบสมการ:}
+\begin{align*}
+    (x_e - x_c)^2 + (y_e - y_c)^2 &= L_3^2 = 145^2 \\
+    (x_e - x_d)^2 + (y_e - y_d)^2 &= L_4^2 = 145^2
+\end{align*}
+
+\textit{หมายเหตุ:} 
+\begin{itemize}
+    \item การตัดกันของวงกลมให้จุดตัด 2 จุด (Elbow Up/Down)
+    \item เราเลือกจุดที่ $y_e$ น้อยกว่า (Elbow Down Configuration)
+    \item ต้องแก้ระบบสมการนี้โดยใช้วิธี Geometric Method
+\end{itemize}
+
+\subsection{ขั้นตอนที่ 3: จุดปลายเท้า ($P_F$)}
+\textit{วิธีการ:} คำนวณตำแหน่งปลายเท้าจริง (จุด F) ซึ่งยื่นออกจากจุด E ตามแนวเส้นตรง DE
+
+\textbf{เงื่อนไข:}
+\begin{itemize}
+    \item จุด D, E, F อยู่บนเส้นตรงเดียวกัน (collinear)
+    \item ระยะ $|EF| = L_{EF} = 40$ mm
+    \item ทิศทางจาก D ไป E ต่อไปยัง F
+\end{itemize}
+
+\textbf{การคำนวณ:} หาทิศทางจาก D ไป E (เวกเตอร์หนึ่งหน่วย) แล้วเลื่อนจุด E ไปตามทิศทางนั้น 40 mm
+
+เนื่องจาก $D, E, F$ อยู่บนเส้นตรงเดียวกัน:
+\begin{align*}
+    \vec{V}_{DE} &= \mathbf{P}_E - \mathbf{P}_D \\
+    \vec{u}_{DE} &= \frac{\vec{V}_{DE}}{\| \vec{V}_{DE} \|} = \frac{\mathbf{P}_E - \mathbf{P}_D}{145} \\
+    \vec{V}_{EF} &= 40 \cdot \vec{u}_{DE} = \frac{40}{145} (\mathbf{P}_E - \mathbf{P}_D) = \frac{8}{29} (\mathbf{P}_E - \mathbf{P}_D)
+\end{align*}
+พิกัดของ $\mathbf{P}_F$ คือ:
+\begin{align*}
+    \mathbf{P}_F &= \mathbf{P}_E + \vec{V}_{EF} \\
+    \mathbf{P}_F &= \mathbf{P}_E + \frac{8}{29} (\mathbf{P}_E - \mathbf{P}_D) \\
+    \mathbf{P}_F &= \left(1 + \frac{8}{29}\right) \mathbf{P}_E - \frac{8}{29} \mathbf{P}_D
+\end{align*}
+\textbf{สมการ FK สุดท้าย:}
+$$
+\mathbf{P}_F = \frac{37}{29} \mathbf{P}_E - \frac{8}{29} \mathbf{P}_D
+$$
+หรือ:
+\begin{align*}
+    x_f &= \frac{37}{29} x_e - \frac{8}{29} x_d \\
+    y_f &= \frac{37}{29} y_e - \frac{8}{29} y_d
+\end{align*}
+
+
+\section{การหา Jacobian ($J_F$)}
+วัตถุประสงค์: หาเมทริกซ์ $\mathbf{J}_F$ ที่เชื่อมความสัมพันธ์ $\mathbf{v}_F = \mathbf{J}_F \dot{\mathbf{q}}$ โดยที่ $\mathbf{v}_F = [\dot{x}_f, \dot{y}_f]^T$ และ $\dot{\mathbf{q}} = [\dot{\theta}_A, \dot{\theta}_B]^T$
+
+\textbf{Jacobian Matrix} คือเครื่องมือสำคัญที่บอกว่า "ถ้าเราหมุนมอเตอร์เร็วขนาดนี้ ปลายเท้าจะเคลื่อนที่เร็วแค่ไหนในแต่ละทิศทาง" ใช้ในการควบคุมความเร็ว การวางแผนเส้นทาง และการคำนวณแรงกด
+
+\textit{หลักการ:} Jacobian เป็นเมทริกซ์ที่แปลงความเร็วเชิงมุมของมอเตอร์ $(\dot{\theta}_A, \dot{\theta}_B)$ ให้เป็นความเร็วเชิงเส้นของปลายเท้า $(\dot{x}_f, \dot{y}_f)$
+
+\subsection{ความสัมพันธ์ของความเร็ว}
+หาอนุพันธ์ของสมการ FK สำหรับ $\mathbf{P}_F$ เทียบกับเวลา:
+$$
+\mathbf{v}_F = \frac{d \mathbf{P}_F}{dt} = \frac{37}{29} \frac{d \mathbf{P}_E}{dt} - \frac{8}{29} \frac{d \mathbf{P}_D}{dt}
+$$
+$$
+\mathbf{v}_F = \frac{37}{29} \mathbf{v}_E - \frac{8}{29} \mathbf{v}_D
+$$
+เราต้องหา $\mathbf{v}_E = \mathbf{J}_E \dot{\mathbf{q}}$ และ $\mathbf{v}_D = \mathbf{J}_D \dot{\mathbf{q}}$
+
+\subsection{Jacobian ของจุด D ($J_D$)}
+\textit{คำอธิบาย:} จุด D เชื่อมโดยตรงกับมอเตอร์ B เท่านั้น (คอลัมน์แรกเป็น 0) ดังนั้น Jacobian จะบอกว่าการหมุนมอเตอร์ B จะทำให้จุด D เคลื่อนที่อย่างไร
+
+จาก $\mathbf{P}_D = (42.5 + 105 \cos \theta_B, 105 \sin \theta_B)$:
+$$
+\mathbf{v}_D =
+\begin{bmatrix} \dot{x}_d \\ \dot{y}_d \end{bmatrix}
+=
+\begin{bmatrix}
+    \frac{\partial x_d}{\partial \theta_A} & \frac{\partial x_d}{\partial \theta_B} \\
+    \frac{\partial y_d}{\partial \theta_A} & \frac{\partial y_d}{\partial \theta_B}
+\end{bmatrix}
+\begin{bmatrix} \dot{\theta}_A \\ \dot{\theta}_B \end{bmatrix}
+$$
+$$
+\mathbf{J}_D =
+\begin{bmatrix}
+    0 & -105 \sin \theta_B \\
+    0 & 105 \cos \theta_B
+\end{bmatrix}
+$$
+
+\subsection{Jacobian ของจุด E ($J_E$)}
+\textit{คำอธิบาย:} จุด E ซับซ้อนกว่าเพราะได้รับผลกระทบจากมอเตอร์ทั้งสองตัว ต้องใช้ implicit differentiation ของสมการวงกลมเพื่อหาว่าเมื่อข้อเข่า C และ D เคลื่อนที่ จุด E จะเคลื่อนที่อย่างไร
+
+$\mathbf{J}_E$ ได้มาจากการหาอนุพันธ์โดยนัย (implicit differentiation) ของสมการวงกลมในหัวข้อ 2.2 ซึ่งได้ผลลัพธ์ในรูปแบบ $\mathbf{A} \mathbf{v}_E = \mathbf{B} \dot{\mathbf{q}}$:
+$$
+\underbrace{
+\begin{bmatrix}
+    x_e - x_c & y_e - y_c \\
+    x_e - x_d & y_e - y_d
+\end{bmatrix}
+}_{\mathbf{A}}
+\underbrace{
+\begin{bmatrix} \dot{x}_e \\ \dot{y}_e \end{bmatrix}
+}_{\mathbf{v}_E}
+=
+\underbrace{
+\begin{bmatrix}
+    B_{11} & 0 \\
+    0 & B_{22}
+\end{bmatrix}
+}_{\mathbf{B}}
+\underbrace{
+\begin{bmatrix} \dot{\theta}_A \\ \dot{\theta}_B \end{bmatrix}
+}_{\dot{\mathbf{q}}}
+$$
+โดยที่:
+\begin{align*}
+    B_{11} &= 105 [ (y_e - y_c) \cos \theta_A - (x_e - x_c) \sin \theta_A ] \\
+    B_{22} &= 105 [ (y_e - y_d) \cos \theta_B - (x_e - x_d) \sin \theta_B ]
+\end{align*}
+ดังนั้น $\mathbf{J}_E = \mathbf{A}^{-1} \mathbf{B}$
+
+\subsection{Jacobian สุดท้าย ($J_F$)}
+\textit{คำอธิบาย:} เมื่อเรามี Jacobian ของจุด E และ D แล้ว เราสามารถรวมกันเพื่อหา Jacobian ของจุด F (ปลายเท้าจริง) โดยใช้สูตรที่เราหาได้ว่า $\mathbf{P}_F = \frac{37}{29} \mathbf{P}_E - \frac{8}{29} \mathbf{P}_D$ นำมาหาอนุพันธ์ตามเวลา
+
+แทนค่า $\mathbf{J}_E$ และ $\mathbf{J}_D$ กลับเข้าไปในสมการ $\mathbf{v}_F$:
+\begin{align*}
+    \mathbf{v}_F &= \frac{37}{29} (\mathbf{J}_E \dot{\mathbf{q}}) - \frac{8}{29} (\mathbf{J}_D \dot{\mathbf{q}}) \\
+    \mathbf{v}_F &= \left( \frac{37}{29} \mathbf{J}_E - \frac{8}{29} \mathbf{J}_D \right) \dot{\mathbf{q}}
+\end{align*}
+\textbf{Jacobian สุดท้าย:}
+$$
+\mathbf{J}_F = \frac{1}{29} (37 \mathbf{J}_E - 8 \mathbf{J}_D)
+$$
+
+\end{document}

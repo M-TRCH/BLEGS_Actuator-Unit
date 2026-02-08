@@ -1,0 +1,143 @@
+\documentclass[a4paper, 12pt]{article}
+
+% --- PACKAGES ---
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{thai}
+\setotherlanguage{english}
+\defaultfontfeatures{Scale=MatchLowercase}
+\setmainfont{TH SarabunPSK}
+\newfontfamily\thaifont{TH SarabunPSK}
+\usepackage{amsmath} % For math environments
+\usepackage{geometry} % For page margins
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+% --- TITLE ---
+\title{การวิเคราะห์ Inverse Kinematics แบบ Analytical \\ (5-Bar Parallel Linkage)}
+\author{นายธีรโชติ เมืองจำนงค์}
+\date{\today}
+
+% --- DOCUMENT ---
+\begin{document}
+
+\maketitle
+
+\section{บทนำ}
+เอกสารนี้อธิบายการคำนวณ Inverse Kinematics (IK) แบบ Analytical สำหรับกลไก 5-Bar Parallel Linkage ของหุ่นยนต์ขาสองขา โดยใช้วิธีการแก้สมการทางเรขาคณิตโดยตรง ซึ่งให้ความแม่นยำสูงและรวดเร็วกว่าวิธี Numerical
+
+\textbf{Inverse Kinematics (IK)} คือการคำนวณหามุมมอเตอร์ $\theta_A$ และ $\theta_B$ เมื่อเรารู้ตำแหน่งเป้าหมายของปลายเท้า $\mathbf{P}_F(x_f, y_f)$ ซึ่งเป็นปัญหาที่สำคัญในการควบคุมหุ่นยนต์
+
+\subsection{ข้อได้เปรียบของวิธี Analytical}
+\begin{itemize}
+    \item \textbf{ความแม่นยำสูง:} ใกล้เคียง machine precision ($\sim 10^{-14}$ mm)
+    \item \textbf{ความเร็ว:} คำนวณตรงไม่ต้อง iterate
+    \item \textbf{Deterministic:} ได้คำตอบเดียวกันเสมอ
+    \item \textbf{ไม่ต้องค่าเดาเริ่มต้น:} แต่ต้องเลือก Configuration (Elbow Up/Down)
+\end{itemize}
+
+\section{Configurations ที่เป็นไปได้}
+สำหรับกลไก 5-Bar Linkage มีท่าที่เป็นไปได้ทั้งหมด 4 แบบ ขึ้นอยู่กับตำแหน่งของข้อเข่า C (ซ้าย) และ D (ขวา):
+
+\begin{enumerate}
+    \item \textbf{Config 1 (Down-Down):} C ลง, D ลง - ท่ามาตรฐาน
+    \item \textbf{Config 2 (Down-Up):} C ลง, D ขึ้น
+    \item \textbf{Config 3 (Up-Down):} C ขึ้น, D ลง
+    \item \textbf{Config 4 (Up-Up):} C ขึ้น, D ขึ้น
+\end{enumerate}
+
+\section{วิธีการคำนวณ}
+
+\subsection{ขั้นตอนที่ 1: หาระยะห่างระหว่างจุด}
+จากสมการ Forward Kinematics:
+\begin{equation}
+    \mathbf{P}_F = \frac{37}{29}\mathbf{P}_E - \frac{8}{29}\mathbf{P}_D
+\end{equation}
+
+เราสามารถหาระยะห่างระหว่าง $\mathbf{P}_F$ และ $\mathbf{P}_D$:
+\begin{equation}
+    |\mathbf{P}_F - \mathbf{P}_D| = L_{DE} \times \frac{37}{29} = 145 \times \frac{37}{29} = 185.0 \text{ mm}
+\end{equation}
+
+\subsection{ขั้นตอนที่ 2: หาจุด D จากการตัดกันของวงกลม}
+หา $\mathbf{P}_D$ จากการตัดกันของวงกลม 2 วง:
+\begin{itemize}
+    \item \textbf{วงที่ 1:} ศูนย์กลาง $\mathbf{P}_F$ (เป้าหมาย), รัศมี 185.0 mm
+    \item \textbf{วงที่ 2:} ศูนย์กลาง $\mathbf{P}_B$ (มอเตอร์ขวา), รัศมี $L_{BD} = 105$ mm
+\end{itemize}
+
+การตัดกันของวงกลมจะได้จุด 2 จุด เราเลือกตาม Configuration ที่ต้องการ (D ลง หรือ D ขึ้น)
+
+\subsection{ขั้นตอนที่ 3: หาจุด E}
+จากสมการ:
+\begin{equation}
+    \mathbf{P}_E = \frac{29 \mathbf{P}_F + 8 \mathbf{P}_D}{37}
+\end{equation}
+
+\subsection{ขั้นตอนที่ 4: หาจุด C จากการตัดกันของวงกลม}
+หา $\mathbf{P}_C$ จากการตัดกันของวงกลม 2 วง:
+\begin{itemize}
+    \item \textbf{วงที่ 1:} ศูนย์กลาง $\mathbf{P}_A$ (มอเตอร์ซ้าย), รัศมี $L_{AC} = 105$ mm
+    \item \textbf{วงที่ 2:} ศูนย์กลาง $\mathbf{P}_E$, รัศมี $L_{CE} = 145$ mm
+\end{itemize}
+
+\subsection{ขั้นตอนที่ 5: คำนวณมุมมอเตอร์}
+จากเวกเตอร์ที่ได้:
+\begin{align}
+    \theta_A &= \arctan2(y_c - y_a, x_c - x_a) \\
+    \theta_B &= \arctan2(y_d - y_b, x_d - x_b)
+\end{align}
+
+\section{ผลการทดสอบ}
+
+\subsection{กรณีทดสอบ: Home Pose}
+เป้าหมาย: $\mathbf{P}_F = (0, -200)$ mm
+
+\textbf{ตารางที่ 1:} ผลลัพธ์ IK สำหรับทั้ง 4 Configurations
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Configuration} & $\theta_A$ (\textdegree) & $\theta_B$ (\textdegree) & \textbf{Error (mm)} & \textbf{Valid} \\
+\hline
+Down-Down & -119.53 & -37.68 & $6.36 \times 10^{-14}$ & \checkmark \\
+Down-Up   & -139.91 & -166.32 & $1.68 \times 10^{-13}$ & \checkmark \\
+Up-Down   & -16.06  & -37.68 & $4.26 \times 10^{-14}$ & \checkmark \\
+Up-Up     & -19.37  & -166.32 & $3.39 \times 10^{2}$ & $\times$ \\
+\hline
+\end{tabular}
+\caption{ผลการทดสอบ IK ทั้ง 4 Configurations สำหรับเป้าหมาย (0, -200) mm}
+\end{table}
+
+\subsection{การตีความผลลัพธ์}
+
+\textbf{คำตอบที่ถูกต้อง (Valid):} พบ 3 จาก 4 Configurations
+
+\begin{enumerate}
+    \item \textbf{Config 1 (Down-Down):} ท่ามาตรฐาน - เหมาะสมที่สุด
+    \item \textbf{Config 2 (Down-Up):} ท่าแปลก - อาจเสี่ยง singularity
+    \item \textbf{Config 3 (Up-Down):} ท่าแปลก - ไม่เหมาะกับการพยุงน้ำหนัก
+\end{enumerate}
+
+\textbf{Config 4 (Up-Up):} อยู่นอก Workspace (Error = 339 mm)
+
+\section{สรุปและข้อแนะนำ}
+
+\subsection{ข้อค้นพบสำคัญ}
+\begin{itemize}
+    \item กลไก 5-Bar Linkage มี \textbf{หลายคำตอบ} สำหรับจุดเดียวกัน
+    \item สำหรับ $(0, -200)$ mm มีคำตอบที่ถูกต้อง \textbf{3 แบบ}
+    \item ความแม่นยำระดับ $10^{-14}$ mm (machine precision)
+\end{itemize}
+
+\subsection{การนำไปใช้}
+แนะนำให้ใช้ \textbf{Config 1 (Down-Down)} เพราะ:
+\begin{itemize}
+    \item เป็นท่าที่เสถียรและธรรมชาติ
+    \item เหมาะสำหรับการพยุงน้ำหนัก
+    \item หลีกเลี่ยง Singularity
+\end{itemize}
+
+\end{document}
