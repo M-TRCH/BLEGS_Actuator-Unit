@@ -1,0 +1,143 @@
+\documentclass[a4paper,12pt]{article}
+
+% การตั้งค่าภาษาไทยและการตัดคำ
+\usepackage{fontspec}
+\usepackage{xunicode}
+\usepackage{xltxtra}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{amssymb} % สำหรับช่อง Checkbox
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+% ตั้งค่าฟอนต์ภาษาไทย (ต้องมีฟอนต์ TH Sarabun New ในเครื่อง หรืออัพโหลดขึ้น Overleaf)
+\defaultfontfeatures{Mapping=tex-text}
+\setmainfont{TH Sarabun New} % หรือเปลี่ยนเป็น Angsana New ตามที่มี
+\XeTeXlinebreaklocale "th"
+\XeTeXlinebreakskip = 0pt plus 1pt
+
+% ตั้งค่าหน้ากระดาษ
+\geometry{
+    a4paper,
+    top=20mm,
+    bottom=20mm,
+    left=20mm,
+    right=20mm
+}
+
+% ส่วนหัวและท้ายกระดาษ
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textbf{โครงการ LGS (Light Guiding Shelf)}}
+\rhead{แบบตรวจสอบการติดตั้ง (Checklist)}
+\cfoot{หน้า \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% สร้าง Checkbox
+\newlist{todolist}{itemize}{2}
+\setlist[todolist]{label=$\square$}
+
+\title{\vspace{-2cm}\textbf{แบบตรวจสอบการติดตั้งและทดสอบระบบ}\\Light Guiding Shelf (LGS)}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\vspace{-1.5cm}
+
+\noindent
+\textbf{ชื่อตู้/โซน:} \underline{\hspace{6cm}} \hfill \textbf{ผู้ติดตั้ง:} \underline{\hspace{5cm}} \\[0.5em]
+\textbf{วันที่:} \underline{\hspace{6cm}} \hfill \textbf{ผู้ตรวจสอบ:} \underline{\hspace{5cm}}
+
+\section{1. การเดินสายและโครงสร้างระบบ (Wiring \& Topology)}
+\textit{ตรวจสอบการเชื่อมต่อทางกายภาพและค่าแรงดันไฟ}
+\begin{todolist}
+    \item \textbf{เส้นทางสาย LAN:} สายจาก Server $\rightarrow$ เสียบเข้า \textbf{PLC} $\rightarrow$ ขยายจาก PLC ไปเข้า \textbf{Modbus Gateway}
+    \item \textbf{สีสายสัญญาณ RS485:}
+    \begin{itemize}
+        \item[$\circ$] สาย A: \textbf{สีน้ำเงิน (Blue)}
+        \item[$\circ$] สาย B: \textbf{สีเขียว (Green)}
+    \end{itemize}
+    \item \textbf{ตรวจสอบแรงดันไฟ (Voltage):} วัดที่ \textbf{ปลายสาย (End of Line)} ของโมดูลตัวสุดท้าย
+    \begin{itemize}
+        \item[$\circ$] แรงดันต้องได้ $\mathbf{\ge 9.8}$ \textbf{V}
+    \end{itemize}
+\end{todolist}
+
+\section{2. การตั้งค่า Modbus Gateway}
+\textit{ตั้งค่าพารามิเตอร์ให้ถูกต้องเพื่อป้องกันข้อมูลชนกัน}
+\begin{todolist}
+    \item \textbf{Network Parameters:}
+    \begin{itemize}
+        \item[$\circ$] Port: \textbf{502}
+        \item[$\circ$] Protocol: \textbf{Modbus TCP Protocol}
+    \end{itemize}
+    \item \textbf{Serial Parameters:}
+    \begin{itemize}
+        \item[$\circ$] Baud Rate: \textbf{9600} \hfill Data Bits: \textbf{8}
+        \item[$\circ$] Parity: \textbf{None} \hfill Stop Bit: \textbf{1}
+        \item[$\circ$] Flow Control: \textbf{None}
+    \end{itemize}
+    \item \textbf{Operating Mode (Advanced):}
+    \begin{itemize}
+        \item[$\circ$] Transfer Mode: \textbf{Auto Query Storage}
+        \item[$\circ$] \textbf{Enable} RS485 Multi-host
+        \begin{itemize}
+             \item Wait time: \textbf{224 ms}
+        \end{itemize}
+        \item[$\circ$] \textbf{Enable} RS485 Bus Conflict Detection
+        \begin{itemize}
+             \item Send data only when RS485 bus is idle for: \textbf{20 ms}
+        \end{itemize}
+    \end{itemize}
+\end{todolist}
+
+\section{3. การตั้งค่า PLC (S7-1200 G2)}
+\begin{todolist}
+    \item \textbf{เลือกขนาดตู้ (Cabinet Size):} (ติ๊กเลือก Checkbox ในโปรแกรมให้ถูกต้อง)
+    \begin{itemize}
+        \item[$\circ$] $\square$ 60 ช่อง \quad $\square$ 68 ช่อง \quad $\square$ 40 ช่อง \quad $\square$ 80 ช่อง
+    \end{itemize}
+    \item \textbf{การซิงค์เวลา (Time Sync):}
+    \begin{itemize}
+        \item[$\circ$] เปิดใช้งาน NTP Client และซิงค์เวลากับ \textbf{คอมพิวเตอร์ที่ใช้ทดสอบ} ได้สำเร็จ
+    \end{itemize}
+\end{todolist}
+
+\section{4. การทดสอบปุ่มกดหน้าตู้ (Functional Test)}
+\textit{ทดสอบการกดปุ่มจริงที่ Control Panel}
+\begin{todolist}
+    \item \textbf{ปุ่มสีแดง (Red):} กดแล้ว \textbf{ไฟทุกสีติดครบทุกช่อง} (All ON)
+    \item \textbf{ปุ่มสีเขียว (Green):} กดแล้ว \textbf{ไฟดับทุกช่อง} (All OFF)
+    \item \textbf{ปุ่มสีน้ำเงิน (Blue):} กดแล้ว \textbf{ไฟสีแดงติดเรียงลำดับ} พร้อม \textbf{ปลดล็อกกลอน} (Sequence \& Unlock)
+\end{todolist}
+
+\section{5. การทดสอบผ่าน Software Tool}
+\textit{ทดสอบสั่งงานผ่านโปรแกรม Test Tool (จำลองคำสั่งจาก Server)}
+\begin{todolist}
+    \item \textbf{สั่งคำสั่ง "All ON":} ผลลัพธ์ต้องเหมือนการกดปุ่มสีแดง
+    \item \textbf{สั่งคำสั่ง "All OFF":} ผลลัพธ์ต้องเหมือนการกดปุ่มสีเขียว
+    \item \textbf{สั่งคำสั่ง "Sequence/Unlock":} ผลลัพธ์ต้องเหมือนการกดปุ่มสีน้ำเงิน
+\end{todolist}
+
+\section{6. การตรวจสอบ Version Control (GitHub)}
+\textit{ยืนยันว่า Source Code ทั้งหมดถูกจัดเก็บเข้าระบบแล้ว}
+\begin{todolist}
+    \item \textbf{Firmware ของ Module:} Code ที่เบิร์นลงบอร์ดถูก Commit ขึ้น GitHub แล้ว\\
+    \textit{ระบุ Commit Hash/Tag:} \underline{\hspace{8cm}}
+    \item \textbf{Program ของ PLC:} โปรเจค TIA Portal ที่โหลดลงเครื่องถูก Commit ขึ้น GitHub แล้ว\\
+    \textit{ระบุ Commit Hash/Tag:} \underline{\hspace{8cm}}
+\end{todolist}
+
+\vspace{1cm}
+\hrule
+\vspace{0.5cm}
+
+\textbf{บันทึกเพิ่มเติม / ปัญหาที่พบ:} \\[2.5cm]
+\rule{\textwidth}{0.4pt}
+
+\noindent
+\textbf{ลงชื่อผู้ตรวจสอบ:} \underline{\hspace{6cm}} \hfill \textbf{วันที่:} \underline{\hspace{4cm}}
+
+\end{document}
