@@ -2,10 +2,10 @@
 
 **โครงการ:** BLEGS Actuator Unit - Quadruped Robot  
 **เอกสาร:** Roadmap การพัฒนาและผลการทดสอบระบบควบคุมตำแหน่งแกน Y  
-**วันที่:** 5 กุมภาพันธ์ 2026  
+**วันที่:** 5 กุมภาพันธ์ 2026 (อัปเดต: 10 กุมภาพันธ์ 2026)  
 **ผู้จัดทำ:** M-TRCH  
-**เวอร์ชัน:** 1.0  
-**สถานะ:** ✅ ทดสอบเสร็จสิ้น - พร้อมปรับเทียบ
+**เวอร์ชัน:** 1.1  
+**สถานะ:** ✅ ทดสอบเสร็จสิ้น - พร้อมปรับเทียบ | 📋 แผนพัฒนาขยาย
 
 ---
 
@@ -18,6 +18,13 @@
 5. [ผลการทดสอบ](#5-ผลการทดสอบ)
 6. [การวิเคราะห์ Calibration Factor](#6-การวิเคราะห์-calibration-factor)
 7. [แผนการปรับปรุง](#7-แผนการปรับปรุง)
+   - 7.1 [Roadmap ระยะสั้น](#71-roadmap-ระยะสั้น-1-2-สัปดาห์)
+   - 7.2 [Roadmap ระยะกลาง](#72-roadmap-ระยะกลาง-1-2-เดือน)
+   - 7.3 [Roadmap ระยะยาว](#73-roadmap-ระยะยาว-3-6-เดือน)
+   - 7.4 [Roadmap ขั้นสูง](#74-roadmap-ขั้นสูง-6-12-เดือน)
+   - 7.5 [Performance Improvement Targets](#75-performance-improvement-targets)
+   - 7.6 [Testing & Validation Roadmap](#76-testing--validation-roadmap)
+   - 7.7 [Risk Management](#77-risk-management)
 8. [ภาคผนวก](#8-ภาคผนวก)
 
 ---
@@ -515,12 +522,200 @@ def update(self, v_body_y, current_time):
 
 ### 7.3 Roadmap ระยะยาว (3-6 เดือน)
 
-| ลำดับ | งาน | ความสำคัญ |
-|-------|-----|-----------|
-| 10 | ⬜ Absolute Position Control (Waypoint Navigation) | กลาง |
-| 11 | ⬜ Obstacle Avoidance Integration | ต่ำ |
-| 12 | ⬜ Terrain Adaptation | ต่ำ |
-| 13 | ⬜ Multi-waypoint Path Planning | ต่ำ |
+| ลำดับ | งาน | ความสำคัญ | เวลา (ประมาณ) |
+|-------|-----|-----------|---------------|
+| 10 | ⬜ Absolute Position Control (Waypoint Navigation) | กลาง | 32 ชั่วโมง |
+| 11 | ⬜ Sensor Fusion (IMU + Encoder Integration) | สูง | 40 ชั่วโมง |
+| 12 | ⬜ Obstacle Avoidance Integration | กลาง | 48 ชั่วโมง |
+| 13 | ⬜ Terrain Adaptation (Rough Surface) | กลาง | 56 ชั่วโมง |
+| 14 | ⬜ Multi-waypoint Path Planning | ต่ำ | 24 ชั่วโมง |
+| 15 | ⬜ Velocity Profile Optimization | กลาง | 16 ชั่วโมง |
+
+#### รายละเอียดงานระยะยาว
+
+**[10] Absolute Position Control**
+- **วัตถุประสงค์**: ควบคุมตำแหน่งสัมบูรณ์ในพื้นที่ทำงาน (global coordinate)
+- **ฟีเจอร์หลัก**:
+  - World coordinate frame tracking
+  - Set absolute target position (x, y, θ)
+  - Coordinate transformation (body → world frame)
+  - Position initialization/reset
+- **Dependencies**: IMU integration, improved state estimation
+- **Success Criteria**: ควบคุมตำแหน่งได้แม่นยำ ±20mm ในระยะ 5 เมตร
+
+**[11] Sensor Fusion (IMU + Encoder Integration)**
+- **วัตถุประสงค์**: ปรับปรุง state estimation ด้วย sensor fusion
+- **ฟีเจอร์หลัก**:
+  - Extended Kalman Filter (EKF) implementation
+  - IMU (GY-25) orientation feedback
+  - Motor encoder position feedback
+  - Drift correction algorithm
+  - Complementary filter for acceleration
+- **Dependencies**: GY25 serial integration, encoder calibration
+- **Success Criteria**: ลด drift error เหลือ < 5% ใน trajectory 10 เมตร
+
+**[12] Obstacle Avoidance Integration**
+- **วัตถุประสงค์**: หลีกเลี่ยงสิ่งกีดขวางระหว่างการเคลื่อนที่
+- **ฟีเจอร์หลัก**:
+  - Vision-based obstacle detection (AR tag / color blob)
+  - Dynamic path replanning
+  - Safe distance maintenance
+  - Emergency stop protocol
+- **Dependencies**: Vision system integration, path planning
+- **Success Criteria**: หลีกเลี่ยงวัตถุขนาด > 50mm ที่ระยะ > 200mm
+
+**[13] Terrain Adaptation**
+- **วัตถุประสงค์**: ปรับ gait ให้เหมาะกับพื้นผิวที่ไม่เรียบ
+- **ฟีเจอร์หลัก**:
+  - Surface roughness detection
+  - Adaptive stance height
+  - Dynamic gait parameter adjustment
+  - Slip detection and recovery
+- **Dependencies**: IMU, force estimation
+- **Success Criteria**: เดินบนพื้นขรุขระได้โดยไม่สะดุด
+
+**[14] Multi-waypoint Path Planning**
+- **วัตถุประสงค์**: วางแผนเส้นทางผ่านจุดหลายจุด
+- **ฟีเจอร์หลัก**:
+  - Waypoint queue management
+  - Smooth trajectory between waypoints
+  - Dynamic waypoint insertion/removal
+  - Path optimization (shortest path)
+- **Dependencies**: Absolute position control
+- **Success Criteria**: ผ่าน waypoint ≥ 5 จุดติดต่อกันได้สำเร็จ
+
+**[15] Velocity Profile Optimization**
+- **วัตถุประสงค์**: ปรับปรุง velocity profile สำหรับการเคลื่อนที่ที่ราบรื่น
+- **ฟีเจอร์หลัก**:
+  - Trapezoidal velocity profile
+  - Smooth acceleration/deceleration
+  - Jerk minimization
+  - Energy-efficient velocity planning
+- **Dependencies**: Dynamic model, torque estimation
+- **Success Criteria**: ลด peak acceleration ≥ 30%, ประหยัดพลังงาน ≥ 20%
+
+### 7.4 Roadmap ขั้นสูง (6-12 เดือน)
+
+| ลำดับ | งาน | ความสำคัญ | เวลา (ประมาณ) |
+|-------|-----|-----------|---------------|
+| 16 | ⬜ Model Predictive Control (MPC) | ต่ำ | 80 ชั่วโมง |
+| 17 | ⬜ Learning-based Gait Optimization | ต่ำ | 120 ชั่วโมง |
+| 18 | ⬜ Stair Climbing Capability | กลาง | 64 ชั่วโมง |
+| 19 | ⬜ Dynamic Stability Controller | กลาง | 72 ชั่วโมง |
+| 20 | ⬜ Multi-robot Coordination | ต่ำ | 96 ชั่วโมง |
+| 21 | ⬜ Autonomous Exploration Mode | ต่ำ | 100 ชั่วโมง |
+
+#### รายละเอียดงานขั้นสูง
+
+**[16] Model Predictive Control (MPC)**
+- **วัตถุประสงค์**: ใช้ MPC สำหรับ trajectory optimization
+- **ฟีเจอร์หลัก**:
+  - Real-time trajectory optimization
+  - Constraint handling (joint limits, stability)
+  - Predictive collision avoidance
+  - Optimal control sequence generation
+- **Research Required**: MPC formulation, solver selection (OSQP/qpOASES)
+
+**[17] Learning-based Gait Optimization**
+- **วัตถุประสงค์**: ใช้ machine learning ปรับปรุง gait parameters
+- **ฟีเจอร์หลัก**:
+  - Reinforcement learning for gait tuning
+  - Adaptive to different terrains
+  - Energy consumption optimization
+  - Transfer learning from simulation
+- **Research Required**: RL framework (PPO/SAC), sim-to-real transfer
+
+**[18] Stair Climbing Capability**
+- **วัตถุประสงค์**: เพิ่มความสามารถในการขึ้น-ลงบันได
+- **ฟีเจอร์หลัก**:
+  - Step edge detection
+  - Height-adaptive gait
+  - Dynamic balance control
+  - Fall recovery protocol
+- **Constraints**: Step height ≤ 80mm, step depth ≥ 150mm
+
+**[19] Dynamic Stability Controller**
+- **วัตถุประสงค์**: รักษาเสถียรภาพแบบไดนามิก
+- **ฟีเจอร์หลัก**:
+  - Zero Moment Point (ZMP) controller
+  - Center of Mass (CoM) trajectory planning
+  - Push recovery
+  - Disturbance rejection
+- **Research Required**: ZMP calculation, stability margin estimation
+
+**[20] Multi-robot Coordination**
+- **วัตถุประสงค์**: ประสานงานหลายหุ่นยนต์
+- **ฟีเจอร์หลัก**:
+  - Inter-robot communication protocol
+  - Formation control
+  - Collision avoidance between robots
+  - Synchronized task execution
+- **Dependencies**: Wireless communication, distributed control
+
+**[21] Autonomous Exploration Mode**
+- **วัตถุประสงค์**: สำรวจพื้นที่โดยอัตโนมัติ
+- **ฟีเจอร์หลัก**:
+  - SLAM (Simultaneous Localization and Mapping)
+  - Frontier-based exploration
+  - Loop closure detection
+  - Map optimization
+- **Dependencies**: Vision system, absolute positioning
+
+### 7.5 Performance Improvement Targets
+
+#### ปัจจุบัน (After Calibration)
+| Metric | ค่าปัจจุบัน | เป้าหมายระยะกลาง | เป้าหมายระยะยาว |
+|--------|-------------|-------------------|------------------|
+| Position Accuracy | ±30mm @ 1m | ±20mm @ 1m | ±10mm @ 1m |
+| Drift Rate | ~10% @ 5m | 5% @ 5m | 2% @ 10m |
+| Max Velocity | 50 mm/s | 100 mm/s | 200 mm/s |
+| Repeatability | ±50mm | ±20mm | ±10mm |
+| Battery Life | 15 min | 30 min | 60 min |
+| Terrain Coverage | Flat only | Low roughness | Stairs, obstacles |
+| Control Latency | ~20ms | ~10ms | ~5ms |
+| Success Rate | 100% (flat) | 95% (rough) | 90% (stairs) |
+
+### 7.6 Testing & Validation Roadmap
+
+| Phase | Testing Focus | Timeline |
+|-------|---------------|----------|
+| **Phase 1** | Calibration Validation | Week 1-2 |
+| | - Forward/backward accuracy | |
+| | - Repeatability testing (20 trials) | |
+| | - Different velocities | |
+| **Phase 2** | Extended Range Testing | Week 3-4 |
+| | - Long distance (5m, 10m) | |
+| | - Drift measurement | |
+| | - Battery consumption | |
+| **Phase 3** | Multi-axis Integration | Month 2 |
+| | - X-axis (strafe) validation | |
+| | - Yaw rotation testing | |
+| | - Combined motions | |
+| **Phase 4** | Sensor Fusion Validation | Month 3-4 |
+| | - IMU integration accuracy | |
+| | - Encoder feedback validation | |
+| | - Comparison: dead reckoning vs sensor fusion | |
+| **Phase 5** | Terrain Testing | Month 5-6 |
+| | - Rough surface | |
+| | - Inclined surface (±10°) | |
+| | - Outdoor testing | |
+| **Phase 6** | Advanced Capability | Month 7-12 |
+| | - Obstacle avoidance | |
+| | - Autonomous navigation | |
+| | - Stress testing | |
+
+### 7.7 Risk Management
+
+| Risk | Probability | Impact | Mitigation Strategy |
+|------|-------------|--------|---------------------|
+| Calibration drift over time | Medium | Medium | Periodic recalibration, auto-calibration routine |
+| Slip on smooth surfaces | High | Medium | Surface detection, adaptive friction control |
+| Battery depletion during mission | Medium | High | Battery monitoring, auto-return-to-base |
+| Motor overheating | Low | High | Thermal monitoring, duty cycle limits |
+| Communication loss | Low | High | Failsafe mode, emergency stop |
+| IMU drift | High | Medium | Sensor fusion, periodic zero-velocity updates |
+| Collision damage | Medium | High | Obstacle detection, protective bumpers |
+| Software bugs | Medium | Medium | Extensive testing, graceful error handling |
 
 ---
 
@@ -602,6 +797,7 @@ move_relative_y(+500.0, timeout_s=30.0)  # With custom timeout
 | เวอร์ชัน | วันที่ | ผู้แก้ไข | รายละเอียด |
 |---------|--------|---------|------------|
 | 1.0 | 5 ก.พ. 2026 | M-TRCH | เอกสารฉบับแรก + ผลการทดสอบ |
+| 1.1 | 10 ก.พ. 2026 | M-TRCH | ขยายแผนพัฒนา: เพิ่มรายละเอียดระยะยาว, roadmap ขั้นสูง, performance targets, testing roadmap, risk management |
 
 ---
 
