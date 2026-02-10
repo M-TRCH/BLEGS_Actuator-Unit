@@ -35,8 +35,10 @@ import threading
 import sys
 import os
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add parent directory (python/) to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)  # Go up one level to python/
+sys.path.insert(0, parent_dir)
 
 # Import navigation components
 from navigation.simple_planner import SimpleNavigationPlanner
@@ -107,6 +109,11 @@ state_estimator = None
 # Control state
 control_running = False
 control_paused = True
+
+# Idle marching state
+idle_marching = False
+march_thread = None
+march_step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
 
 # Trajectory caches (pre-computed for each step length)
 trajectory_cache = {}
@@ -299,6 +306,119 @@ def move_to_stand_position() -> bool:
     return True
 
 # ============================================================================
+# IDLE MARCHING (STEPPING IN PLACE)
+# ============================================================================
+
+def march_in_place_loop():
+    """
+    Internal loop for marching in place.
+    Runs in separate thread.
+    """
+    global idle_marching, march_step_indices
+    
+    print("  🚶 Idle march loop started")
+    
+    # Generate trajectories for stepping in place (step_forward = 0)
+    # Use higher lift for more visible marching
+    march_lift_height = GAIT_LIFT_HEIGHT * 2.0  # Double the lift height for idle march
+    march_trajectories = {}
+    for leg_id in ['FR', 'FL', 'RR', 'RL']:
+        mirror_x = (leg_id in ['FR', 'RR'])
+        march_trajectories[leg_id] = generate_elliptical_trajectory(
+            num_steps=TRAJECTORY_STEPS,
+            lift_height=march_lift_height,
+            step_forward=0.0,  # No forward movement, just lift up and down
+            mirror_x=mirror_x,
+            stance_ratio=SMOOTH_TROT_STANCE_RATIO,
+            home_x=DEFAULT_STANCE_OFFSET_X,
+            home_y=DEFAULT_STANCE_HEIGHT,
+            reverse=False
+        )
+    
+    try:
+        while idle_marching:
+            loop_start = time.time()
+            
+            # Update all legs
+            update_all_legs_gait(march_trajectories, march_step_indices)
+            
+            # Advance step indices
+            for leg_id in march_step_indices:
+                march_step_indices[leg_id] = (march_step_indices[leg_id] + 1) % TRAJECTORY_STEPS
+            
+            # Rate limiting
+            loop_duration = time.time() - loop_start
+            sleep_time = (1.0 / UPDATE_RATE) - loop_duration
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
+    except Exception as e:
+        print(f"  ⚠️  March loop error: {e}")
+    finally:
+        print("  🛑 Idle march loop stopped")
+
+
+def start_idle_march() -> bool:
+    """
+    Start marching in place (stepping without moving forward).
+    
+    Returns:
+        True if started successfully
+    """
+    global idle_marching, march_thread, march_step_indices
+    
+    if idle_marching:
+        print("  ⚠️  Already marching!")
+        return False
+    
+    print("\n🚶 Starting idle march (stepping in place)...")
+    
+    # Initialize step indices with trot phase offsets
+    for leg_id in march_step_indices:
+        phase_offset = get_gait_phase_offset(leg_id, 'trot')
+        march_step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
+    
+    # Start marching thread
+    idle_marching = True
+    march_thread = threading.Thread(target=march_in_place_loop, daemon=True)
+    march_thread.start()
+    
+    print("  ✅ Idle march started")
+    print("  💡 Robot is now stepping in place")
+    print("  💡 Use movement commands to transition to walking")
+    return True
+
+
+def stop_idle_march() -> bool:
+    """
+    Stop marching in place and return to standing position.
+    
+    Returns:
+        True if stopped successfully
+    """
+    global idle_marching, march_thread
+    
+    if not idle_marching:
+        print("  ⚠️  Not marching!")
+        return False
+    
+    print("\n🛑 Stopping idle march...")
+    
+    # Stop the march loop
+    idle_marching = False
+    
+    # Wait for thread to finish
+    if march_thread and march_thread.is_alive():
+        march_thread.join(timeout=2.0)
+    
+    # Move to standing position
+    time.sleep(0.2)  # Brief pause
+    move_to_stand_position()
+    
+    print("  ✅ Idle march stopped")
+    return True
+
+# ============================================================================
 # MAIN CONTROL FUNCTION
 # ============================================================================
 
@@ -309,6 +429,9 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
     This is the main high-level control function that implements
     the hierarchical control architecture.
     
+    If the robot is currently marching in place, it will smoothly
+    transition to walking without stopping.
+    
     Args:
         target_distance_mm: Distance to move (mm)
                            Positive = forward
@@ -318,7 +441,7 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
     Returns:
         True if target reached, False if timeout or error
     """
-    global nav_planner, state_estimator
+    global nav_planner, state_estimator, idle_marching, march_thread, march_step_indices
     
     print("\n" + "="*70)
     print("  📍 RELATIVE POSITION CONTROL - Y-AXIS")
@@ -329,6 +452,16 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
     print(f"  Timeout: {timeout_s:.1f} s")
     print(f"  Mode: {'SIMULATION' if SIMULATION_MODE else 'HARDWARE'}")
     print(f"  Motors available: {len(tqc.leg_motors)} legs ({list(tqc.leg_motors.keys())})")
+    
+    # Check if transitioning from idle march
+    transitioning_from_march = idle_marching
+    if transitioning_from_march:
+        print("  🔄 Transitioning from idle march to walking...")
+        # Stop idle march thread but keep the current step indices
+        idle_marching = False
+        if march_thread and march_thread.is_alive():
+            march_thread.join(timeout=1.0)
+    
     print("="*70)
     
     # Initialize components if needed
@@ -350,12 +483,18 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
     last_status_time = start_time
     
     # Initialize step indices for each leg
-    step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
-    
-    # Apply phase offsets for trot gait
-    for leg_id in step_indices:
-        phase_offset = get_gait_phase_offset(leg_id, 'trot')
-        step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
+    if transitioning_from_march:
+        # Continue from current march positions for smooth transition
+        step_indices = march_step_indices.copy()
+        print("  ✨ Smooth transition - continuing from current gait phase")
+    else:
+        # Start from initial positions
+        step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
+        
+        # Apply phase offsets for trot gait
+        for leg_id in step_indices:
+            phase_offset = get_gait_phase_offset(leg_id, 'trot')
+            step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
     
     print("\n🚶 Starting movement...")
     print("  Press [SPACE] to pause/resume")
@@ -551,9 +690,11 @@ def print_menu():
     """Print interactive menu."""
     mode_str = "SIMULATION" if SIMULATION_MODE else "HARDWARE"
     debug_str = "ON" if DEBUG_GAIT else "OFF"
+    march_status = "🚶 MARCHING" if idle_marching else "🧍 STANDING"
     
     print("\n" + "="*70)
     print(f"  RELATIVE POSITION CONTROL - [{mode_str}] - Debug: {debug_str}")
+    print(f"  Status: {march_status}")
     print("="*70)
     print("  Movement Commands:")
     print("    [1] Move forward +100mm")
@@ -561,12 +702,18 @@ def print_menu():
     print("    [3] Move forward +500mm")
     print("    [4] Custom distance (enter value)")
     print("    [5] Run test sequence")
+    print("  Idle March Commands:")
+    print("    [M] Start marching in place (step without moving)")
+    print("    [S] Stop marching (return to stand)")
     print("  Other Commands:")
     print("    [H] Move to home/stand position")
     print("    [P] Print current status")
     print("    [D] Toggle debug output")
     print("    [Q] Quit")
     print("="*70)
+    if idle_marching:
+        print("  💡 TIP: Movement commands will smoothly transition from marching")
+        print("="*70)
 
 
 def interactive_mode():
@@ -607,12 +754,22 @@ def interactive_mode():
                     print("  ❌ Invalid input!")
             elif key == b'5':
                 run_test_sequence()
+            elif key.lower() == b'm':
+                start_idle_march()
+            elif key.lower() == b's':
+                stop_idle_march()
             elif key.lower() == b'h':
-                move_to_stand_position()
+                if idle_marching:
+                    stop_idle_march()
+                else:
+                    move_to_stand_position()
             elif key.lower() == b'p':
                 print("\n📊 Current Status:")
                 print(f"    Mode: {'SIMULATION' if SIMULATION_MODE else 'HARDWARE'}")
                 print(f"    Debug: {'ON' if DEBUG_GAIT else 'OFF'}")
+                print(f"    Idle March: {'ACTIVE' if idle_marching else 'STOPPED'}")
+                if idle_marching:
+                    print(f"    March Step Indices: {march_step_indices}")
                 print(f"    Registered legs: {list(tqc.leg_motors.keys())}")
                 print(f"    Nav Planner: {nav_planner}")
                 print(f"    Estimator: {state_estimator}")
@@ -641,12 +798,22 @@ def interactive_mode():
                     print("  ❌ Invalid input!")
             elif cmd == '5':
                 run_test_sequence()
+            elif cmd.lower() == 'm':
+                start_idle_march()
+            elif cmd.lower() == 's':
+                stop_idle_march()
             elif cmd.lower() == 'h':
-                move_to_stand_position()
+                if idle_marching:
+                    stop_idle_march()
+                else:
+                    move_to_stand_position()
             elif cmd.lower() == 'p':
                 print("\n📊 Current Status:")
                 print(f"    Mode: {'SIMULATION' if SIMULATION_MODE else 'HARDWARE'}")
                 print(f"    Debug: {'ON' if DEBUG_GAIT else 'OFF'}")
+                print(f"    Idle March: {'ACTIVE' if idle_marching else 'STOPPED'}")
+                if idle_marching:
+                    print(f"    March Step Indices: {march_step_indices}")
                 print(f"    Registered legs: {list(tqc.leg_motors.keys())}")
                 print(f"    Nav Planner: {nav_planner}")
                 print(f"    Estimator: {state_estimator}")
@@ -745,6 +912,28 @@ def main():
         print("\n\n⏹️  Interrupted by user")
     finally:
         # Cleanup
+        global idle_marching
+        if idle_marching:
+            print("\n🛑 Stopping idle march...")
+            idle_marching = False
+            time.sleep(0.5)
+        
+        # Move motors to init position (-90 deg) before disconnecting
+        if tqc.motor_registry:
+            print("\n🏠 Moving motors to init position (-90°)...")
+            init_angle = -90.0
+            
+            for motor_id, motor in tqc.motor_registry.items():
+                try:
+                    motor.set_position_direct(init_angle)
+                    print(f"  ✓ Motor {motor_id}: {init_angle}°")
+                except Exception as e:
+                    print(f"  ⚠️  Motor {motor_id} failed: {e}")
+            
+            # Wait for motors to reach position
+            time.sleep(1.0)
+            print("  ✅ Motors at init position")
+        
         print("\n🔌 Disconnecting motors...")
         for motor in tqc.motor_registry.values():
             motor.disconnect()
