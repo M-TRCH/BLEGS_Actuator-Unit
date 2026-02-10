@@ -86,13 +86,23 @@ if sys.platform == 'win32':
 # ============================================================================
 
 # Navigation parameters (tunable)
-NAV_V_MAX = 50.0           # Maximum velocity (mm/s) - Start slow for safety
+NAV_V_MAX = 70.0           # Maximum velocity (mm/s)
 NAV_K_P = 1.0              # Proportional gain
 NAV_TOLERANCE = 10.0       # Position tolerance (mm)
 NAV_TIMEOUT = 60.0         # Maximum time for movement (seconds)
 
+# Calibration parameters (from testing - Feb 10, 2026)
+# NOTE: Calibration applied in state_estimator, NOT in gait generation
+# This maintains normal walking speed while correcting position estimation
+VELOCITY_CALIBRATION = 3.04  # Actual movement is 3x of estimated (trajectory span × overlap)
+
 # Gait to velocity mapping
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE  # seconds per gait cycle
+
+# Logging parameters
+ENABLE_LOGGING = False      # Enable data logging to file
+LOG_FILE_PATH = "logs/"     # Directory for log files
+LOG_RATE = 10               # Log every N control cycles
 
 # Simulation mode (auto-detected if no motors found)
 SIMULATION_MODE = False
@@ -118,6 +128,11 @@ march_step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
 # Trajectory caches (pre-computed for each step length)
 trajectory_cache = {}
 
+# Logging state
+log_file = None
+log_counter = 0
+log_data = []  # Buffer for log data
+
 # ============================================================================
 # GAIT VELOCITY MAPPING
 # ============================================================================
@@ -129,6 +144,9 @@ def update_gait_from_velocity(v_body_y: float) -> tuple:
     This function maps the velocity command from the navigation planner
     to the gait generator parameters (step length and direction).
     
+    NOTE: Calibration is NOT applied here to maintain proper walking speed.
+    Calibration is applied in state_estimator instead.
+    
     Args:
         v_body_y: Body frame Y velocity (mm/s)
                   Positive = forward, Negative = backward
@@ -138,7 +156,7 @@ def update_gait_from_velocity(v_body_y: float) -> tuple:
             step_length: Step length in mm
             reverse: True if walking backward
     """
-    # Calculate step length from velocity
+    # Calculate step length from velocity (NO calibration here)
     # step_length ∝ v_body * gait_cycle_time
     step_length = abs(v_body_y) * GAIT_CYCLE_TIME
     
@@ -304,6 +322,95 @@ def move_to_stand_position() -> bool:
     
     print("  ✅ Standing position reached")
     return True
+
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+def init_logging(target_distance: float) -> bool:
+    """
+    Initialize logging system.
+    
+    Args:
+        target_distance: Target distance for this movement
+    
+    Returns:
+        True if logging initialized successfully
+    """
+    global log_file, log_data, log_counter
+    
+    if not ENABLE_LOGGING:
+        return False
+    
+    try:
+        import os
+        from datetime import datetime
+        
+        # Create log directory if not exists
+        os.makedirs(LOG_FILE_PATH, exist_ok=True)
+        
+        # Generate log filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{LOG_FILE_PATH}movement_{target_distance:+.0f}mm_{timestamp}.csv"
+        
+        # Open log file
+        log_file = open(filename, 'w')
+        
+        # Write header
+        log_file.write("time,target_y,current_y,error,v_y,step_length,")
+        log_file.write("FR_idx,FL_idx,RR_idx,RL_idx\n")
+        
+        # Reset counter and buffer
+        log_counter = 0
+        log_data = []
+        
+        print(f"  📝 Logging to: {filename}")
+        return True
+        
+    except Exception as e:
+        print(f"  ⚠️  Logging init failed: {e}")
+        return False
+
+
+def log_control_step(elapsed_time: float, status: dict, v_body_y: float, 
+                     step_length: float, step_indices: dict) -> None:
+    """
+    Log one control step.
+    
+    Args:
+        elapsed_time: Elapsed time since start
+        status: Navigation status dict
+        v_body_y: Current velocity command
+        step_length: Current step length
+        step_indices: Current step indices for all legs
+    """
+    global log_file, log_counter, log_data
+    
+    if not ENABLE_LOGGING or log_file is None:
+        return
+    
+    log_counter += 1
+    
+    # Log every LOG_RATE cycles
+    if log_counter % LOG_RATE == 0:
+        line = f"{elapsed_time:.3f},"
+        line += f"{status['target_y']:.1f},{status['current_y']:.1f},"
+        line += f"{status['error']:.1f},{v_body_y:+.2f},{step_length:.2f},"
+        line += f"{step_indices['FR']},{step_indices['FL']},"
+        line += f"{step_indices['RR']},{step_indices['RL']}\n"
+        
+        log_file.write(line)
+        log_file.flush()  # Ensure data is written
+
+
+def close_logging() -> None:
+    """Close logging file."""
+    global log_file
+    
+    if log_file is not None:
+        log_file.close()
+        log_file = None
+        print("  ✅ Log file closed")
 
 # ============================================================================
 # IDLE MARCHING (STEPPING IN PLACE)
@@ -479,6 +586,9 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
     nav_planner.set_relative_target(target_distance_mm)
     state_estimator.start()
     
+    # Initialize logging
+    init_logging(target_distance_mm)
+    
     start_time = time.time()
     last_status_time = start_time
     
@@ -541,6 +651,9 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             # 2.1 Compute velocity command (Navigation Planner)
             v_body_y = nav_planner.compute_velocity()
             
+            # Get step length for logging
+            step_length, _ = update_gait_from_velocity(v_body_y)
+            
             # 2.2 Generate trajectories for current velocity
             trajectories = {}
             for leg_id in ['FR', 'FL', 'RR', 'RL']:
@@ -553,13 +666,17 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             for leg_id in step_indices:
                 step_indices[leg_id] = (step_indices[leg_id] + 1) % TRAJECTORY_STEPS
             
-            # 2.5 Update state estimator
-            state_estimator.update(v_body_y, current_time)
+            # 2.5 Update state estimator with calibration
+            # Apply calibration here: actual movement is 3x of what trajectory suggests
+            state_estimator.update(v_body_y * VELOCITY_CALIBRATION, current_time)
             nav_planner.update_position(state_estimator.get_position())
             
-            # 2.6 Print status periodically
+            # 2.6 Log control data
+            status = nav_planner.get_status()
+            log_control_step(elapsed, status, v_body_y, step_length, step_indices)
+            
+            # 2.7 Print status periodically
             if current_time - last_status_time >= 0.5:
-                status = nav_planner.get_status()
                 est_status = state_estimator.get_status()
                 print(f"  📊 Position: {status['current_y']:+.1f}/{status['target_y']:+.1f} mm "
                       f"| Progress: {status['progress']:.0f}% "
@@ -567,7 +684,7 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
                       f"| Time: {elapsed:.1f}s")
                 last_status_time = current_time
             
-            # 2.7 Wait for next cycle
+            # 2.8 Wait for next cycle
             loop_duration = time.time() - loop_start
             sleep_time = (1.0 / UPDATE_RATE) - loop_duration
             if sleep_time > 0:
@@ -575,6 +692,7 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
         
         # 3. Target reached - stop and report
         stop_all_legs()
+        close_logging()
         
         final_pos = state_estimator.get_position()
         final_time = state_estimator.get_elapsed_time()
@@ -593,11 +711,13 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
         
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")
+        close_logging()
         return False
     
     finally:
         # Ensure motors stop
         stop_all_legs()
+        close_logging()
 
 # ============================================================================
 # TEST FUNCTIONS
@@ -617,6 +737,14 @@ def test_short_backward():
     print("  TEST 2: Short Backward Movement (-100mm)")
     print("="*70)
     return move_relative_y(-100.0, timeout_s=30.0)
+
+
+def test_backward_200():
+    """Test: Move backward 200mm"""
+    print("\n" + "="*70)
+    print("  TEST 4: Medium Backward Movement (-200mm)")
+    print("="*70)
+    return move_relative_y(-200.0, timeout_s=30.0)
 
 
 def test_long_forward():
@@ -702,6 +830,7 @@ def print_menu():
     print("    [3] Move forward +500mm")
     print("    [4] Custom distance (enter value)")
     print("    [5] Run test sequence")
+    print("    [6] Test backward -200mm (Roadmap 7.1)")
     print("  Idle March Commands:")
     print("    [M] Start marching in place (step without moving)")
     print("    [S] Stop marching (return to stand)")
@@ -709,6 +838,7 @@ def print_menu():
     print("    [H] Move to home/stand position")
     print("    [P] Print current status")
     print("    [D] Toggle debug output")
+    print("    [L] Toggle logging")
     print("    [Q] Quit")
     print("="*70)
     if idle_marching:
@@ -718,7 +848,7 @@ def print_menu():
 
 def interactive_mode():
     """Run interactive control mode."""
-    global nav_planner, state_estimator, DEBUG_GAIT
+    global nav_planner, state_estimator, DEBUG_GAIT, ENABLE_LOGGING
     
     # Initialize components
     nav_planner = SimpleNavigationPlanner(
@@ -754,6 +884,8 @@ def interactive_mode():
                     print("  ❌ Invalid input!")
             elif key == b'5':
                 run_test_sequence()
+            elif key == b'6':
+                test_backward_200()
             elif key.lower() == b'm':
                 start_idle_march()
             elif key.lower() == b's':
@@ -776,6 +908,12 @@ def interactive_mode():
             elif key.lower() == b'd':
                 DEBUG_GAIT = not DEBUG_GAIT
                 print(f"\n🔧 Debug mode: {'ON' if DEBUG_GAIT else 'OFF'}")
+            elif key.lower() == b'l':
+                ENABLE_LOGGING = not ENABLE_LOGGING
+                print(f"\n📝 Logging: {'ON' if ENABLE_LOGGING else 'OFF'}")
+                if ENABLE_LOGGING:
+                    print(f"   Log path: {LOG_FILE_PATH}")
+                    print(f"   Log rate: every {LOG_RATE} cycles")
             elif key.lower() == b'q':
                 print("\n👋 Goodbye!")
                 break
@@ -798,6 +936,8 @@ def interactive_mode():
                     print("  ❌ Invalid input!")
             elif cmd == '5':
                 run_test_sequence()
+            elif cmd == '6':
+                test_backward_200()
             elif cmd.lower() == 'm':
                 start_idle_march()
             elif cmd.lower() == 's':
@@ -820,6 +960,12 @@ def interactive_mode():
             elif cmd.lower() == 'd':
                 DEBUG_GAIT = not DEBUG_GAIT
                 print(f"\n🔧 Debug mode: {'ON' if DEBUG_GAIT else 'OFF'}")
+            elif cmd.lower() == 'l':
+                ENABLE_LOGGING = not ENABLE_LOGGING
+                print(f"\n📝 Logging: {'ON' if ENABLE_LOGGING else 'OFF'}")
+                if ENABLE_LOGGING:
+                    print(f"   Log path: {LOG_FILE_PATH}")
+                    print(f"   Log rate: every {LOG_RATE} cycles")
             elif cmd.lower() == 'q':
                 print("\n👋 Goodbye!")
                 break
