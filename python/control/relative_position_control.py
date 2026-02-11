@@ -42,7 +42,8 @@ sys.path.insert(0, parent_dir)
 
 # Import navigation components
 from navigation.simple_planner import SimpleNavigationPlanner
-from navigation.time_estimator import TimeBasedEstimator
+from navigation.time_estimator import TimeBasedEstimator, YawController
+from navigation.imu_reader import IMUReader, create_imu_reader
 
 # Import the module to access global variables by reference
 import test_quadruped_control as tqc
@@ -96,6 +97,13 @@ NAV_TIMEOUT = 60.0         # Maximum time for movement (seconds)
 # This maintains normal walking speed while correcting position estimation
 VELOCITY_CALIBRATION = 3.04  # Actual movement is 3x of estimated (trajectory span × overlap)
 
+# IMU parameters (added Feb 11, 2026)
+IMU_PORT = 'COM22'              # Serial port for IMU
+IMU_ENABLED = True              # Enable/disable IMU integration
+YAW_K_P = 0.15                   # Yaw controller proportional gain (mm/deg) - reduced to prevent overcorrection
+YAW_K_D = 0.00                  # Yaw controller derivative gain (mm/(deg/s)) - reduced for smoother response
+YAW_MAX_CORRECTION = 5.0        # Maximum differential step (mm) - reduced to prevent aggressive turning
+
 # Gait to velocity mapping
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE  # seconds per gait cycle
 
@@ -115,6 +123,8 @@ DEBUG_GAIT = False  # Set to True to see gait debug output
 # Control components
 nav_planner = None
 state_estimator = None
+imu_reader = None
+yaw_controller = None
 
 # Control state
 control_running = False
@@ -169,30 +179,48 @@ def update_gait_from_velocity(v_body_y: float) -> tuple:
     return step_length, reverse
 
 
-def get_trajectory_for_velocity(v_body_y: float, leg_id: str) -> list:
+def get_trajectory_for_velocity(v_body_y: float, leg_id: str, yaw_correction: float = 0.0) -> list:
     """
-    Get or generate trajectory for given velocity.
+    Get or generate trajectory for given velocity with optional yaw correction.
+    
+    Uses Differential Step Forward method: left and right legs take different
+    step lengths to create a turning moment for yaw correction.
     
     Args:
         v_body_y: Body frame Y velocity (mm/s)
         leg_id: Leg identifier ('FR', 'FL', 'RR', 'RL')
+        yaw_correction: Differential forward stepping for yaw control (mm)
+                       Positive = turn right (left legs step MORE forward)
+                       Negative = turn left (right legs step MORE forward)
     
     Returns:
         List of (x, y) positions for the trajectory
     """
     step_length, reverse = update_gait_from_velocity(v_body_y)
     
-    # Determine if this leg should mirror X
+    # Determine side (left or right)
+    is_left_side = (leg_id in ['FL', 'RL'])
+    
+    # Apply differential stepping for yaw correction
+    # Left legs: +correction to turn right, -correction to turn left
+    # Right legs: -correction to turn right, +correction to turn left
+    step_differential = yaw_correction if is_left_side else -yaw_correction
+    adjusted_step = step_length + step_differential
+    
+    # Clamp to valid range (prevent negative or excessive steps)
+    adjusted_step = max(5.0, min(adjusted_step, GAIT_STEP_FORWARD * 1.5))
+    
+    # Determine if this leg should mirror X (for right side legs)
     mirror_x = (leg_id in ['FR', 'RR'])
     
-    # Generate trajectory
+    # Generate trajectory with adjusted step length
     trajectory = generate_elliptical_trajectory(
         num_steps=TRAJECTORY_STEPS,
         lift_height=GAIT_LIFT_HEIGHT,
-        step_forward=step_length,
+        step_forward=adjusted_step,  # ✅ Use differential step forward
         mirror_x=mirror_x,
         stance_ratio=SMOOTH_TROT_STANCE_RATIO,
-        home_x=DEFAULT_STANCE_OFFSET_X,
+        home_x=DEFAULT_STANCE_OFFSET_X,  # ✅ Keep home_x constant
         home_y=DEFAULT_STANCE_HEIGHT,
         reverse=reverse
     )
@@ -579,12 +607,18 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             tolerance=NAV_TOLERANCE
         )
     
+    # Initialize state estimator with IMU (if available from main())
     if state_estimator is None:
-        state_estimator = TimeBasedEstimator()
+        state_estimator = TimeBasedEstimator(imu_reader=imu_reader)
     
     # 1. Set target
     nav_planner.set_relative_target(target_distance_mm)
     state_estimator.start()
+    
+    # Set yaw target if controller available
+    if yaw_controller is not None and state_estimator.has_imu():
+        yaw_controller.set_target(state_estimator.get_yaw())
+        print(f"  🎯 Yaw target set: {state_estimator.get_yaw():.1f}°")
     
     # Initialize logging
     init_logging(target_distance_mm)
@@ -654,12 +688,18 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             # Get step length for logging
             step_length, _ = update_gait_from_velocity(v_body_y)
             
-            # 2.2 Generate trajectories for current velocity
+            # 2.2 Compute yaw correction (if IMU available)
+            yaw_correction = 0.0
+            if yaw_controller is not None and state_estimator.has_imu():
+                current_yaw = state_estimator.get_yaw()
+                yaw_correction = yaw_controller.compute(current_yaw, current_time)
+            
+            # 2.3 Generate trajectories for current velocity with yaw correction
             trajectories = {}
             for leg_id in ['FR', 'FL', 'RR', 'RL']:
-                trajectories[leg_id] = get_trajectory_for_velocity(v_body_y, leg_id)
+                trajectories[leg_id] = get_trajectory_for_velocity(v_body_y, leg_id, yaw_correction)
             
-            # 2.3 Update all legs
+            # 2.4 Update all legs
             update_all_legs_gait(trajectories, step_indices)
             
             # 2.4 Advance step indices
@@ -678,10 +718,17 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             # 2.7 Print status periodically
             if current_time - last_status_time >= 0.5:
                 est_status = state_estimator.get_status()
-                print(f"  📊 Position: {status['current_y']:+.1f}/{status['target_y']:+.1f} mm "
-                      f"| Progress: {status['progress']:.0f}% "
-                      f"| v_y: {v_body_y:+.1f} mm/s "
-                      f"| Time: {elapsed:.1f}s")
+                status_msg = (f"  📊 Position: {status['current_y']:+.1f}/{status['target_y']:+.1f} mm "
+                             f"| Progress: {status['progress']:.0f}% "
+                             f"| v_y: {v_body_y:+.1f} mm/s")
+                
+                # Add yaw status if IMU available
+                if state_estimator.has_imu():
+                    yaw_err = state_estimator.get_yaw_error()
+                    status_msg += f" | Yaw: {est_status['yaw']:+.1f}° (err: {yaw_err:+.1f}°)"
+                
+                status_msg += f" | Time: {elapsed:.1f}s"
+                print(status_msg)
                 last_status_time = current_time
             
             # 2.8 Wait for next cycle
@@ -705,6 +752,12 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
         print(f"  Error: {abs(target_distance_mm - final_pos):.1f} mm")
         print(f"  Time: {final_time:.2f} s")
         print(f"  Avg velocity: {state_estimator.get_average_velocity():.1f} mm/s")
+        
+        # Show yaw drift if IMU available
+        if state_estimator.has_imu():
+            final_yaw_error = state_estimator.get_yaw_error()
+            print(f"  Yaw error: {final_yaw_error:+.1f}° (drift from straight line)")
+        
         print("="*70)
         
         return True
@@ -820,9 +873,23 @@ def print_menu():
     debug_str = "ON" if DEBUG_GAIT else "OFF"
     march_status = "🚶 MARCHING" if idle_marching else "🧍 STANDING"
     
+    # Get IMU status
+    imu_status = "❌ DISABLED"
+    if IMU_ENABLED:
+        if imu_reader and imu_reader.is_connected():
+            if imu_reader.is_receiving_data():
+                cal_status = "✅" if imu_reader.is_calibrated() else "⚠️"
+                current_yaw = imu_reader.get_yaw()
+                imu_status = f"✅ ACTIVE {cal_status} (Yaw: {current_yaw:+.1f}°)"
+            else:
+                imu_status = "⚠️ CONNECTED BUT NO DATA"
+        else:
+            imu_status = "⚠️ NOT CONNECTED"
+    
     print("\n" + "="*70)
     print(f"  RELATIVE POSITION CONTROL - [{mode_str}] - Debug: {debug_str}")
     print(f"  Status: {march_status}")
+    print(f"  IMU: {imu_status}")
     print("="*70)
     print("  Movement Commands:")
     print("    [1] Move forward +100mm")
@@ -834,6 +901,9 @@ def print_menu():
     print("  Idle March Commands:")
     print("    [M] Start marching in place (step without moving)")
     print("    [S] Stop marching (return to stand)")
+    print("  IMU Commands:")
+    print("    [Z] Set IMU zero (reset yaw reference)")
+    print("    [I] Show IMU status")
     print("  Other Commands:")
     print("    [H] Move to home/stand position")
     print("    [P] Print current status")
@@ -850,15 +920,24 @@ def interactive_mode():
     """Run interactive control mode."""
     global nav_planner, state_estimator, DEBUG_GAIT, ENABLE_LOGGING
     
-    # Initialize components
+    # Initialize navigation planner
     nav_planner = SimpleNavigationPlanner(
         v_max=NAV_V_MAX,
         K_p=NAV_K_P,
         tolerance=NAV_TOLERANCE
     )
-    state_estimator = TimeBasedEstimator()
+    
+    # Initialize state estimator with IMU (already connected in main())
+    state_estimator = TimeBasedEstimator(imu_reader=imu_reader)
     
     print("\n🎮 Interactive mode started")
+    if imu_reader and imu_reader.is_connected():
+        if imu_reader.is_receiving_data():
+            print(f"  📡 IMU: Connected & Streaming (Yaw: {imu_reader.get_yaw():+.1f}°)")
+        else:
+            print("  📡 IMU: Connected (waiting for data...)")
+    else:
+        print("  📡 IMU: Not available")
     
     while True:
         print_menu()
@@ -890,6 +969,32 @@ def interactive_mode():
                 start_idle_march()
             elif key.lower() == b's':
                 stop_idle_march()
+            elif key.lower() == b'z':
+                if imu_reader and imu_reader.is_connected():
+                    print("\n🧭 Setting IMU zero reference...")
+                    imu_reader.set_zero()
+                    print("  ✅ IMU zero set")
+                else:
+                    print("\n⚠️  IMU not available")
+            elif key.lower() == b'i':
+                print("\n📡 IMU Status:")
+                if IMU_ENABLED:
+                    if imu_reader and imu_reader.is_connected():
+                        orientation = imu_reader.get_orientation()
+                        stats = imu_reader.get_stats()
+                        print(f"    Connected: ✅")
+                        print(f"    Port: {IMU_PORT}")
+                        print(f"    Calibrated: {'✅' if orientation['calibrated'] else '⚠️'}")
+                        print(f"    Yaw: {orientation['yaw']:+.2f}°")
+                        print(f"    Pitch: {orientation['pitch']:+.2f}°")
+                        print(f"    Roll: {orientation['roll']:+.2f}°")
+                        print(f"    Packets received: {stats['packets']}")
+                        print(f"    CRC errors: {stats['crc_errors']}")
+                    else:
+                        print(f"    Status: ❌ Not connected")
+                        print(f"    Port: {IMU_PORT}")
+                else:
+                    print(f"    Status: ❌ Disabled (IMU_ENABLED=False)")
             elif key.lower() == b'h':
                 if idle_marching:
                     stop_idle_march()
@@ -942,6 +1047,32 @@ def interactive_mode():
                 start_idle_march()
             elif cmd.lower() == 's':
                 stop_idle_march()
+            elif cmd.lower() == 'z':
+                if imu_reader and imu_reader.is_connected():
+                    print("\n🧭 Setting IMU zero reference...")
+                    imu_reader.set_zero()
+                    print("  ✅ IMU zero set")
+                else:
+                    print("\n⚠️  IMU not available")
+            elif cmd.lower() == 'i':
+                print("\n📡 IMU Status:")
+                if IMU_ENABLED:
+                    if imu_reader and imu_reader.is_connected():
+                        orientation = imu_reader.get_orientation()
+                        stats = imu_reader.get_stats()
+                        print(f"    Connected: ✅")
+                        print(f"    Port: {IMU_PORT}")
+                        print(f"    Calibrated: {'✅' if orientation['calibrated'] else '⚠️'}")
+                        print(f"    Yaw: {orientation['yaw']:+.2f}°")
+                        print(f"    Pitch: {orientation['pitch']:+.2f}°")
+                        print(f"    Roll: {orientation['roll']:+.2f}°")
+                        print(f"    Packets received: {stats['packets']}")
+                        print(f"    CRC errors: {stats['crc_errors']}")
+                    else:
+                        print(f"    Status: ❌ Not connected")
+                        print(f"    Port: {IMU_PORT}")
+                else:
+                    print(f"    Status: ❌ Disabled (IMU_ENABLED=False)")
             elif cmd.lower() == 'h':
                 if idle_marching:
                     stop_idle_march()
@@ -999,7 +1130,59 @@ def main():
     print(f"    Lift height: {GAIT_LIFT_HEIGHT} mm")
     print("="*70)
     
-    # --- Step 1: Motor Discovery ---
+    # --- Step 1: IMU Connection (before motors) ---
+    global imu_reader, yaw_controller
+    if IMU_ENABLED:
+        print(f"\n📡 Connecting to IMU on {IMU_PORT}...")
+        imu_reader = create_imu_reader(IMU_PORT, auto_connect=True)
+        if imu_reader and imu_reader.is_connected():
+            print("  ✅ IMU port opened successfully")
+            
+            # Wait for first data packet (up to 2 seconds)
+            print("  ⏳ Waiting for IMU data...")
+            data_received = False
+            for i in range(20):
+                if imu_reader.is_receiving_data():
+                    print("  ✅ IMU data streaming")
+                    data_received = True
+                    break
+                time.sleep(0.1)
+            
+            if not data_received:
+                print("  ⚠️  No data received from IMU - check wiring and firmware")
+                print("  ⚠️  Continuing without yaw control")
+                imu_reader.disconnect()
+                imu_reader = None
+            else:
+                # Wait for calibration
+                print("  ⏳ Waiting for IMU calibration...")
+                for i in range(30):
+                    if imu_reader.is_calibrated():
+                        print(f"  ✅ IMU calibrated")
+                        break
+                    time.sleep(0.1)
+                else:
+                    print("  ⚠️  IMU not fully calibrated (continuing anyway)")
+                
+                # Set current orientation as zero reference
+                imu_reader.set_zero()
+                time.sleep(0.2)
+                
+                # Initialize yaw controller
+                yaw_controller = YawController(
+                    K_p=YAW_K_P,
+                    K_d=YAW_K_D,
+                    max_correction=YAW_MAX_CORRECTION
+                )
+                print(f"  🧭 Yaw controller initialized (K_p={YAW_K_P}, K_d={YAW_K_D})")
+        else:
+            print("  ❌ Failed to open IMU port - check COM port and permissions")
+            print("  ⚠️  Continuing without yaw control")
+            imu_reader = None
+    else:
+        print("\n📡 IMU disabled (IMU_ENABLED=False)")
+    
+    # --- Step 2: Motor Discovery ---
     print("\n🔍 Discovering motors...")
     discovered_motors = discover_motors()
     
@@ -1009,7 +1192,7 @@ def main():
         print("\n⚠️  Running in SIMULATION MODE (no motors)")
         SIMULATION_MODE = True
     
-    # --- Step 2: Register Motors ---
+    # --- Step 3: Register Motors ---
     if discovered_motors:
         all_registered = register_leg_motors(discovered_motors)
         
@@ -1023,7 +1206,7 @@ def main():
         print(f"\n📋 Registered legs: {list(tqc.leg_motors.keys())}")
         print(f"   Total motors: {len(tqc.motor_registry)}")
     
-    # --- Step 3: Start Motors ---
+    # --- Step 4: Start Motors ---
     if discovered_motors and tqc.leg_motors:
         print("\n🚀 Starting motors...")
         start_all_motors()
@@ -1051,7 +1234,7 @@ def main():
     
     print(f"\n🎮 Mode: {'SIMULATION' if SIMULATION_MODE else 'HARDWARE'}")
     
-    # --- Step 4: Run Interactive Mode ---
+    # --- Step 5: Run Interactive Mode ---
     try:
         interactive_mode()
     except KeyboardInterrupt:
@@ -1083,6 +1266,12 @@ def main():
         print("\n🔌 Disconnecting motors...")
         for motor in tqc.motor_registry.values():
             motor.disconnect()
+        print("  ✅ Done")
+    
+    # Cleanup IMU if connected
+    if imu_reader and imu_reader.is_connected():
+        print("\n📡 Disconnecting IMU...")
+        imu_reader.disconnect()
         print("  ✅ Done")
 
 
