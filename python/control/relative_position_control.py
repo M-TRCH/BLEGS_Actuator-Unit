@@ -70,20 +70,14 @@ from navigation.imu_reader import IMUReader, create_imu_reader
 # Import the module to access global variables by reference
 import test_quadruped_control as tqc
 
-# Import constants and functions (these don't change)
+# Import functions and classes (configurations are defined locally for standalone operation)
 from test_quadruped_control import (
     # Protocol constants
     BAUD_RATE, FAST_TIMEOUT,
     ControlMode, CONTROL_MODE,
     
-    # Robot configuration
-    BODY_LENGTH, BODY_WIDTH, MOTOR_SPACING,
-    L_AC, L_BD, L_CE, L_DE, GEAR_RATIO,
-    EXPECTED_MOTOR_IDS, DEFAULT_STANCE_HEIGHT, DEFAULT_STANCE_OFFSET_X,
-    GAIT_LIFT_HEIGHT, GAIT_STEP_FORWARD,
-    
-    # Control parameters
-    UPDATE_RATE, TRAJECTORY_STEPS, SMOOTH_TROT_STANCE_RATIO,
+    # Robot configuration (import for reference, but override locally)
+    EXPECTED_MOTOR_IDS,
     
     # Classes and functions
     BinaryMotorController,
@@ -108,6 +102,33 @@ if sys.platform == 'win32':
 # RELATIVE POSITION CONTROL PARAMETERS
 # ============================================================================
 
+# Robot physical configuration (STANDALONE - all parameters defined here)
+# Five-bar linkage dimensions
+L_AC = 105.0                # Length from motor A to point C (mm)
+L_BD = 105.0                # Length from motor B to point D (mm)  
+L_CE = 145.0                # Length from C to end-effector (mm)
+L_DE = 145.0                # Length from D to end-effector (mm)
+GEAR_RATIO = 8.0            # Motor gear ratio (8:1)
+
+# Body dimensions
+BODY_LENGTH = 200.0         # Body length (mm)
+BODY_WIDTH = 170.0          # Body width (mm)
+MOTOR_SPACING = 85.0        # Distance between motors A and B (mm)
+
+# Motor configuration
+MOTOR_INIT_ANGLE = -90.0    # Initial motor angle (degrees)
+
+# Stance configuration
+DEFAULT_STANCE_HEIGHT = -220.0    # Default standing height (mm, negative = below motor plane)
+DEFAULT_STANCE_OFFSET_X = 0.0     # Default X offset for standing position (mm)
+
+# Gait parameters (can be tuned for different walking characteristics)
+GAIT_LIFT_HEIGHT = 15.0           # Default foot lift height during walking (mm)
+GAIT_STEP_FORWARD = 50.0          # Maximum step length (mm)
+UPDATE_RATE = 50                  # Control loop update rate (Hz)
+TRAJECTORY_STEPS = 30             # Number of steps per gait cycle
+SMOOTH_TROT_STANCE_RATIO = 0.70   # Stance phase ratio (0.70 = 70% stance, 30% swing)
+
 # Navigation parameters (tunable)
 NAV_V_MAX = 70.0           # Maximum velocity (mm/s)
 NAV_K_P = 1.0              # Proportional gain
@@ -128,11 +149,11 @@ YAW_MAX_CORRECTION = 5.0        # Maximum differential step (mm) - reduced to pr
 
 # Balance control parameters (added Feb 12, 2026)
 BALANCE_ENABLED = False         # Enable/disable balance control (toggle with [C] key)
-ROLL_K_P = 0.5                  # Roll proportional gain (mm/deg) - reduced for smoother response
+ROLL_K_P = 0.8                  # Roll proportional gain (mm/deg) - reduced for smoother response
 ROLL_K_D = 0.03                 # Roll derivative gain (mm/(deg/s)) - reduced for smoother response
-PITCH_K_P = 0.5                 # Pitch proportional gain (mm/deg) - reduced for smoother response
+PITCH_K_P = 0.8                 # Pitch proportional gain (mm/deg) - reduced for smoother response
 PITCH_K_D = 0.03                # Pitch derivative gain (mm/(deg/s)) - reduced for smoother response
-MAX_HEIGHT_OFFSET = 30.0        # Maximum leg height offset from balance (mm)
+MAX_HEIGHT_OFFSET = 20.0        # Maximum leg height offset from balance (mm)
 INVERT_ROLL = False             # Invert roll correction direction if needed
 INVERT_PITCH = True             # Invert pitch correction direction (default based on testing)
 
@@ -1489,7 +1510,7 @@ def main():
         # Move motors to init position (-90 deg) before disconnecting
         if tqc.motor_registry:
             print("\n🏠 Moving motors to init position (-90°)...")
-            init_angle = -90.0
+            init_angle = MOTOR_INIT_ANGLE
             
             for motor_id, motor in tqc.motor_registry.items():
                 try:
