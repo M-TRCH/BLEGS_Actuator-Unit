@@ -124,7 +124,7 @@ DEFAULT_STANCE_OFFSET_X = 0.0     # Default X offset for standing position (mm)
 
 # Gait parameters (can be tuned for different walking characteristics)
 GAIT_LIFT_HEIGHT = 15.0           # Default foot lift height during walking (mm)
-GAIT_STEP_FORWARD = 50.0          # Maximum step length (mm)
+GAIT_STEP_FORWARD = 30.0          # Maximum step length (mm)
 UPDATE_RATE = 50                  # Control loop update rate (Hz)
 TRAJECTORY_STEPS = 30             # Number of steps per gait cycle
 SMOOTH_TROT_STANCE_RATIO = 0.70   # Stance phase ratio (0.70 = 70% stance, 30% swing)
@@ -143,9 +143,9 @@ VELOCITY_CALIBRATION = 3.04  # Actual movement is 3x of estimated (trajectory sp
 # IMU parameters (added Feb 11, 2026)
 IMU_PORT = 'COM22'              # Serial port for IMU
 IMU_ENABLED = True              # Enable/disable IMU integration
-YAW_K_P = 0.15                   # Yaw controller proportional gain (mm/deg) - reduced to prevent overcorrection
-YAW_K_D = 0.00                  # Yaw controller derivative gain (mm/(deg/s)) - reduced for smoother response
-YAW_MAX_CORRECTION = 5.0        # Maximum differential step (mm) - reduced to prevent aggressive turning
+YAW_K_P = 0.8                   # Yaw controller proportional gain (mm/deg) - reduced to prevent overcorrection
+YAW_K_D = 0.01                  # Yaw controller derivative gain (mm/(deg/s)) - reduced for smoother response
+YAW_MAX_CORRECTION = 15.0        # Maximum differential step (mm) - reduced to prevent aggressive turning
 
 # Balance control parameters (added Feb 12, 2026)
 BALANCE_ENABLED = False         # Enable/disable balance control (toggle with [C] key)
