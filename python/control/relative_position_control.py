@@ -15,7 +15,7 @@ Architecture:
 │                     MID-LEVEL LAYER (50 Hz)                     │
 │  Gait Generator + Balance Controller + IK (5-Bar) + Yaw Control │
 │                                                                 │
-│  - Elliptical trajectory generation (forward/backward)          │
+│  - Bezier curve trajectory generation (forward/backward)       │
 │  - Roll & Pitch stabilization (IMU-based PD control)           │
 │  - Differential stepping for yaw correction                     │
 │  - Per-leg height offset computation                            │
@@ -67,6 +67,9 @@ from navigation.simple_planner import SimpleNavigationPlanner
 from navigation.time_estimator import TimeBasedEstimator, YawController
 from navigation.imu_reader import IMUReader, create_imu_reader
 
+# Import Bezier gait trajectory generator
+from bezier_gait import generate_bezier_trajectory
+
 # Import the module to access global variables by reference
 import test_quadruped_control as tqc
 
@@ -83,7 +86,7 @@ from test_quadruped_control import (
     BinaryMotorController,
     discover_motors, register_leg_motors, start_all_motors,
     get_motor_positions, calculate_ik_no_ef,
-    generate_elliptical_trajectory, get_gait_phase_offset,
+    get_gait_phase_offset,
     smooth_move_to_home_position,
     emergency_stop_all,
     
@@ -127,7 +130,7 @@ GAIT_LIFT_HEIGHT = 15.0           # Default foot lift height during walking (mm)
 GAIT_STEP_FORWARD = 30.0          # Maximum step length (mm)
 UPDATE_RATE = 50                  # Control loop update rate (Hz)
 TRAJECTORY_STEPS = 30             # Number of steps per gait cycle
-SMOOTH_TROT_STANCE_RATIO = 0.70   # Stance phase ratio (0.70 = 70% stance, 30% swing)
+SMOOTH_TROT_STANCE_RATIO = 0.75   # Stance phase ratio (0.5 = 50% stance, 50% swing)
 
 # Navigation parameters (tunable)
 NAV_V_MAX = 70.0           # Maximum velocity (mm/s)
@@ -388,8 +391,9 @@ def get_trajectory_for_velocity(v_body_y: float, leg_id: str, yaw_correction: fl
     # Determine if this leg should mirror X (for right side legs)
     mirror_x = (leg_id in ['FR', 'RR'])
     
-    # Generate trajectory with adjusted step length
-    trajectory = generate_elliptical_trajectory(
+    # Generate trajectory with adjusted step length using Bezier curves
+    # NOTE: Invert reverse parameter - Bezier convention is opposite to original elliptical
+    trajectory = generate_bezier_trajectory(
         num_steps=TRAJECTORY_STEPS,
         lift_height=GAIT_LIFT_HEIGHT,
         step_forward=adjusted_step,  # ✅ Use differential step forward
@@ -397,7 +401,7 @@ def get_trajectory_for_velocity(v_body_y: float, leg_id: str, yaw_correction: fl
         stance_ratio=SMOOTH_TROT_STANCE_RATIO,
         home_x=DEFAULT_STANCE_OFFSET_X,  # ✅ Keep home_x constant
         home_y=DEFAULT_STANCE_HEIGHT,
-        reverse=reverse
+        reverse=not reverse  # ✅ INVERTED: Bezier uses opposite convention
     )
     
     return trajectory
@@ -647,7 +651,7 @@ def march_in_place_loop():
     march_trajectories = {}
     for leg_id in ['FR', 'FL', 'RR', 'RL']:
         mirror_x = (leg_id in ['FR', 'RR'])
-        march_trajectories[leg_id] = generate_elliptical_trajectory(
+        march_trajectories[leg_id] = generate_bezier_trajectory(
             num_steps=TRAJECTORY_STEPS,
             lift_height=march_lift_height,
             step_forward=0.0,  # No forward movement, just lift up and down
@@ -655,7 +659,7 @@ def march_in_place_loop():
             stance_ratio=SMOOTH_TROT_STANCE_RATIO,
             home_x=DEFAULT_STANCE_OFFSET_X,
             home_y=DEFAULT_STANCE_HEIGHT,
-            reverse=False
+            reverse=False  # Doesn't matter for step_forward=0, but kept consistent
         )
     
     try:
