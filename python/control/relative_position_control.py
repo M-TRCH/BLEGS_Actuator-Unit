@@ -694,9 +694,13 @@ def march_in_place_loop():
         print("  🛑 Idle march loop stopped")
 
 
-def start_idle_march() -> bool:
+def start_idle_march(resume_from: dict = None) -> bool:
     """
     Start marching in place (stepping without moving forward).
+    
+    Args:
+        resume_from: Optional dict of {leg_id: step_index} to resume from specific positions
+                    (for smooth transition from walking). If None, will start from phase offsets.
     
     Returns:
         True if started successfully
@@ -709,10 +713,16 @@ def start_idle_march() -> bool:
     
     print("\n🚶 Starting idle march (stepping in place)...")
     
-    # Initialize step indices with trot phase offsets
-    for leg_id in march_step_indices:
-        phase_offset = get_gait_phase_offset(leg_id, 'trot')
-        march_step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
+    # Initialize or resume step indices
+    if resume_from is not None:
+        # Resume from provided positions (smooth transition)
+        march_step_indices = resume_from.copy()
+        print("  ✨ Resuming from current gait phase (smooth transition)")
+    else:
+        # Initialize with trot phase offsets (fresh start)
+        for leg_id in march_step_indices:
+            phase_offset = get_gait_phase_offset(leg_id, 'trot')
+            march_step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
     
     # Start marching thread
     idle_marching = True
@@ -758,7 +768,8 @@ def stop_idle_march() -> bool:
 # MAIN CONTROL FUNCTION
 # ============================================================================
 
-def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -> bool:
+def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT, 
+                    transition_to_march: bool = False) -> bool:
     """
     Move relative distance on Y-axis (forward/backward).
     
@@ -773,6 +784,8 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
                            Positive = forward
                            Negative = backward
         timeout_s: Maximum time for movement (seconds)
+        transition_to_march: If True, will transition to idle march after reaching target
+                            instead of stopping (for smooth continuous movement)
     
     Returns:
         True if target reached, False if timeout or error
@@ -968,8 +981,14 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT) -
             if sleep_time > 0:
                 time.sleep(sleep_time)
         
-        # 3. Target reached - stop and report
-        stop_all_legs()
+        # 3. Target reached - stop or transition to march
+        if transition_to_march:
+            # Smooth transition: copy current step indices to march_step_indices
+            march_step_indices = step_indices.copy()
+            print("\n  🔄 Ready for smooth transition to idle march...")
+        else:
+            stop_all_legs()
+        
         close_logging()
         
         final_pos = state_estimator.get_position()
@@ -1037,6 +1056,77 @@ def test_long_forward():
     print("  TEST 3: Long Forward Movement (+500mm)")
     print("="*70)
     return move_relative_y(+500.0, timeout_s=60.0)
+
+
+def test_smooth_walk_600():
+    """Test: Smooth walk with marching transition - 600mm"""
+    print("\n" + "="*70)
+    print("  TEST 7: Smooth Walk with Idle March (+600mm)")
+    print("="*70)
+    print("  Sequence:")
+    print("    1. Idle march for 2 seconds")
+    print("    2. Smooth transition to walking forward 600mm")
+    print("    3. Smooth transition to idle march for 2 seconds")
+    print("    4. Return to standing position")
+    print("="*70)
+    
+    try:
+        # Step 1: Start idle marching
+        print("\n  Step 1/4: Starting idle march...")
+        if not start_idle_march():
+            print("  ❌ Failed to start idle march")
+            return False
+        
+        # March for 2 seconds
+        print("  🚶 Marching in place for 2 seconds...")
+        time.sleep(2.0)
+        
+        # Step 2: Walk forward 600mm with smooth transition TO march at end
+        print("\n  Step 2/4: Transitioning to walking forward 600mm...")
+        success = move_relative_y(+600.0, timeout_s=60.0, transition_to_march=True)
+        
+        if not success:
+            print("  ❌ Walking failed")
+            # Try to stop cleanly
+            if idle_marching:
+                stop_idle_march()
+            return False
+        
+        # Step 3: Transition directly to idle march (no pause, smooth transition)
+        print("\n  Step 3/4: Transitioning to idle march...")
+        # Use global march_step_indices that was set by move_relative_y()
+        if not start_idle_march(resume_from=march_step_indices):
+            print("  ❌ Failed to start idle march")
+            return False
+        
+        # March for 2 seconds
+        print("  🚶 Marching in place for 2 seconds...")
+        time.sleep(2.0)
+        
+        # Step 4: Return to standing position
+        print("\n  Step 4/4: Returning to standing position...")
+        if not stop_idle_march():
+            print("  ❌ Failed to stop idle march")
+            return False
+        
+        print("\n" + "="*70)
+        print("  ✅ SMOOTH WALK TEST COMPLETED!")
+        print("="*70)
+        print("  Total sequence completed successfully:")
+        print("    ✓ Pre-walk idle march (2s)")
+        print("    ✓ Forward walk (600mm)")
+        print("    ✓ Post-walk idle march (2s)")
+        print("    ✓ Return to standing")
+        print("="*70)
+        
+        return True
+        
+    except Exception as e:
+        print(f"\n  ❌ Test failed with error: {e}")
+        # Cleanup
+        if idle_marching:
+            stop_idle_march()
+        return False
 
 
 def run_test_sequence():
@@ -1138,6 +1228,7 @@ def print_menu():
     print("    [4] Custom distance (enter value)")
     print("    [5] Run test sequence")
     print("    [6] Test backward -200mm (Roadmap 7.1)")
+    print("    [7] Smooth walk +600mm with march transitions")
     print("  Idle March Commands:")
     print("    [M] Start marching in place (step without moving)")
     print("    [S] Stop marching (return to stand)")
@@ -1207,6 +1298,8 @@ def interactive_mode():
                 run_test_sequence()
             elif key == b'6':
                 test_backward_200()
+            elif key == b'7':
+                test_smooth_walk_600()
             elif key.lower() == b'm':
                 start_idle_march()
             elif key.lower() == b's':
@@ -1305,6 +1398,8 @@ def interactive_mode():
                     print("  ❌ Invalid input!")
             elif cmd == '5':
                 run_test_sequence()
+            elif cmd == '7':
+                test_smooth_walk_600()
             elif cmd == '6':
                 test_backward_200()
             elif cmd.lower() == 'm':
