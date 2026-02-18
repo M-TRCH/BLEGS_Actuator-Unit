@@ -24,7 +24,7 @@ detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 # --- 2. ตั้งค่าขนาด Marker (สำคัญมาก!) ---
 # วัดขนาดจริงของ Marker ที่คุณ "พิมพ์" ออกมา (วัดเฉพาะส่วนสีดำ)
 # หน่วยเป็น "เมตร"
-MARKER_SIZE_METERS = 0.024  # 24 มิลลิเมตร = 0.024 เมตร
+MARKER_SIZE_METERS = 0.03125 # เช่น 3.125 เซนติเมตร = 0.03125 เมตร (ต้องตรงกับที่ใช้จริง)
 
 # Pre-compute object points (ประหยัดเวลาไม่ต้องสร้างใหม่ทุก frame)
 OBJ_POINTS = np.array([
@@ -38,7 +38,7 @@ OBJ_POINTS = np.array([
 # ใช้ path แบบ absolute หรือ relative จากตำแหน่งสคริปต์
 import os
 script_dir = os.path.dirname(os.path.abspath(__file__))
-calib_file = os.path.join(script_dir, "camera_calibration", "camera_params_ef1635f4l_1080p60.npz")
+calib_file = os.path.join(script_dir, "camera_calibration", "camera_params_sigma35f14dgdn_1080p60.npz")
 
 try:
     calib_data = np.load(calib_file)
@@ -56,7 +56,7 @@ except FileNotFoundError:
 #----------------------------------------------------
 
 # --- 4. เปิดกล้อง ---
-cap = cv2.VideoCapture(1)   # ใช้กล้องตัวที่สอง (1)
+cap = cv2.VideoCapture(0)   # ใช้กล้องตัวที่ 0 (เปลี่ยนเลขถ้าใช้กล้องตัวอื่น)
 if not cap.isOpened():
     print("ไม่สามารถเปิดกล้องได้")
     exit()

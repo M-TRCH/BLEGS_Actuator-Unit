@@ -7,7 +7,7 @@ import os
 CHECKERBOARD_DIMS = (9, 6) 
 
 # Index กล้อง (เปลี่ยนเลขถ้าเปิดไม่ติด)
-CAMERA_INDEX = 1  
+CAMERA_INDEX = 0
 
 # โฟลเดอร์ที่จะเก็บภาพ
 IMAGE_DIR = "calib_images"
@@ -15,6 +15,9 @@ IMAGE_DIR = "calib_images"
 # ความละเอียดกล้อง (ตั้งให้ตรงกับที่ใช้จริง)
 FRAME_W = 1920
 FRAME_H = 1080
+# ขนาดหน้าต่างแสดงผล สูงสุด (เปลี่ยนค่าได้ตามหน้าจอที่ใช้)
+DISPLAY_MAX_W = 1280
+DISPLAY_MAX_H = 720
 # -------------
 
 # สร้างโฟลเดอร์เก็บภาพ
@@ -61,7 +64,16 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 3)
 
     # แสดงผลภาพ (1080p ไม่ต้องย่อ หรือจะย่อก็ได้ตามต้องการ)
-    cv2.imshow("Camera Calibration Capture", preview_frame)
+    # ย่อภาพเพื่อแสดงผลโดยรักษาสัดส่วน (fit inside DISPLAY_MAX_W x DISPLAY_MAX_H)
+    h, w = preview_frame.shape[:2]
+    max_w, max_h = DISPLAY_MAX_W, DISPLAY_MAX_H
+    scale = min(max_w / w, max_h / h, 1.0)
+    if scale < 1.0:
+        display_frame = cv2.resize(preview_frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        display_frame = preview_frame
+
+    cv2.imshow("Camera Calibration Capture", display_frame)
 
     key = cv2.waitKey(1)
 
