@@ -150,6 +150,11 @@ YAW_K_P = 0.8                   # Yaw controller proportional gain (mm/deg) - re
 YAW_K_D = 0.01                  # Yaw controller derivative gain (mm/(deg/s)) - reduced for smoother response
 YAW_MAX_CORRECTION = 15.0        # Maximum differential step (mm) - reduced to prevent aggressive turning
 
+# Turning parameters (commands [8] and [9])
+TURN_V_MAX = 40.0               # Reduced walking speed during turns (mm/s) → shorter base step
+TURN_BIAS = 7.5                 # Differential step bias for turning (mm) — half of YAW_MAX_CORRECTION
+                                # base step ~24 mm → inner 16 mm / outer 32 mm (ratio 2:1, was 3:1)
+
 # Balance control parameters (added Feb 12, 2026)
 BALANCE_ENABLED = False         # Enable/disable balance control (toggle with [C] key)
 ROLL_K_P = 0.8                  # Roll proportional gain (mm/deg) - reduced for smoother response
@@ -1023,6 +1028,234 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
         close_logging()
 
 # ============================================================================
+# TURNING MOVEMENT FUNCTION
+# ============================================================================
+
+def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
+                               timeout_s: float = NAV_TIMEOUT,
+                               transition_to_march: bool = False,
+                               v_max: float = TURN_V_MAX) -> bool:
+    """
+    Move relative distance on Y-axis with a fixed turning bias.
+
+    Adapted from move_relative_y() — adds a constant yaw correction offset
+    to all trajectory generation calls, forcing a curved/turning path.
+    Uses a reduced v_max (TURN_V_MAX) by default for shorter, smoother steps.
+
+    Differential stepping convention (same as get_trajectory_for_velocity):
+        turn_bias > 0  → turn RIGHT  (left legs step MORE forward)
+        turn_bias < 0  → turn LEFT   (right legs step MORE forward)
+
+    Args:
+        target_distance_mm: Distance to travel (mm). Positive = forward.
+        turn_bias: Fixed yaw correction bias added on top of IMU correction (mm).
+        timeout_s: Maximum allowed time (seconds).
+        transition_to_march: If True, transition to idle march after reaching target.
+        v_max: Walking speed during turn (mm/s). Defaults to TURN_V_MAX for
+               shorter base steps and smoother motion.
+
+    Returns:
+        True if target reached, False on timeout/error.
+    """
+    global nav_planner, state_estimator, idle_marching, march_thread, march_step_indices
+
+    direction_str = "RIGHT" if turn_bias > 0 else "LEFT"
+    # Derived step sizes for info display
+    base_step = min(v_max * GAIT_CYCLE_TIME, GAIT_STEP_FORWARD)
+    inner_step = max(5.0, base_step - abs(turn_bias))
+    outer_step = min(base_step + abs(turn_bias), GAIT_STEP_FORWARD * 1.5)
+    print("\n" + "="*70)
+    print("  📍 RELATIVE POSITION CONTROL - Y-AXIS WITH TURN")
+    print("="*70)
+    print(f"  Target      : {target_distance_mm:+.1f} mm")
+    print(f"  Turn bias   : {turn_bias:+.1f} mm  → Turn {direction_str}")
+    print(f"  v_max (turn): {v_max} mm/s  (normal: {NAV_V_MAX} mm/s)")
+    print(f"  Step sizes  : base={base_step:.1f} mm | inner={inner_step:.1f} mm | outer={outer_step:.1f} mm")
+    print(f"  Timeout     : {timeout_s:.1f} s")
+    print(f"  Mode        : {'SIMULATION' if SIMULATION_MODE else 'HARDWARE'}")
+    print(f"  Motors      : {len(tqc.leg_motors)} legs ({list(tqc.leg_motors.keys())})")
+
+    # Smooth transition from idle march
+    transitioning_from_march = idle_marching
+    if transitioning_from_march:
+        print("  🔄 Transitioning from idle march to turning walk...")
+        idle_marching = False
+        if march_thread and march_thread.is_alive():
+            march_thread.join(timeout=1.0)
+
+    print("="*70)
+
+    # Initialize navigation components (use reduced v_max for smoother turning)
+    # Always create a fresh planner so v_max is guaranteed correct for this move
+    nav_planner = SimpleNavigationPlanner(
+        v_max=v_max, K_p=NAV_K_P, tolerance=NAV_TOLERANCE)
+
+    if state_estimator is None:
+        state_estimator = TimeBasedEstimator(imu_reader=imu_reader)
+
+    global balance_controller
+    if BALANCE_ENABLED and balance_controller is None:
+        balance_controller = BalanceController()
+
+    # Set targets
+    nav_planner.set_relative_target(target_distance_mm)
+    state_estimator.start()
+
+    if yaw_controller is not None and state_estimator.has_imu():
+        yaw_controller.set_target(state_estimator.get_yaw())
+
+    if BALANCE_ENABLED and balance_controller is not None:
+        balance_controller.reset()
+        balance_controller.set_target(0.0, 0.0)
+
+    init_logging(target_distance_mm)
+
+    start_time = time.time()
+    last_status_time = start_time
+
+    # Step indices
+    if transitioning_from_march:
+        step_indices = march_step_indices.copy()
+        print("  ✨ Smooth transition — continuing from current gait phase")
+    else:
+        step_indices = {}
+        for leg_id in ['FR', 'FL', 'RR', 'RL']:
+            phase_offset = get_gait_phase_offset(leg_id, 'trot')
+            step_indices[leg_id] = int(phase_offset * TRAJECTORY_STEPS)
+
+    print(f"\n🔄 Starting turning walk ({direction_str})...")
+    print("  Press [SPACE] to pause/resume")
+    print("  Press [E] for emergency stop")
+    print("  Press [Q] to abort")
+
+    global control_paused
+    control_paused = False
+
+    try:
+        while not nav_planner.is_target_reached():
+            current_time = time.time()
+            loop_start = current_time
+
+            elapsed = current_time - start_time
+            if elapsed > timeout_s:
+                print(f"\n⚠️  Timeout reached! ({timeout_s:.1f}s)")
+                return False
+
+            if sys.platform == 'win32' and msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key == b' ':
+                    control_paused = not control_paused
+                    print("\n⏸️  PAUSED" if control_paused else "\n▶️  RESUMED")
+                elif key.lower() == b'e':
+                    print("\n⚠️  EMERGENCY STOP!")
+                    emergency_stop_all()
+                    return False
+                elif key.lower() == b'q':
+                    print("\n⏹️  ABORTED by user")
+                    return False
+
+            if control_paused:
+                time.sleep(0.05)
+                continue
+
+            # Velocity command
+            v_body_y = nav_planner.compute_velocity()
+            step_length, _ = update_gait_from_velocity(v_body_y)
+
+            # IMU yaw correction + forced turn bias
+            yaw_correction = turn_bias  # start with forced bias
+            if yaw_controller is not None and state_estimator.has_imu():
+                imu_correction = yaw_controller.compute(
+                    state_estimator.get_yaw(), current_time)
+                yaw_correction += imu_correction
+
+            # Generate trajectories with combined correction
+            trajectories = {}
+            for leg_id in ['FR', 'FL', 'RR', 'RL']:
+                trajectories[leg_id] = get_trajectory_for_velocity(
+                    v_body_y, leg_id, yaw_correction)
+
+            # Balance corrections
+            balance_offsets = None
+            if BALANCE_ENABLED and balance_controller is not None:
+                if imu_reader and imu_reader.is_receiving_data():
+                    orientation = imu_reader.get_orientation()
+                    balance_offsets = balance_controller.compute(
+                        orientation['roll'], orientation['pitch'], current_time)
+                else:
+                    balance_offsets = {k: 0.0 for k in ['FR', 'FL', 'RR', 'RL']}
+
+            update_all_legs_gait(trajectories, step_indices, balance_offsets)
+
+            for leg_id in step_indices:
+                step_indices[leg_id] = (step_indices[leg_id] + 1) % TRAJECTORY_STEPS
+
+            state_estimator.update(v_body_y * VELOCITY_CALIBRATION, current_time)
+            nav_planner.update_position(state_estimator.get_position())
+
+            status = nav_planner.get_status()
+            log_control_step(elapsed, status, v_body_y, step_length, step_indices)
+
+            if current_time - last_status_time >= 0.5:
+                est_status = state_estimator.get_status()
+                status_msg = (f"  📊 Pos: {status['current_y']:+.1f}/{status['target_y']:+.1f} mm"
+                              f" | Progress: {status['progress']:.0f}%"
+                              f" | v_y: {v_body_y:+.1f} mm/s"
+                              f" | Turn {direction_str}"
+                              f" | Time: {elapsed:.1f}s")
+                if state_estimator.has_imu():
+                    yaw_err = state_estimator.get_yaw_error()
+                    status_msg += f" | Yaw: {est_status['yaw']:+.1f}° (err: {yaw_err:+.1f}°)"
+                print(status_msg)
+                last_status_time = current_time
+
+            loop_duration = time.time() - loop_start
+            sleep_time = (1.0 / UPDATE_RATE) - loop_duration
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        # Done
+        if transition_to_march:
+            march_step_indices = step_indices.copy()
+            print("\n  🔄 Ready for smooth transition to idle march...")
+        else:
+            stop_all_legs()
+
+        close_logging()
+
+        final_pos = state_estimator.get_position()
+        final_time = state_estimator.get_elapsed_time()
+
+        print("\n" + "="*70)
+        print("  ✅ TARGET REACHED (TURNING WALK)!")
+        print("="*70)
+        print(f"  Final position : {final_pos:+.1f} mm")
+        print(f"  Target         : {target_distance_mm:+.1f} mm")
+        print(f"  Error          : {abs(target_distance_mm - final_pos):.1f} mm")
+        print(f"  Turn direction : {direction_str}")
+        print(f"  Turn bias      : {turn_bias:+.1f} mm")
+        print(f"  v_max (turn)   : {v_max} mm/s")
+        print(f"  Time           : {final_time:.2f} s")
+        if state_estimator.has_imu():
+            print(f"  Yaw drift      : {state_estimator.get_yaw_error():+.1f}°")
+        print("="*70)
+
+        return True
+
+    except KeyboardInterrupt:
+        print("\n⏹️  Interrupted by user")
+        close_logging()
+        return False
+
+    finally:
+        # Restore nav_planner to normal speed for subsequent moves
+        nav_planner = SimpleNavigationPlanner(
+            v_max=NAV_V_MAX, K_p=NAV_K_P, tolerance=NAV_TOLERANCE)
+        stop_all_legs()
+        close_logging()
+
+
+# ============================================================================
 # TEST FUNCTIONS
 # ============================================================================
 
@@ -1129,6 +1362,100 @@ def test_smooth_walk_600():
         return False
 
 
+def _test_turn(direction: str, turn_bias: float) -> bool:
+    """
+    Shared helper: march → turning walk (+300mm) → march → stand.
+
+    Args:
+        direction : Human-readable label, e.g. "LEFT" or "RIGHT".
+        turn_bias : Yaw correction bias (mm).
+                    Positive = turn RIGHT, Negative = turn LEFT.
+    """
+    print("\n" + "="*70)
+    print(f"  TEST: Turn {direction} while walking (+300mm)")
+    print("="*70)
+    print("  Sequence:")
+    print("    1. Idle march for 2 seconds")
+    print(f"    2. Smooth transition to walking forward 300mm (turning {direction})")
+    print("    3. Smooth transition to idle march for 2 seconds")
+    print("    4. Return to standing position")
+    print(f"  Turn bias: {turn_bias:+.1f} mm")
+    print("="*70)
+
+    try:
+        # Step 1: Start idle marching
+        print("\n  Step 1/4: Starting idle march...")
+        if not start_idle_march():
+            print("  ❌ Failed to start idle march")
+            return False
+
+        print("  🚶 Marching in place for 2 seconds...")
+        time.sleep(2.0)
+
+        # Step 2: Walk forward 300mm with turning bias, transition to march at end
+        print(f"\n  Step 2/4: Transitioning to turning walk ({direction})...")
+        success = move_relative_y_with_turn(
+            +300.0, turn_bias, timeout_s=60.0, transition_to_march=True)
+
+        if not success:
+            print("  ❌ Turning walk failed")
+            if idle_marching:
+                stop_idle_march()
+            return False
+
+        # Step 3: Transition to idle march (smooth)
+        print("\n  Step 3/4: Transitioning to idle march...")
+        if not start_idle_march(resume_from=march_step_indices):
+            print("  ❌ Failed to start idle march")
+            return False
+
+        print("  🚶 Marching in place for 2 seconds...")
+        time.sleep(2.0)
+
+        # Step 4: Return to standing
+        print("\n  Step 4/4: Returning to standing position...")
+        if not stop_idle_march():
+            print("  ❌ Failed to stop idle march")
+            return False
+
+        print("\n" + "="*70)
+        print(f"  ✅ TURN {direction} TEST COMPLETED!")
+        print("="*70)
+        print("  Total sequence completed successfully:")
+        print("    ✓ Pre-walk idle march (2s)")
+        print(f"    ✓ Turning walk {direction} (300mm)")
+        print("    ✓ Post-walk idle march (2s)")
+        print("    ✓ Return to standing")
+        print("="*70)
+        return True
+
+    except Exception as e:
+        print(f"\n  ❌ Test failed with error: {e}")
+        if idle_marching:
+            stop_idle_march()
+        return False
+
+
+def test_turn_left_300():
+    """Test [8]: Walk forward 300mm while turning LEFT (smooth).
+
+    Uses TURN_BIAS (< YAW_MAX_CORRECTION) and TURN_V_MAX (< NAV_V_MAX) for
+    shorter, more equal steps between inner/outer legs → smoother arc.
+    turn_bias < 0 → right legs step more forward → robot arcs LEFT.
+    """
+    return _test_turn("LEFT", turn_bias=-TURN_BIAS)
+
+
+def test_turn_right_300():
+    """Test [9]: Walk forward 300mm while turning RIGHT (smooth).
+
+    Uses TURN_BIAS (< YAW_MAX_CORRECTION) and TURN_V_MAX (< NAV_V_MAX) for
+    shorter, more equal steps between inner/outer legs → smoother arc.
+    turn_bias > 0 → left legs step more forward → robot arcs RIGHT.
+    """
+    return _test_turn("RIGHT", turn_bias=+TURN_BIAS)
+
+
 def run_test_sequence():
     """Run full test sequence with user confirmation between tests."""
     
@@ -1229,6 +1556,8 @@ def print_menu():
     print("    [5] Run test sequence")
     print("    [6] Test backward -200mm (Roadmap 7.1)")
     print("    [7] Smooth walk +600mm with march transitions")
+    print("    [8] Turn LEFT  while walking +300mm (march → turn → march)")
+    print("    [9] Turn RIGHT while walking +300mm (march → turn → march)")
     print("  Idle March Commands:")
     print("    [M] Start marching in place (step without moving)")
     print("    [S] Stop marching (return to stand)")
@@ -1300,6 +1629,10 @@ def interactive_mode():
                 test_backward_200()
             elif key == b'7':
                 test_smooth_walk_600()
+            elif key == b'8':
+                test_turn_left_300()
+            elif key == b'9':
+                test_turn_right_300()
             elif key.lower() == b'm':
                 start_idle_march()
             elif key.lower() == b's':
@@ -1400,6 +1733,10 @@ def interactive_mode():
                 run_test_sequence()
             elif cmd == '7':
                 test_smooth_walk_600()
+            elif cmd == '8':
+                test_turn_left_300()
+            elif cmd == '9':
+                test_turn_right_300()
             elif cmd == '6':
                 test_backward_200()
             elif cmd.lower() == 'm':
