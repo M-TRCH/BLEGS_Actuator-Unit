@@ -28,8 +28,10 @@ Date:    February 2026
 import pybullet as p
 import pybullet_data
 import numpy as np
+import cv2
 import time
 import os
+from datetime import datetime
 from enum import IntEnum
 
 
@@ -160,6 +162,12 @@ FORCE_STAND     = 10.0   # N·m
 STATUS_PRINT_INTERVAL = 1.0   # seconds between status lines during walking
 CAMERA_UPDATE_INTERVAL = 0.3  # seconds between camera re-centre
 
+# Video recording  (uses OpenCV — no ffmpeg binary needed)
+VIDEO_RECORD       = False      # Enable/disable MP4 recording
+VIDEO_DIR          = "videos"   # Output directory (relative to this script)
+VIDEO_FPS          = 30        # Playback frame rate for the MP4
+VIDEO_WIDTH        = 1280      # Rendered frame width  (pixels)
+VIDEO_HEIGHT       = 720       # Rendered frame height (pixels)
 
 # ============================================================================
 # BEZIER TRAJECTORY GENERATION
@@ -171,7 +179,6 @@ def _cubic_bezier(t, P0, P1, P2, P3):
     t  = np.clip(t, 0.0, 1.0)
     u  = 1.0 - t
     return u*u*u * P0 + 3*u*u*t * P1 + 3*u*t*t * P2 + t*t*t * P3
-
 
 def _swing_traj(n, x0, x1, hy, lift, lr=0.4, la=0.6):
     """Swing phase: Bézier curve from (x0, hy) → (x1, hy) with peak lift."""
@@ -338,9 +345,89 @@ def setup_pybullet():
 # MAIN SIMULATION LOOP
 # ============================================================================
 
+class VideoRecorder:
+    """
+    Frame-by-frame MP4 writer using p.getCameraImage() + cv2.VideoWriter.
+    Works without ffmpeg because OpenCV ships its own codec backend.
+    """
+
+    def __init__(self):
+        self.writer   = None
+        self.vid_path = None
+        self.frame_dt = 1.0 / VIDEO_FPS   # seconds between captures
+        self.timer    = 0.0               # accumulator
+        self.n_frames = 0
+
+    # --- public API -------------------------------------------------
+
+    def start(self):
+        """Open the video file for writing."""
+        if not VIDEO_RECORD:
+            return
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        vid_dir    = os.path.join(script_dir, VIDEO_DIR)
+        os.makedirs(vid_dir, exist_ok=True)
+        stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.vid_path = os.path.join(vid_dir, f"sim_walk600_{stamp}.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.writer = cv2.VideoWriter(
+            self.vid_path, fourcc, VIDEO_FPS,
+            (VIDEO_WIDTH, VIDEO_HEIGHT))
+        if not self.writer.isOpened():
+            print("  \u26a0\ufe0f  VideoWriter failed to open — recording disabled")
+            self.writer = None
+            return
+        print(f"  Recording video \u2192 {self.vid_path}")
+        print(f"  ({VIDEO_WIDTH}\u00d7{VIDEO_HEIGHT} @ {VIDEO_FPS} fps)")
+
+    def capture(self, dt, cam_target, cam_dist=1.0,
+                cam_yaw=50, cam_pitch=-25):
+        """
+        Call every physics step.  Captures a frame when enough time has
+        elapsed to match VIDEO_FPS.
+        """
+        if self.writer is None:
+            return
+        self.timer += dt
+        if self.timer < self.frame_dt:
+            return
+        self.timer -= self.frame_dt
+
+        # Render off-screen via OpenGL
+        view = p.computeViewMatrixFromYawPitchRoll(
+            cameraTargetPosition=cam_target,
+            distance=cam_dist, yaw=cam_yaw, pitch=cam_pitch, roll=0,
+            upAxisIndex=2)
+        proj = p.computeProjectionMatrixFOV(
+            fov=60, aspect=VIDEO_WIDTH / VIDEO_HEIGHT,
+            nearVal=0.02, farVal=10.0)
+        _, _, rgba, _, _ = p.getCameraImage(
+            VIDEO_WIDTH, VIDEO_HEIGHT,
+            viewMatrix=view, projectionMatrix=proj,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL)
+
+        # RGBA → BGR for OpenCV
+        frame = np.array(rgba, dtype=np.uint8).reshape(
+            VIDEO_HEIGHT, VIDEO_WIDTH, 4)
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        self.writer.write(bgr)
+        self.n_frames += 1
+
+    def stop(self):
+        """Finalise and close the video file."""
+        if self.writer is not None:
+            self.writer.release()
+            duration = self.n_frames / VIDEO_FPS if VIDEO_FPS else 0
+            print(f"  Video saved: {self.vid_path}")
+            print(f"  ({self.n_frames} frames, ~{duration:.1f} s)")
+            self.writer = None
+
+
 def main():
     robot, n_joints, foot_ids, move_ids, ik_index = setup_pybullet()
     nav = NavigationPlanner()
+    recorder = VideoRecorder()
+    recorder.start()
 
     # ---- Mutable state ----
     phase          = Phase.WARMUP
@@ -541,8 +628,11 @@ def main():
                     cameraTargetPosition=[base_pos[0], base_pos[1], 0.15])
 
             # ========================================================
-            # 7.  STEP PHYSICS
+            # 7.  VIDEO CAPTURE  &  STEP PHYSICS
             # ========================================================
+            recorder.capture(
+                SIM_DT,
+                cam_target=[base_pos[0], base_pos[1], 0.15])
             p.stepSimulation()
             time.sleep(SIM_DT)
 
@@ -550,6 +640,7 @@ def main():
         print(f"\n  [{sim_time:.1f}s] Interrupted by user")
 
     finally:
+        recorder.stop()
         print("\n  Disconnecting PyBullet...")
         if p.isConnected():
             p.disconnect()
