@@ -14,13 +14,13 @@ planeId = p.loadURDF("plane.urdf")
 # ปรับ path ให้ชี้ไปที่ URDF ในโปรเจค
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
-urdf_path = os.path.join(project_root, "models", "urdf", "quadruped", "my_robot.urdf")
+urdf_path = os.path.join(project_root, "python", "models", "urdf", "quadruped", "my_robot.urdf")
 startPos = [0, 0, 0.5]
 startOrientation = p.getQuaternionFromEuler([0, 0, 0])
 robotId = p.loadURDF(urdf_path, startPos, startOrientation)
 
 # =====================================================================
-# 3. (CHANGED) รวบรวม Joints และ Links (แก้บั๊ก .strip() ที่แท้จริง)
+# 3. (CHANGED) รวบรวม Joints และ Links (แก้บั๊ก .strip() ที่แท้จริง)ห
 # =====================================================================
 joint_name_to_id = {}
 link_name_to_id = {}

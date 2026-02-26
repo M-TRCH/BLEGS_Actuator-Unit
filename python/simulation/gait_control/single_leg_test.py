@@ -13,7 +13,7 @@ planeId = p.loadURDF("plane.urdf")
 # 2. โหลด URDF quadruped (แต่จะใช้เฉพาะขา FR)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
-urdf_path = os.path.join(project_root, "models", "urdf", "quadruped", "my_robot.urdf")
+urdf_path = os.path.join(project_root, "python", "models", "urdf", "quadruped", "my_robot.urdf")
 
 # แขวนทั้งตัวไว้กับที่ (จะควบคุมเฉพาะขา FR)
 startPos = [0, 0, 0.5]
