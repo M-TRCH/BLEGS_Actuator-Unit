@@ -29,6 +29,7 @@ import pybullet as p
 import pybullet_data
 import numpy as np
 import cv2
+import csv
 import time
 import os
 from datetime import datetime
@@ -134,11 +135,14 @@ HOME_FOOT_POS = {
 # BALANCE PD GAINS  (same as gait_control_trot.py)
 # ============================================================================
 
-BAL_KP_PITCH = 0.006
-BAL_KD_PITCH = 0.012
-BAL_KP_ROLL  = 0.006
-BAL_KD_ROLL  = 0.012
-
+# BAL_KP_PITCH = 0.006
+# BAL_KD_PITCH = 0.012
+# BAL_KP_ROLL  = 0.006
+# BAL_KD_ROLL  = 0.012
+BAL_KP_PITCH = 0.0
+BAL_KD_PITCH = 0.0
+BAL_KP_ROLL  = 0.0
+BAL_KD_ROLL  = 0.0
 
 # ============================================================================
 # JOINT CONTROL GAINS
@@ -168,6 +172,11 @@ VIDEO_DIR          = "videos"   # Output directory (relative to this script)
 VIDEO_FPS          = 30        # Playback frame rate for the MP4
 VIDEO_WIDTH        = 1280      # Rendered frame width  (pixels)
 VIDEO_HEIGHT       = 720       # Rendered frame height (pixels)
+
+# Performance logging
+LOG_ENABLED        = True       # Enable/disable CSV performance log
+LOG_DIR            = "logs"     # Output directory (relative to this script)
+LOG_RATE_HZ        = 50         # Logging sample rate (Hz), matches gait update
 
 # ============================================================================
 # BEZIER TRAJECTORY GENERATION
@@ -423,11 +432,88 @@ class VideoRecorder:
             self.writer = None
 
 
+class PerformanceLogger:
+    """
+    Logs per-leg kinematic and motor tracking data to CSV.
+
+    Metrics recorded at LOG_RATE_HZ during gaiting phases:
+      1. Kinematic Accuracy   — foot x/y/z setpoint vs actual (body frame, mm)
+      2. Motor Tracking Perf  — theta1/theta2 setpoint vs actual (deg)
+    """
+
+    FIELDNAMES = [
+        'time_s', 'phase', 'leg',
+        'x_setpoint_mm', 'y_setpoint_mm', 'z_setpoint_mm',
+        'x_actual_mm',   'y_actual_mm',   'z_actual_mm',
+        'theta1_setpoint_deg', 'theta1_actual_deg',
+        'theta2_setpoint_deg', 'theta2_actual_deg',
+    ]
+
+    def __init__(self):
+        self.rows     = []
+        self.log_path = None
+        self.timer    = 0.0
+        self.log_dt   = 1.0 / LOG_RATE_HZ
+
+    def tick(self, dt):
+        """Advance internal timer. Returns True when a sample is due."""
+        if not LOG_ENABLED:
+            return False
+        self.timer += dt
+        if self.timer >= self.log_dt:
+            self.timer -= self.log_dt
+            return True
+        return False
+
+    def record(self, time_s, phase, leg,
+               foot_setpoint_body, foot_actual_body,
+               theta_setpoint, theta_actual):
+        """Append one data row (one leg, one timestep)."""
+        self.rows.append({
+            'time_s':              round(time_s, 4),
+            'phase':               Phase(phase).name,
+            'leg':                 leg,
+            'x_setpoint_mm':       round(foot_setpoint_body[0] * 1000.0, 3),
+            'y_setpoint_mm':       round(foot_setpoint_body[1] * 1000.0, 3),
+            'z_setpoint_mm':       round(foot_setpoint_body[2] * 1000.0, 3),
+            'x_actual_mm':         round(foot_actual_body[0] * 1000.0, 3),
+            'y_actual_mm':         round(foot_actual_body[1] * 1000.0, 3),
+            'z_actual_mm':         round(foot_actual_body[2] * 1000.0, 3),
+            'theta1_setpoint_deg': round(np.degrees(theta_setpoint[0]), 3),
+            'theta1_actual_deg':   round(np.degrees(theta_actual[0]), 3),
+            'theta2_setpoint_deg': round(np.degrees(theta_setpoint[1]), 3),
+            'theta2_actual_deg':   round(np.degrees(theta_actual[1]), 3),
+        })
+
+    def save(self):
+        """Write all collected rows to a timestamped CSV file."""
+        if not LOG_ENABLED or not self.rows:
+            print("  No performance data to save.")
+            return
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        log_dir    = os.path.join(script_dir, LOG_DIR)
+        os.makedirs(log_dir, exist_ok=True)
+        stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_path = os.path.join(log_dir, f"perf_walk600_{stamp}.csv")
+
+        with open(self.log_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self.FIELDNAMES)
+            writer.writeheader()
+            writer.writerows(self.rows)
+
+        n_rows   = len(self.rows)
+        duration = self.rows[-1]['time_s'] - self.rows[0]['time_s']
+        print(f"  Performance log saved: {self.log_path}")
+        print(f"  ({n_rows} rows, {duration:.1f} s, "
+              f"{n_rows / max(duration, 0.001):.0f} samples/s)")
+
+
 def main():
     robot, n_joints, foot_ids, move_ids, ik_index = setup_pybullet()
     nav = NavigationPlanner()
     recorder = VideoRecorder()
     recorder.start()
+    perf_log = PerformanceLogger()
 
     # ---- Mutable state ----
     phase          = Phase.WARMUP
@@ -580,6 +666,8 @@ def main():
             vg   = VEL_GAIN_STAND if is_standing else VEL_GAIN_WALK
             frc  = FORCE_STAND    if is_standing else FORCE_WALK
 
+            ik_setpoints = {}   # store per-leg for logging
+
             for leg in LEG_IDS:
                 # Apply balance correction to target
                 tgt = list(foot_targets[leg])
@@ -604,6 +692,27 @@ def main():
                     forces=[frc, frc],
                     positionGains=[pg, pg],
                     velocityGains=[vg, vg])
+
+                ik_setpoints[leg] = (tgt, angles)
+
+            # ========================================================
+            # 4b. PERFORMANCE LOGGING
+            # ========================================================
+            if perf_log.tick(SIM_DT):
+                inv_pos, inv_orn = p.invertTransform(base_pos, base_orn)
+                for leg in LEG_IDS:
+                    # Actual foot position (world → body frame)
+                    foot_world = p.getLinkState(robot, foot_ids[leg])[0]
+                    foot_body, _ = p.multiplyTransforms(
+                        inv_pos, inv_orn, foot_world, [0, 0, 0, 1])
+                    # Actual joint angles
+                    theta_actual = [p.getJointState(robot, j)[0]
+                                    for j in move_ids[leg]]
+                    tgt_body, theta_sp = ik_setpoints[leg]
+                    perf_log.record(
+                        sim_time, phase, leg,
+                        tgt_body, foot_body,
+                        theta_sp, theta_actual)
 
             # ========================================================
             # 5.  STATUS PRINT  (during walking, every ~1 s)
@@ -641,6 +750,7 @@ def main():
 
     finally:
         recorder.stop()
+        perf_log.save()
         print("\n  Disconnecting PyBullet...")
         if p.isConnected():
             p.disconnect()
