@@ -169,8 +169,8 @@ INVERT_PITCH = True             # Invert pitch correction direction (default bas
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE  # seconds per gait cycle
 
 # Logging parameters
-ENABLE_LOGGING = False      # Enable data logging to file
-LOG_FILE_PATH = "logs/"     # Directory for log files
+ENABLE_LOGGING = True      # Enable data logging to file
+LOG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")  # Absolute path to logs/
 LOG_RATE = 10               # Log every N control cycles
 
 # Simulation mode (auto-detected if no motors found)
@@ -310,7 +310,6 @@ yaw_controller = None
 balance_controller = None
 
 # Control state
-control_running = False
 control_paused = True
 
 # Idle marching state
@@ -318,13 +317,10 @@ idle_marching = False
 march_thread = None
 march_step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
 
-# Trajectory caches (pre-computed for each step length)
-trajectory_cache = {}
-
 # Logging state
 log_file = None
 log_counter = 0
-log_data = []  # Buffer for log data
+_log_start_time = 0.0
 
 # ============================================================================
 # GAIT VELOCITY MAPPING
@@ -554,78 +550,101 @@ def move_to_stand_position() -> bool:
 
 def init_logging(target_distance: float) -> bool:
     """
-    Initialize logging system.
-    
-    Args:
-        target_distance: Target distance for this movement
+    Initialize logging system.  Idempotent – if a log file is already open
+    the call is a no-op so that outer callers (e.g. test_smooth_walk_600)
+    can open the file once for the whole sequence.
     
     Returns:
-        True if logging initialized successfully
+        True if logging is active (either freshly opened or already open)
     """
-    global log_file, log_data, log_counter
+    global log_file, log_counter, _log_start_time
     
     if not ENABLE_LOGGING:
         return False
     
+    # Already open – nothing to do
+    if log_file is not None:
+        return True
+    
     try:
-        import os
         from datetime import datetime
         
-        # Create log directory if not exists
         os.makedirs(LOG_FILE_PATH, exist_ok=True)
         
-        # Generate log filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{LOG_FILE_PATH}movement_{target_distance:+.0f}mm_{timestamp}.csv"
+        filename = os.path.join(LOG_FILE_PATH,
+                                f"movement_{target_distance:+.0f}mm_{timestamp}.csv")
         
-        # Open log file
         log_file = open(filename, 'w')
         
-        # Write header
-        log_file.write("time,target_y,current_y,error,v_y,step_length,")
-        log_file.write("FR_idx,FL_idx,RR_idx,RL_idx\n")
+        # Minimal header: one row per leg per control cycle
+        cols = [
+            'time',
+            'phase',
+            'leg',
+            'theta1_setpoint_deg',
+            'theta1_actual_deg',
+            'theta2_setpoint_deg',
+            'theta2_actual_deg',
+        ]
+        log_file.write(','.join(cols) + '\n')
         
-        # Reset counter and buffer
         log_counter = 0
-        log_data = []
+        _log_start_time = time.time()
         
-        print(f"  📝 Logging to: {filename}")
+        print(f"  \U0001f4dd Logging to: {filename}")
         return True
         
     except Exception as e:
-        print(f"  ⚠️  Logging init failed: {e}")
+        print(f"  \u26a0\ufe0f  Logging init failed: {e}")
         return False
 
 
-def log_control_step(elapsed_time: float, status: dict, v_body_y: float, 
-                     step_length: float, step_indices: dict) -> None:
+def log_control_step(phase: str) -> None:
     """
-    Log one control step.
+    Log one control step – writes 4 rows (one per leg).
+    
+    Columns: time, phase, leg,
+             theta1_setpoint_deg, theta1_actual_deg,
+             theta2_setpoint_deg, theta2_actual_deg
     
     Args:
-        elapsed_time: Elapsed time since start
-        status: Navigation status dict
-        v_body_y: Current velocity command
-        step_length: Current step length
-        step_indices: Current step indices for all legs
+        phase: Current operating phase string (e.g. 'MARCH', 'WALK', 'TURN')
     """
-    global log_file, log_counter, log_data
+    global log_file, log_counter, _log_start_time
     
     if not ENABLE_LOGGING or log_file is None:
         return
     
     log_counter += 1
+    if log_counter % LOG_RATE != 0:
+        return
     
-    # Log every LOG_RATE cycles
-    if log_counter % LOG_RATE == 0:
-        line = f"{elapsed_time:.3f},"
-        line += f"{status['target_y']:.1f},{status['current_y']:.1f},"
-        line += f"{status['error']:.1f},{v_body_y:+.2f},{step_length:.2f},"
-        line += f"{step_indices['FR']},{step_indices['FL']},"
-        line += f"{step_indices['RR']},{step_indices['RL']}\n"
+    elapsed = time.time() - _log_start_time
+    
+    for leg_id in ['FR', 'FL', 'RR', 'RL']:
+        # Setpoint – IK target angles (always available in leg_states)
+        if leg_id in tqc.leg_states:
+            angles = tqc.leg_states[leg_id].get(
+                'target_angles', [float('nan'), float('nan')])
+            sp1 = np.rad2deg(angles[0])
+            sp2 = np.rad2deg(angles[1])
+        else:
+            sp1 = sp2 = float('nan')
         
-        log_file.write(line)
-        log_file.flush()  # Ensure data is written
+        # Actual – encoder feedback from firmware
+        if not SIMULATION_MODE and leg_id in tqc.leg_motors:
+            motors = tqc.leg_motors[leg_id]
+            act1 = motors['A'].current_position
+            act2 = motors['B'].current_position
+        else:
+            act1 = act2 = float('nan')
+        
+        log_file.write(
+            f"{elapsed:.4f},{phase},{leg_id},"
+            f"{sp1:.3f},{act1:.3f},{sp2:.3f},{act2:.3f}\n")
+    
+    log_file.flush()
 
 
 def close_logging() -> None:
@@ -635,7 +654,7 @@ def close_logging() -> None:
     if log_file is not None:
         log_file.close()
         log_file = None
-        print("  ✅ Log file closed")
+        print("  \u2705 Log file closed")
 
 # ============================================================================
 # IDLE MARCHING (STEPPING IN PLACE)
@@ -686,6 +705,9 @@ def march_in_place_loop():
             # Advance step indices
             for leg_id in march_step_indices:
                 march_step_indices[leg_id] = (march_step_indices[leg_id] + 1) % TRAJECTORY_STEPS
+            
+            # Log march data
+            log_control_step("MARCH")
             
             # Rate limiting
             loop_duration = time.time() - loop_start
@@ -851,7 +873,8 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
         balance_controller.set_target(0.0, 0.0)
         print(f"  ⚖️  Balance target set: Level (0° roll, 0° pitch)")
     
-    # Initialize logging
+    # Initialize logging (no-op if already opened by caller)
+    log_was_already_open = (log_file is not None)
     init_logging(target_distance_mm)
     
     start_time = time.time()
@@ -956,7 +979,7 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
             
             # 2.7 Log control data
             status = nav_planner.get_status()
-            log_control_step(elapsed, status, v_body_y, step_length, step_indices)
+            log_control_step("WALK")
             
             # 2.8 Print status periodically
             if current_time - last_status_time >= 0.5:
@@ -980,7 +1003,7 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
                 print(status_msg)
                 last_status_time = current_time
             
-            # 2.8 Wait for next cycle
+            # 2.9 Wait for next cycle
             loop_duration = time.time() - loop_start
             sleep_time = (1.0 / UPDATE_RATE) - loop_duration
             if sleep_time > 0:
@@ -993,8 +1016,6 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
             print("\n  🔄 Ready for smooth transition to idle march...")
         else:
             stop_all_legs()
-        
-        close_logging()
         
         final_pos = state_estimator.get_position()
         final_time = state_estimator.get_elapsed_time()
@@ -1019,13 +1040,13 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
         
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")
-        close_logging()
         return False
     
     finally:
-        # Ensure motors stop
+        # Ensure motors stop and logging closed
         stop_all_legs()
-        close_logging()
+        if not log_was_already_open:
+            close_logging()
 
 # ============================================================================
 # TURNING MOVEMENT FUNCTION
@@ -1108,6 +1129,8 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
         balance_controller.reset()
         balance_controller.set_target(0.0, 0.0)
 
+    # Initialize logging (no-op if already opened by caller)
+    log_was_already_open = (log_file is not None)
     init_logging(target_distance_mm)
 
     start_time = time.time()
@@ -1194,7 +1217,7 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
             nav_planner.update_position(state_estimator.get_position())
 
             status = nav_planner.get_status()
-            log_control_step(elapsed, status, v_body_y, step_length, step_indices)
+            log_control_step("TURN")
 
             if current_time - last_status_time >= 0.5:
                 est_status = state_estimator.get_status()
@@ -1221,8 +1244,6 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
         else:
             stop_all_legs()
 
-        close_logging()
-
         final_pos = state_estimator.get_position()
         final_time = state_estimator.get_elapsed_time()
 
@@ -1244,7 +1265,6 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
 
     except KeyboardInterrupt:
         print("\n⏹️  Interrupted by user")
-        close_logging()
         return False
 
     finally:
@@ -1252,7 +1272,8 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
         nav_planner = SimpleNavigationPlanner(
             v_max=NAV_V_MAX, K_p=NAV_K_P, tolerance=NAV_TOLERANCE)
         stop_all_legs()
-        close_logging()
+        if not log_was_already_open:
+            close_logging()
 
 
 # ============================================================================
@@ -1302,6 +1323,9 @@ def test_smooth_walk_600():
     print("    3. Smooth transition to idle march for 2 seconds")
     print("    4. Return to standing position")
     print("="*70)
+    
+    # Open log file for the entire sequence (march + walk + march)
+    init_logging(600)
     
     try:
         # Step 1: Start idle marching
@@ -1360,6 +1384,8 @@ def test_smooth_walk_600():
         if idle_marching:
             stop_idle_march()
         return False
+    finally:
+        close_logging()
 
 
 def _test_turn(direction: str, turn_bias: float) -> bool:
@@ -1382,6 +1408,9 @@ def _test_turn(direction: str, turn_bias: float) -> bool:
     print(f"  Turn bias: {turn_bias:+.1f} mm")
     print("="*70)
 
+    # Open log file for the entire sequence (march + turn + march)
+    init_logging(300)
+    
     try:
         # Step 1: Start idle marching
         print("\n  Step 1/4: Starting idle march...")
@@ -1434,6 +1463,8 @@ def _test_turn(direction: str, turn_bias: float) -> bool:
         if idle_marching:
             stop_idle_march()
         return False
+    finally:
+        close_logging()
 
 
 def test_turn_left_300():
@@ -1486,8 +1517,16 @@ def run_test_sequence():
                     print("  ⏹️  Test sequence aborted")
                     return results
             else:
-                input()
-                break
+                user_input = input().strip().lower()
+                if user_input == 's':
+                    print("  ⏭️  Skipped")
+                    results.append((name, "SKIPPED"))
+                    break
+                elif user_input == 'q':
+                    print("  ⏹️  Test sequence aborted")
+                    return results
+                else:
+                    break  # Enter or anything else = run test
         
         if results and results[-1][0] == name:  # Was skipped
             continue
@@ -1581,6 +1620,7 @@ def print_menu():
 def interactive_mode():
     """Run interactive control mode."""
     global nav_planner, state_estimator, DEBUG_GAIT, ENABLE_LOGGING
+    global BALANCE_ENABLED, balance_controller
     
     # Initialize navigation planner
     nav_planner = SimpleNavigationPlanner(
@@ -1639,7 +1679,6 @@ def interactive_mode():
                 stop_idle_march()
             elif key.lower() == b'c':
                 # Toggle balance control
-                global BALANCE_ENABLED, balance_controller
                 BALANCE_ENABLED = not BALANCE_ENABLED
                 
                 if BALANCE_ENABLED:
@@ -1743,6 +1782,21 @@ def interactive_mode():
                 start_idle_march()
             elif cmd.lower() == 's':
                 stop_idle_march()
+            elif cmd.lower() == 'c':
+                # Toggle balance control
+                BALANCE_ENABLED = not BALANCE_ENABLED
+                if BALANCE_ENABLED:
+                    if balance_controller is None:
+                        balance_controller = BalanceController()
+                    balance_controller.reset()
+                    print(f"\n⚖️  Balance control ENABLED")
+                    print(f"    Roll  PD: Kp={ROLL_K_P:.2f}, Kd={ROLL_K_D:.3f}")
+                    print(f"    Pitch PD: Kp={PITCH_K_P:.2f}, Kd={PITCH_K_D:.3f}")
+                    print(f"    Max offset: ±{MAX_HEIGHT_OFFSET:.0f} mm")
+                    if not (imu_reader and imu_reader.is_receiving_data()):
+                        print("    ⚠️  WARNING: IMU not available - balance will not work!")
+                else:
+                    print(f"\n🛑 Balance control DISABLED")
             elif cmd.lower() == 'z':
                 if imu_reader and imu_reader.is_connected():
                     print("\n🧭 Setting IMU zero reference...")
