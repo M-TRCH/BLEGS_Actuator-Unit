@@ -170,7 +170,8 @@ GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE  # seconds per gait cycle
 
 # Logging parameters
 ENABLE_LOGGING = True      # Enable data logging to file
-LOG_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "logs")  # Absolute path to logs/
+# Prefer an absolute, normalized logs directory at workspace root.
+LOG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'logs'))
 LOG_RATE = 10               # Log every N control cycles
 
 # Simulation mode (auto-detected if no motors found)
