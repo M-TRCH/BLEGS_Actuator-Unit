@@ -1,23 +1,23 @@
 """
 AR-Tag-5Bar-Linkage.py
 ======================
-วิเคราะห์ไฟล์วิดีโอ ตรวจจับ ArUco Markers (ID 1–4)
-วาด overlay โครงสร้าง Separated 5-Bar Linkage + คำนวณจุด E
+Process a video file to detect ArUco markers (IDs 1–4) and overlay a
+separated 5-bar linkage. Computes the end-effector point E in pixel
+space using calibrated link-ratios.
 
-ID ↔ จุด IK:
-    ID 1 = A  (ข้อต่อมอเตอร์ A)
-    ID 2 = B  (ข้อต่อมอเตอร์ B)
-    ID 3 = C  (ปลายลิงก์ AC – 105 mm)
-    ID 4 = D  (ปลายลิงก์ BD – 105 mm)
-    E = คำนวณใน pixel-space  (circle-intersection C(145) ∩ D(145))
-        โดย radius calibrated จาก pixel-distance ของ AC และ BD
-        (ratio 145/105 ของ link ที่วัดได้)
+Marker ↔ Kinematic points:
+    ID 1 = A  (motor joint A)
+    ID 2 = B  (motor joint B)
+    ID 3 = C  (end of link AC – 105 mm)
+    ID 4 = D  (end of link BD – 105 mm)
+    E = computed in pixel-space (circle-intersection C(145) ∩ D(145))
+        radius calibrated from measured AC/BD pixel distances (ratio 145/105)
 
 Controls:
-    [Space]  หยุด / เล่นต่อ
-    [→] / d  กระโดดหน้า 5 วิ
-    [←] / a  ถอยหลัง 5 วิ
-    [q]      ออก
+    [Space]  Pause / Play
+    [→] / d  Jump forward 5 s
+    [←] / a  Jump back 5 s
+    [q]      Quit
 """
 
 import cv2
@@ -25,10 +25,11 @@ import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
 import time
 import sys
 import os
+import threading
+import collections
 import tkinter as tk
 from tkinter import filedialog
 
@@ -72,6 +73,10 @@ L_DE = 145.0   # = (145/105) × L_BD
 # ID → ชื่อจุด IK
 ID_TO_POINT = {1: 'A', 2: 'B', 3: 'C', 4: 'D'}
 
+# ─── Performance flags ──────────────────────────────────────
+RUN_PNP         = False   # True = เปิด solvePnP + drawFrameAxes (ช้า)
+DETECT_INTERVAL = 1       # detect ทุก N เฟรม (1 = ทุกเฟรม, 2 = ครึ่ง)
+
 # ─────────────────────────────────────────────────────────────
 # 4. สี / สไตล์ภาพ overlay
 # ─────────────────────────────────────────────────────────────
@@ -101,10 +106,10 @@ calib_file = os.path.join(script_dir, "camera_calibration",
 try:
     calib_data    = np.load(calib_file)
     camera_matrix = calib_data["mtx"]
-    print(f"โหลด Camera Parameters จาก: {calib_file}")
+    print(f"Loaded camera parameters from: {calib_file}")
 except FileNotFoundError:
-    print(f"⚠  ไม่พบไฟล์ calibration: {calib_file}")
-    print("   ใช้ค่า default 1920×1080 – ความแม่นยำต่ำ")
+    print(f"⚠  Calibration file not found: {calib_file}")
+    print("   Using default 1920×1080 – lower accuracy")
     camera_matrix = np.array([[1400., 0., 960.],
                                [0., 1400., 540.],
                                [0.,    0.,   1.]], dtype=np.float64)
@@ -238,10 +243,10 @@ else:
     root.destroy()
 
 if not video_path or not os.path.isfile(video_path):
-    print("ไม่ได้เลือกไฟล์หรือไม่พบไฟล์ – ออกจากโปรแกรม")
+    print("No file selected or file not found — exiting")
     sys.exit(1)
 
-print(f"\nไฟล์วิดีโอ: {video_path}")
+print(f"\nVideo file: {video_path}")
 
 cap = cv2.VideoCapture(video_path)
 if not cap.isOpened():
@@ -252,13 +257,31 @@ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 video_fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
 vid_w        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 vid_h        = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-print(f"ความละเอียด: {vid_w}×{vid_h}  |  FPS: {video_fps:.1f}  |  เฟรม: {total_frames}")
+print(f"Resolution: {vid_w}×{vid_h}  |  FPS: {video_fps:.1f}  |  Frames: {total_frames}")
 
 DISPLAY_SCALE = min(1280 / vid_w, 720 / vid_h, 1.0)
 disp_w        = int(vid_w * DISPLAY_SCALE)
 disp_h        = int(vid_h * DISPLAY_SCALE)
 DETECTION_SCALE = 0.5
-PLAYBACK_DELAY  = max(1, int(1000 / video_fps))
+frame_period    = 1.0 / video_fps   # ← real-time sync (วินาทีต่อเฟรม)
+
+# ─── Threaded video reader ──────────────────────────────────
+# อ่านเฟรมล่วงหน้าใน thread แยก เพื่อไม่ให้ decode block main loop
+_frame_q    = collections.deque(maxlen=8)
+_reader_run = True
+
+def _reader_thread(cap_obj):
+    global _reader_run
+    while _reader_run:
+        ret, frm = cap_obj.read()
+        if not ret:
+            _frame_q.append(None)   # sentinel = จบวิดีโอ
+            break
+        _frame_q.append(frm)
+        # หากคิวเต็ม deque จะทิ้งเฟรมเก่าเอง (maxlen)
+
+_reader_t = threading.Thread(target=_reader_thread, args=(cap,), daemon=True)
+_reader_t.start()
 
 # ─────────────────────────────────────────────────────────────
 # 8. แปลง pixel → robot mm frame
@@ -348,7 +371,14 @@ fig_rob.canvas.draw()
 plt.pause(0.001)
 
 _last_plot_t   = time.time()
-_PLOT_INTERVAL = 0.08   # วินาที
+_PLOT_INTERVAL = 0.15   # วินาที (ลด redraw → เร็วขึ้น)
+
+# ─── Blitting: จำ background เพื่อ restore แทน full redraw ────
+fig_rob.canvas.draw()
+_blit_bg = fig_rob.canvas.copy_from_bbox(ax_rob.bbox)
+_blit_artists = (list(_rob_pts.values())
+                 + list(_rob_lbls.values())
+                 + list(_rob_segs.values()))
 
 
 def update_robot_plot(rob_pts):
@@ -380,71 +410,97 @@ def update_robot_plot(rob_pts):
         else:
             seg.set_data([], [])
 
-    ax_rob.relim()
-    fig_rob.canvas.draw_idle()
+    # ─── blit: เร็วกว่า full draw_idle 5–10× ─────────────
+    fig_rob.canvas.restore_region(_blit_bg)
+    for art in _blit_artists:
+        ax_rob.draw_artist(art)
+    fig_rob.canvas.blit(ax_rob.bbox)
     fig_rob.canvas.flush_events()
 
 
 # ─────────────────────────────────────────────────────────────
-# 10. Loop หลัก
+# 10. Loop หลัก  (real-time sync + threaded read)
 # ─────────────────────────────────────────────────────────────
-frame_idx   = 0
-paused      = False
-seek_step   = int(video_fps * 5)
-frame       = None
-last_pts_px = {}   # จุดในหน้าจอของเฟรมล่าสุด ไว้แสดงขณะ PAUSED
+frame_idx     = 0
+paused        = False
+seek_step     = int(video_fps * 5)
+frame         = None
+last_pts_px   = {}   # จุดในหน้าจอของเฟรมล่าสุด ไว้แสดงขณะ PAUSED
+detect_ctr    = 0    # นับเฟรมเพื่อ skip detection
 
-print("\n[Space] หยุด/เล่น  |  [→/d] ไปหน้า 5 วิ  |  [←/a] ถอยหลัง 5 วิ  |  [q] ออก\n")
+# FPS counter
+_fps_t0       = time.perf_counter()
+_fps_cnt      = 0
+_fps_display  = 0.0
+
+# Real-time sync: wall-clock ที่เฟรมแรกเริ่มเล่น
+_play_t0      = None
+
+print("\n[Space] Pause/Play  |  [→/d] Forward 5s  |  [←/a] Back 5s  |  [q] Quit\n")
 
 while True:
+    # ── อ่านเฟรมจาก threaded queue ──────────────────────────
     if not paused:
-        ret, frame = cap.read()
-        if not ret:
-            print("สิ้นสุดวิดีโอ")
+        # ดึงเฟรมล่าสุดจาก deque (ข้ามเฟรมเก่าเพื่อ sync real-time)
+        new_frame = None
+        while _frame_q:
+            new_frame = _frame_q.popleft()
+        if new_frame is None and not _reader_t.is_alive():
+            print("End of video")
             break
-        frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+        if new_frame is not None:
+            frame = new_frame
+            frame_idx += 1
+            if _play_t0 is None:
+                _play_t0 = time.perf_counter()
 
     if frame is None:
+        cv2.waitKey(1)
         continue
 
     timestamp = frame_idx / video_fps
 
-    # ── detect ──────────────────────────────────────────────
-    if DETECTION_SCALE < 1.0:
-        small = cv2.resize(frame, None, fx=DETECTION_SCALE, fy=DETECTION_SCALE,
-                           interpolation=cv2.INTER_LINEAR)
-        gray  = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    else:
-        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # ── detect (อาจ skip ตาม DETECT_INTERVAL) ──────────────
+    detect_ctr += 1
+    run_detect = (detect_ctr % DETECT_INTERVAL == 0)
 
-    corners, ids, _ = detector.detectMarkers(gray)
-    if DETECTION_SCALE < 1.0 and corners:
-        corners = [c / DETECTION_SCALE for c in corners]
-
-    # ── pose estimation per tag ──────────────────────────────
     pts_px   = {}   # name → (u, v) pixel center
     tvec_3d  = {}   # name → tvec ravel  (for HUD depth display)
 
-    if ids is not None:
-        cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+    if run_detect:
+        if DETECTION_SCALE < 1.0:
+            small = cv2.resize(frame, None, fx=DETECTION_SCALE, fy=DETECTION_SCALE,
+                               interpolation=cv2.INTER_LINEAR)
+            gray  = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        else:
+            gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        for i, corner in enumerate(corners):
-            mid = int(ids[i][0])
-            if mid not in ID_TO_POINT:
-                continue
-            pt_name = ID_TO_POINT[mid]
+        corners, ids, _ = detector.detectMarkers(gray)
+        if DETECTION_SCALE < 1.0 and corners:
+            corners = [c / DETECTION_SCALE for c in corners]
 
-            center             = corner[0].mean(axis=0).astype(np.int32)
-            pts_px[pt_name]    = tuple(center)
+        if ids is not None:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
 
-            ok, rvec, tvec = cv2.solvePnP(
-                OBJ_POINTS, corner[0],
-                camera_matrix, dist_coeffs,
-                flags=cv2.SOLVEPNP_IPPE_SQUARE,
-            )
-            if ok:
-                tvec_3d[pt_name] = tvec.ravel()
-                cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, 0.02)
+            for i, corner in enumerate(corners):
+                mid_id = int(ids[i][0])
+                if mid_id not in ID_TO_POINT:
+                    continue
+                pt_name = ID_TO_POINT[mid_id]
+
+                center          = corner[0].mean(axis=0).astype(np.int32)
+                pts_px[pt_name] = tuple(center)
+
+                if RUN_PNP:
+                    ok, rvec, tvec = cv2.solvePnP(
+                        OBJ_POINTS, corner[0],
+                        camera_matrix, dist_coeffs,
+                        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+                    )
+                    if ok:
+                        tvec_3d[pt_name] = tvec.ravel()
+                        cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs,
+                                          rvec, tvec, 0.02)
 
     # ── คำนวณ E ใน pixel-space ──────────────────────────────
     E_px = None
@@ -500,13 +556,25 @@ while True:
                     POINT_COLOR['E'], 1, cv2.LINE_AA)
         hud_y += 20
 
-    # แสดง Z depth ของแต่ละ tag
-    for name in ('A', 'B', 'C', 'D'):
-        if name in tvec_3d:
-            cv2.putText(frame, f"{name}:Z={tvec_3d[name][2]:.3f}m",
-                        (8, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
-                        POINT_COLOR[name], 1, cv2.LINE_AA)
-            hud_y += 20
+    # แสดง Z depth ของแต่ละ tag (เฉพาะ RUN_PNP)
+    if RUN_PNP:
+        for name in ('A', 'B', 'C', 'D'):
+            if name in tvec_3d:
+                cv2.putText(frame, f"{name}:Z={tvec_3d[name][2]:.3f}m",
+                            (8, hud_y), cv2.FONT_HERSHEY_SIMPLEX, 0.44,
+                            POINT_COLOR[name], 1, cv2.LINE_AA)
+                hud_y += 20
+
+    # ── FPS counter ─────────────────────────────────────────
+    _fps_cnt += 1
+    _fps_now  = time.perf_counter()
+    if _fps_now - _fps_t0 >= 1.0:
+        _fps_display = _fps_cnt / (_fps_now - _fps_t0)
+        _fps_cnt     = 0
+        _fps_t0      = _fps_now
+    cv2.putText(frame, f"FPS: {_fps_display:.0f}",
+                (vid_w - 160, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (0, 255, 0), 2, cv2.LINE_AA)
 
     if paused:
         cv2.putText(frame, "PAUSED", (vid_w // 2 - 90, vid_h // 2),
@@ -530,30 +598,60 @@ while True:
     display = cv2.resize(frame, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
     cv2.imshow("5-Bar Linkage – AR Tag  (Space / a / d / q)", display)
 
-    # ── keyboard ─────────────────────────────────────────────
-    key = cv2.waitKey(1 if paused else PLAYBACK_DELAY) & 0xFF
+    # ── real-time sync: waitKey เท่าที่เวลาเหลือ ────────────
+    if paused:
+        wait_ms = 0   # block จนกว่าจะกดปุ่ม
+    elif _play_t0 is not None:
+        elapsed   = time.perf_counter() - _play_t0
+        ideal     = frame_idx * frame_period
+        remaining = ideal - elapsed
+        wait_ms   = max(1, int(remaining * 1000))
+    else:
+        wait_ms = 1
+
+    key = cv2.waitKey(wait_ms) & 0xFF
     if key == ord('q'):
         break
     elif key == ord(' '):
         paused = not paused
+        if not paused:
+            # reset sync clock หลัง unpause
+            _play_t0 = time.perf_counter() - frame_idx * frame_period
     elif key in (83, ord('d')):   # →
+        _reader_run = False
+        _reader_t.join(timeout=0.5)
         frame_idx = min(frame_idx + seek_step, total_frames - 1)
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        _frame_q.clear()
+        # อ่าน 1 เฟรมใหม่ใน main thread ก่อน restart reader
         ret, frame = cap.read()
         if not ret:
             break
+        _reader_run = True
+        _reader_t = threading.Thread(target=_reader_thread, args=(cap,), daemon=True)
+        _reader_t.start()
+        _play_t0 = time.perf_counter() - frame_idx * frame_period
     elif key in (81, ord('a')):   # ←
+        _reader_run = False
+        _reader_t.join(timeout=0.5)
         frame_idx = max(frame_idx - seek_step, 0)
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        _frame_q.clear()
         ret, frame = cap.read()
         if not ret:
             break
+        _reader_run = True
+        _reader_t = threading.Thread(target=_reader_thread, args=(cap,), daemon=True)
+        _reader_t.start()
+        _play_t0 = time.perf_counter() - frame_idx * frame_period
 
 # ─────────────────────────────────────────────────────────────
 # 11. ปิด
 # ─────────────────────────────────────────────────────────────
+_reader_run = False
+_reader_t.join(timeout=1.0)
 cap.release()
 cv2.destroyAllWindows()
 plt.ioff()
 plt.show()
-print("ปิดโปรแกรม")
+print("Exiting program")
