@@ -30,6 +30,7 @@ import sys
 import os
 import threading
 import collections
+import csv
 import tkinter as tk
 from tkinter import filedialog
 
@@ -259,6 +260,16 @@ vid_w        = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 vid_h        = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 print(f"Resolution: {vid_w}×{vid_h}  |  FPS: {video_fps:.1f}  |  Frames: {total_frames}")
 
+# ─── CSV log setup ───────────────────────────────────────────────────────────
+_log_stamp  = time.strftime("%Y%m%d_%H%M%S")
+_log_name   = os.path.splitext(os.path.basename(video_path))[0]
+_log_path   = os.path.join(os.path.dirname(video_path),
+                           f"{_log_name}_linkage_{_log_stamp}.csv")
+_log_file   = open(_log_path, "w", newline="", encoding="utf-8")
+_log_writer = csv.writer(_log_file)
+_log_writer.writerow(["timestamp_s", "frame", "E_x_mm", "E_y_mm"])
+print(f"Logging to: {_log_path}")
+
 DISPLAY_SCALE = min(1280 / vid_w, 720 / vid_h, 1.0)
 disp_w        = int(vid_w * DISPLAY_SCALE)
 disp_h        = int(vid_h * DISPLAY_SCALE)
@@ -273,12 +284,12 @@ _reader_run = True
 def _reader_thread(cap_obj):
     global _reader_run
     while _reader_run:
+        pos_ms = cap_obj.get(cv2.CAP_PROP_POS_MSEC)   # video timestamp of next frame
         ret, frm = cap_obj.read()
         if not ret:
-            _frame_q.append(None)   # sentinel = จบวิดีโอ
+            _frame_q.append(None)   # sentinel = end of video
             break
-        _frame_q.append(frm)
-        # หากคิวเต็ม deque จะทิ้งเฟรมเก่าเอง (maxlen)
+        _frame_q.append((frm, pos_ms))
 
 _reader_t = threading.Thread(target=_reader_thread, args=(cap,), daemon=True)
 _reader_t.start()
@@ -441,16 +452,17 @@ print("\n[Space] Pause/Play  |  [→/d] Forward 5s  |  [←/a] Back 5s  |  [q] Q
 while True:
     # ── อ่านเฟรมจาก threaded queue ──────────────────────────
     if not paused:
-        # ดึงเฟรมล่าสุดจาก deque (ข้ามเฟรมเก่าเพื่อ sync real-time)
-        new_frame = None
+        # Drain deque — keep only the latest item to stay in real-time sync
+        new_item = None
         while _frame_q:
-            new_frame = _frame_q.popleft()
-        if new_frame is None and not _reader_t.is_alive():
+            new_item = _frame_q.popleft()
+        if new_item is None and not _reader_t.is_alive():
             print("End of video")
             break
-        if new_frame is not None:
-            frame = new_frame
-            frame_idx += 1
+        if new_item is not None:
+            frame, _pos_ms = new_item
+            timestamp  = _pos_ms / 1000.0
+            frame_idx  = int(round(_pos_ms * video_fps / 1000.0))
             if _play_t0 is None:
                 _play_t0 = time.perf_counter()
 
@@ -458,7 +470,8 @@ while True:
         cv2.waitKey(1)
         continue
 
-    timestamp = frame_idx / video_fps
+    # timestamp and frame_idx are set when a new frame arrives;
+    # in paused state they retain the values from the last displayed frame.
 
     # ── detect (อาจ skip ตาม DETECT_INTERVAL) ──────────────
     detect_ctr += 1
@@ -521,6 +534,11 @@ while True:
                 if r is not None:
                     rob_pts[name] = r
         update_robot_plot(rob_pts)
+        # ─── write log row when E is visible ────────────────
+        if 'E' in rob_pts:
+            ex, ey = rob_pts['E']
+            _log_writer.writerow([f"{timestamp:.4f}", frame_idx,
+                                   f"{ex:.3f}", f"{ey:.3f}"])
 
     # ── อัปเดต last_pts_px และวาด linkage ─────────────────
     if pts_px:
@@ -652,6 +670,8 @@ _reader_run = False
 _reader_t.join(timeout=1.0)
 cap.release()
 cv2.destroyAllWindows()
+_log_file.close()
+print(f"Log saved: {_log_path}")
 plt.ioff()
 plt.show()
 print("Exiting program")
