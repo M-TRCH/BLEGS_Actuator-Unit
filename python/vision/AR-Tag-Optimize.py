@@ -38,7 +38,7 @@ OBJ_POINTS = np.array([
 # ใช้ path แบบ absolute หรือ relative จากตำแหน่งสคริปต์
 import os
 script_dir = os.path.dirname(os.path.abspath(__file__))
-calib_file = os.path.join(script_dir, "camera_calibration", "camera_params_sigma35f14dgdn_1080p60.npz")
+calib_file = os.path.join(script_dir, "camera_calibration", "params_sigma35f14dgdn_ff_1080p60.npz")
 
 try:
     calib_data = np.load(calib_file)
