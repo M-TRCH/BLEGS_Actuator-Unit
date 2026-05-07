@@ -1,44 +1,54 @@
 import cv2
 import numpy as np
-import os
 
-# --- ตั้งค่า Marker ---
-# เลือก Dictionary (ตระกูลของ Tag)
-# DICT_6X6_250 คือตระกูลที่มี 250 Tag ขนาด 6x6 blocks
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+# ==========================================
+# 1. การตั้งค่าพารามิเตอร์ (Parameters)
+# ==========================================
+# เลือก Dictionary ที่จะใช้ (แนะนำ DICT_6X6_250 สำหรับงาน Tracking)
+ARUCO_DICT = cv2.aruco.DICT_6X6_250
 
-# เลือก ID ของ Marker (เลือกได้ 0-249)
-marker_id = 7 
+# ระบุ ID ของ Marker ที่ต้องการสร้าง (เราจะสร้าง ID: 0 ถึง 4 สำหรับจุด A, B, C, D, E)
+MARKER_IDS = [0, 1, 2, 3, 4] 
 
-# ขนาดของภาพ Marker ที่จะสร้าง (pixels)
-img_size = 600 
-#------------------------
+# ตั้งค่าความละเอียดพิกเซล (Pixels)
+# เพื่อให้พิมพ์ออกมาแล้วคมชัด เราจะเซ็ตความละเอียดให้สูงๆ (เช่น 300 DPI)
+# ขนาดจริง 46 มม. = 1.81 นิ้ว -> 1.81 * 300 DPI ≈ 543 Pixels
+IMAGE_SIZE_PX = 600  # ขนาดของภาพรวมทั้งหมด (พิกเซล)
 
-# สร้าง Marker
-marker_image = np.zeros((img_size, img_size), dtype=np.uint8)
-marker_image = cv2.aruco.generateImageMarker(aruco_dict, marker_id, img_size, marker_image, 1)
+# ขนาดของ Marker สีดำตรงกลาง
+# ต้องเว้นขอบขาวไว้ให้ OpenCV จับขอบ (Edge) ได้ง่าย
+MARKER_SIZE_PX = 400 # ขนาดของส่วนสีดำตรงกลาง (เว้นขอบขาวไว้ข้างละ 100 พิกเซล)
 
-# สร้างชื่อไฟล์ตาม Dictionary, ขนาด, และ ID
-dict_name = "6X6_250"  # ชื่อของ Dictionary ที่ใช้
-filename = f"aruco_{dict_name}_size{img_size}_id{marker_id}.png"
+# ==========================================
+# 2. การสร้างภาพ (Generation)
+# ==========================================
+# ดึง Dictionary
+dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
 
-# หา path ของไฟล์ Python ปัจจุบัน
-script_dir = os.path.dirname(os.path.abspath(__file__))
+for marker_id in MARKER_IDS:
+    # 2.1 สร้างภาพพื้นหลังสีขาวล้วนขนาด 600x600 พิกเซล
+    # (np.ones จะได้ค่า 1, แล้วคูณ 255 เพื่อให้เป็นสีขาว)
+    bg_image = np.ones((IMAGE_SIZE_PX, IMAGE_SIZE_PX), dtype=np.uint8) * 255
+    
+    # 2.2 สร้าง ArUco Marker เฉพาะส่วนสีดำ
+    marker_image = cv2.aruco.generateImageMarker(dictionary, marker_id, MARKER_SIZE_PX)
+    
+    # 2.3 คำนวณจุดที่จะวาง Marker สีดำลงไปตรงกลางแผ่นสีขาว
+    start_point = (IMAGE_SIZE_PX - MARKER_SIZE_PX) // 2
+    end_point = start_point + MARKER_SIZE_PX
+    
+    # 2.4 นำ Marker สีดำ ไปแปะทับลงบนพื้นหลังสีขาว
+    bg_image[start_point:end_point, start_point:end_point] = marker_image
+    
+    # ==========================================
+# 3. บันทึกเป็นไฟล์ (Save to File)
+# ==========================================
+    # ตีกรอบเส้นสีเทาบางๆ รอบขอบนอกสุด (เผื่อใช้เป็นเส้นไกด์ตอนใช้กรรไกรตัด)
+    cv2.rectangle(bg_image, (0, 0), (IMAGE_SIZE_PX-1, IMAGE_SIZE_PX-1), (200, 200, 200), 2)
+    
+    filename = f"ArUco_ID{marker_id}_46x46mm.png"
+    cv2.imwrite(filename, bg_image)
+    print(f"✅ สร้างไฟล์สำเร็จ: {filename}")
 
-# สร้างโฟลเดอร์ tag_images ในโฟลเดอร์เดียวกันกับไฟล์ Python
-output_dir = os.path.join(script_dir, "tag_images")
-os.makedirs(output_dir, exist_ok=True)
-
-# สร้างเส้นทางไฟล์เต็ม
-filepath = os.path.join(output_dir, filename)
-
-# บันทึกเป็นไฟล์
-cv2.imwrite(filepath, marker_image)
-
-print(f"สร้าง Marker ID={marker_id} ขนาด {img_size}x{img_size} pixels")
-print(f"บันทึกเป็นไฟล์ '{filepath}' เรียบร้อย")
-
-# แสดงผล (กด q เพื่อปิด)
-cv2.imshow("ArUco Marker", marker_image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+print("\n🎉 สร้าง Marker ทั้งหมดเสร็จสิ้นแล้ว!")
+print("💡 วิธีพิมพ์: ตอนสั่งพิมพ์ ให้เลือก 'Actual Size' หรือพิมพ์ให้ภาพมีขนาด 4.6 x 4.6 เซนติเมตรเป๊ะๆ นะครับ")
