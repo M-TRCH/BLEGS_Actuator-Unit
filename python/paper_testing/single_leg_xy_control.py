@@ -983,6 +983,9 @@ def run_interactive(leg: SingleLegController):
                         tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
                         print(f"  Grid ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
                         leg.move_to(tx, ty)
+                        # รอให้มอเตอร์เคลื่อนที่เสร็จแล้วอ่าน feedback
+                        time.sleep(max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2))
+                        leg.print_status()
                 except FileNotFoundError:
                     print(f"  ❌ ไม่พบไฟล์: {GRID_FILE}")
                 except Exception as _e:
