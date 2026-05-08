@@ -10,20 +10,20 @@ with integrated body balance stabilization based on the hierarchical control arc
 Architecture:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    HIGH-LEVEL LAYER (10-50 Hz)                  │
-│               SimpleNavigationPlanner (move_relative)            │
+│               SimpleNavigationPlanner (move_relative)           │
 ├─────────────────────────────────────────────────────────────────┤
 │                     MID-LEVEL LAYER (50 Hz)                     │
 │  Gait Generator + Balance Controller + IK (5-Bar) + Yaw Control │
 │                                                                 │
-│  - Bezier curve trajectory generation (forward/backward)       │
-│  - Roll & Pitch stabilization (IMU-based PD control)           │
+│  - Bezier curve trajectory generation (forward/backward)        │
+│  - Roll & Pitch stabilization (IMU-based PD control)            │
 │  - Differential stepping for yaw correction                     │
 │  - Per-leg height offset computation                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                     LOW-LEVEL LAYER (5 kHz)                     │
 │              Motor Control (FOC/SVPWM) - Firmware               │
 ├─────────────────────────────────────────────────────────────────┤
-│                       FEEDBACK LOOP                              │
+│                       FEEDBACK LOOP                             │
 │              IMU (Roll, Pitch, Yaw) + Dead Reckoning            │
 └─────────────────────────────────────────────────────────────────┘
 
