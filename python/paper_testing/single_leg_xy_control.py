@@ -792,7 +792,7 @@ HELP_TEXT = """
   s            สลับ profile: S-Curve ↔ Direct
   scan         แสดง COM ports ที่มีอยู่
   grid         รันการทดสอบไล่ตำแหน่งตาม calibration_grid.csv (ทุกจุดตามลำดับ)
-  grid N       เริ่มที่ point_id = N  เช่น  grid 10
+  grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -964,11 +964,32 @@ def run_interactive(leg: SingleLegController):
             for p in ports:
                 print(f"    • {p}")
 
-        # ─── Grid sweep ──────────────────────────────────────────────
+        # ─── Grid sweep / single point ────────────────────────────────
         elif cmd == 'grid' or cmd.startswith('grid '):
-            parts   = cmd.split()
-            start_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-            run_grid_sweep(leg, start_id=start_id)
+            parts = cmd.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                # grid N → เคลื่อนไปจุดเดียว
+                target_id = int(parts[1])
+                import csv as _csv
+                try:
+                    with open(GRID_FILE, newline='', encoding='utf-8') as _f:
+                        _row = next(
+                            (r for r in _csv.DictReader(_f) if int(r['point_id']) == target_id),
+                            None
+                        )
+                    if _row is None:
+                        print(f"  ⚠️  ไม่พบ point_id={target_id} ใน {GRID_FILE}")
+                    else:
+                        tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
+                        print(f"  Grid ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
+                        leg.move_to(tx, ty)
+                except FileNotFoundError:
+                    print(f"  ❌ ไม่พบไฟล์: {GRID_FILE}")
+                except Exception as _e:
+                    print(f"  ❌ โหลด CSV ล้มเหลว: {_e}")
+            else:
+                # grid → sweep ทุกจุด
+                run_grid_sweep(leg)
 
         # ─── Emergency Stop ──────────────────────────────────────────
         elif cmd in ('e', 'estop', 'stop'):
