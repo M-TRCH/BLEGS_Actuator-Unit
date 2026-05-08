@@ -85,6 +85,10 @@ GRID_FILE = r'C:\Users\mteer\OneDrive\Desktop\calibration_grid.csv'
 GRID_DWELL_S = 1.5          # เวลาหยุดที่แต่ละจุด (วินาที) ในโหมด auto
 GRID_AUTO = True            # True = auto advance, False = กด Enter เพื่อไปจุดถัดไป
 
+# Capture mode
+CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
+CAPTURE_TIMEOUT_S = 20.0    # วินาที รอไฟล์รูปใหม่ก่อน timeout
+
 # ============================================================================
 # PROTOCOL / COMMUNICATION CONSTANTS
 # ============================================================================
@@ -793,6 +797,7 @@ HELP_TEXT = """
   scan         แสดง COM ports ที่มีอยู่
   grid         รันการทดสอบไล่ตำแหน่งตาม calibration_grid.csv (ทุกจุดตามลำดับ)
   grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
+  capture N    เหมือน grid N แต่รอรับรูปใน capture_image แล้วเปลี่ยนชื่อพร้อมข้อมูลตำแหน่ง
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -814,6 +819,195 @@ def parse_xy(text: str) -> tuple[float, float] | None:
     except ValueError:
         pass
     return None
+
+
+# ============================================================================
+# CAPTURE MODE
+# ============================================================================
+
+_IMAGE_EXTS = {
+    '.jpg', '.JPG', '.png', '.bmp', '.tiff', '.tif', '.webp',
+    '.heic', '.heif', '.raw', '.dng', '.cr2', '.cr3', '.nef',
+    '.arw', '.orf', '.rw2', '.pef', '.srw',
+}
+
+
+def _snapshot_files(folder: str) -> set:
+    """คืน set ของชื่อไฟล์ทั้งหมดใน folder (ไม่กรอง extension)"""
+    try:
+        return {f for f in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, f))}
+    except FileNotFoundError:
+        return set()
+
+
+def _is_image(filename: str) -> bool:
+    """ตรวจว่าชื่อไฟล์มี extension เป็นรูปภาพ (case-insensitive)"""
+    return os.path.splitext(filename)[1].lower() in _IMAGE_EXTS
+
+
+def _wait_for_new_image(folder: str, known: set, timeout_s: float) -> str | None:
+    """
+    รอไฟล์รูปใหม่ใน folder → คืน full path หรือ None ถ้า timeout
+    - known: snapshot ของไฟล์ทั้งหมด (จาก _snapshot_files) ก่อนเริ่มรอ
+    - กรอง image extension ที่ระดับนี้ เพื่อไม่พลาดนามสกุลตัวพิมพ์ใหญ่
+    """
+    deadline = time.time() + timeout_s
+    last_print = 0.0
+    while time.time() < deadline:
+        current = _snapshot_files(folder)
+        new_images = {f for f in current - known if _is_image(f)}
+        if new_images:
+            return os.path.join(folder, sorted(new_images)[0])
+        # แสดง countdown ทุก 5 วินาที
+        now = time.time()
+        if now - last_print >= 5.0:
+            remaining = deadline - now
+            print(f"     รอ... {remaining:.0f} s  (ไฟล์ใน folder: {len(current)})", flush=True)
+            last_print = now
+        time.sleep(0.3)
+    return None
+
+
+def _angle_fmt(v: float) -> str:
+    """
+    ฟอร์แมตมุม (degrees) สำหรับชื่อไฟล์ — ใช้อักขระที่ Windows รองรับ
+    ตัวอย่าง:  +15.0 → 'p15p0'   -63.5 → 'n63p5'   nan → 'nan'
+    """
+    if np.isnan(v):
+        return 'nan'
+    sign = 'p' if v >= 0 else 'n'
+    return f"{sign}{abs(v):.1f}".replace('.', 'p')
+
+
+def run_capture_point(
+    leg: 'SingleLegController',
+    target_id: int,
+    csv_path: str = GRID_FILE,
+    capture_dir: str = CAPTURE_DIR,
+    capture_timeout_s: float = CAPTURE_TIMEOUT_S,
+) -> bool:
+    """
+    เคลื่อนไปยัง point_id = target_id, รับ motor feedback
+    แล้วรอไฟล์รูปใหม่ใน capture_dir และเปลี่ยนชื่อไฟล์ดังนี้:
+
+        p{id:03d}_x{x}_y{y}_cA{tA_cmd}_cB{tB_cmd}_aA{tA_act}_aB{tB_act}{ext}
+
+    โดย  x/y/angle ใช้ _angle_fmt(): +15.0→p15p0, -63.5→n63p5
+    ตัวอย่าง:
+        p010_xp15p0_yn180p0_cAn63p5_cBn85p2_aAn63p1_aBn85p0.jpg
+
+    Returns:
+        True ถ้าสำเร็จทั้งหมด
+    """
+    import csv as _csv
+
+    # ─── โหลดตำแหน่งจาก CSV ──────────────────────────────────────────
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as _f:
+            _row = next(
+                (r for r in _csv.DictReader(_f) if int(r['point_id']) == target_id),
+                None
+            )
+    except FileNotFoundError:
+        print(f"  ❌ ไม่พบไฟล์: {csv_path}")
+        return False
+    except Exception as _e:
+        print(f"  ❌ โหลด CSV ล้มเหลว: {_e}")
+        return False
+
+    if _row is None:
+        print(f"  ⚠️  ไม่พบ point_id={target_id} ใน {csv_path}")
+        return False
+
+    tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
+
+    # ─── เตรียม capture_dir ──────────────────────────────────────────
+    os.makedirs(capture_dir, exist_ok=True)
+    known_images = _snapshot_files(capture_dir)
+
+    # ─── เคลื่อนที่ไปยังตำแหน่ง ─────────────────────────────────────
+    print(f"\n  Capture ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
+    ok = leg.move_to(tx, ty)
+    if not ok:
+        return False
+
+    # บันทึกมุมที่สั่ง (output-shaft, degrees) จาก IK state ล่าสุด
+    if _ik_prev_angles_rad is not None:
+        tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
+        tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
+    else:
+        tA_cmd = tB_cmd = float('nan')
+
+    # ─── รอให้มอเตอร์เสร็จ → รับ feedback จริง ──────────────────────
+    time.sleep(max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2))
+
+    fb_a = leg.motor_a.ping()
+    fb_b = leg.motor_b.ping()
+    leg.motor_a.set_timeout(FAST_TIMEOUT)
+    leg.motor_b.set_timeout(FAST_TIMEOUT)
+
+    tA_act = fb_a['position'] if fb_a else float('nan')
+    tB_act = fb_b['position'] if fb_b else float('nan')
+
+    print("\n  ─── Motor Status ───────────────────────────────")
+    for label, fb in [('A', fb_a), ('B', fb_b)]:
+        if fb:
+            flags = fb['flags']
+            moving  = '🔄' if (flags & 0x01) else '  '
+            at_goal = '🎯' if (flags & 0x04) else '  '
+            error   = '⚠️ ' if (flags & 0x02) else '  '
+            print(f"    Motor {label}: pos={fb['position']:+7.2f}°  "
+                  f"current={fb['current']:5d} mA  "
+                  f"flags=0x{flags:02X}  {moving}{at_goal}{error}")
+        else:
+            print(f"    Motor {label}: ❌ ไม่ได้รับ feedback")
+    print(f"    Cmd   A: {tA_cmd:+.2f}°  B: {tB_cmd:+.2f}°")
+    print(f"    Actual A: {tA_act:+.2f}°  B: {tB_act:+.2f}°")
+    print("  ────────────────────────────────────────────────")
+
+    # ─── รอไฟล์รูปใหม่ ───────────────────────────────────────────────
+    print(f"\n  ⏳ รอไฟล์รูปใหม่ใน {capture_dir}")
+    print(f"     (timeout={capture_timeout_s:.0f} s — ถ่ายรูปหรือ copy ไฟล์เข้าโฟลเดอร์)")
+    new_path = _wait_for_new_image(capture_dir, known_images, capture_timeout_s)
+
+    if new_path is None:
+        print("  ⚠️  ไม่พบไฟล์รูปใหม่ภายใน timeout")
+        return False
+
+    # ─── เปลี่ยนชื่อไฟล์ ─────────────────────────────────────────────
+    ext = os.path.splitext(new_path)[1].lower()
+    new_name = (
+        f"p{target_id:03d}"
+        f"_x{_angle_fmt(tx)}_y{_angle_fmt(ty)}"
+        f"_cA{_angle_fmt(tA_cmd)}_cB{_angle_fmt(tB_cmd)}"
+        f"_aA{_angle_fmt(tA_act)}_aB{_angle_fmt(tB_act)}"
+        f"{ext}"
+    )
+    new_full = os.path.join(capture_dir, new_name)
+
+    # retry loop: รอให้แอปกล้อง/Windows ปล่อย file handle ก่อน rename
+    _RENAME_RETRIES = 10
+    _RENAME_DELAY   = 0.5   # seconds
+    for _attempt in range(_RENAME_RETRIES):
+        try:
+            os.rename(new_path, new_full)
+            print(f"  ✅ {os.path.basename(new_path)}")
+            print(f"     → {new_name}")
+            return True
+        except PermissionError:
+            if _attempt < _RENAME_RETRIES - 1:
+                print(f"     ไฟล์ถูกล็อก รอ {_RENAME_DELAY:.1f}s... ({_attempt + 1}/{_RENAME_RETRIES})",
+                      flush=True)
+                time.sleep(_RENAME_DELAY)
+            else:
+                print(f"  ❌ เปลี่ยนชื่อไฟล์ล้มเหลว: ไฟล์ยังถูกล็อกอยู่หลังจากลอง {_RENAME_RETRIES} ครั้ง")
+                return False
+        except Exception as _e:
+            print(f"  ❌ เปลี่ยนชื่อไฟล์ล้มเหลว: {_e}")
+            return False
+
+    return False
 
 
 def run_grid_sweep(
@@ -963,6 +1157,14 @@ def run_interactive(leg: SingleLegController):
             print(f"\n  COM ports ({len(ports)}):")
             for p in ports:
                 print(f"    • {p}")
+
+        # ─── Capture mode (grid N + image rename) ───────────────────
+        elif cmd.startswith('capture '):
+            parts = cmd.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                run_capture_point(leg, int(parts[1]))
+            else:
+                print("  ⚠️  ใช้งาน: capture N  (N = point_id)")
 
         # ─── Grid sweep / single point ────────────────────────────────
         elif cmd == 'grid' or cmd.startswith('grid '):
