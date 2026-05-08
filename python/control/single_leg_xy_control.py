@@ -80,6 +80,11 @@ EXPECTED_MOTOR_B_ID = None   # e.g. 2
 USE_SCURVE = True           # True = S-Curve smooth, False = Direct position
 SCURVE_DURATION_MS = 500    # ระยะเวลาการเคลื่อนที่แบบ S-Curve (ms)
 
+# Grid sweep (calibration LUT)
+GRID_FILE = r'C:\Users\mteer\OneDrive\Desktop\calibration_grid.csv'
+GRID_DWELL_S = 1.5          # เวลาหยุดที่แต่ละจุด (วินาที) ในโหมด auto
+GRID_AUTO = True            # True = auto advance, False = กด Enter เพื่อไปจุดถัดไป
+
 # ============================================================================
 # PROTOCOL / COMMUNICATION CONSTANTS
 # ============================================================================
@@ -390,29 +395,76 @@ class SingleMotorController:
 # INVERSE KINEMATICS
 # ============================================================================
 
-def _circle_intersect(c1, r1, c2, r2, choose_lower=True) -> np.ndarray:
-    """หาจุดตัดของวงกลม 2 วง → [x, y] หรือ [nan, nan]"""
+def _circle_intersect_both(c1, r1, c2, r2):
+    """หาจุดตัดทั้งสองของวงกลม 2 วง → (p1, p2) หรือ None ถ้าไม่มีจุดตัด"""
     d = np.linalg.norm(c2 - c1)
     if d > (r1 + r2) or d < abs(r1 - r2) or d == 0:
-        return np.array([np.nan, np.nan])
+        return None
     a  = (r1**2 - r2**2 + d**2) / (2 * d)
     h2 = r1**2 - a**2
     if h2 < 0:
-        return np.array([np.nan, np.nan])
-    h   = np.sqrt(h2)
-    vd  = (c2 - c1) / d
-    vp  = np.array([-vd[1], vd[0]])
-    p1  = c1 + a * vd + h * vp
-    p2  = c1 + a * vd - h * vp
-    if choose_lower:
-        return p2 if p2[1] < p1[1] else p1
-    else:
-        return p1 if p1[1] > p2[1] else p2
+        return None
+    h  = np.sqrt(h2)
+    vd = (c2 - c1) / d
+    vp = np.array([-vd[1], vd[0]])
+    return c1 + a*vd + h*vp, c1 + a*vd - h*vp
+
+
+def calculate_fk(theta_A_deg: float, theta_B_deg: float) -> np.ndarray | None:
+    """
+    คำนวณ Forward Kinematics: มุมมอเตอร์ → ตำแหน่งปลายขา E (lower branch)
+
+    Args:
+        theta_A_deg: มุม output-shaft ของ Motor A (degrees)
+        theta_B_deg: มุม output-shaft ของ Motor B (degrees)
+
+    Returns:
+        [x, y] (mm) ตำแหน่งปลายขา (lower E) หรือ None ถ้าไม่มี solution
+    """
+    C = P_A + L_AC * np.array([np.cos(np.deg2rad(theta_A_deg)), np.sin(np.deg2rad(theta_A_deg))])
+    D = P_B + L_BD * np.array([np.cos(np.deg2rad(theta_B_deg)), np.sin(np.deg2rad(theta_B_deg))])
+    pts_E = _circle_intersect_both(C, L_CE, D, L_DE)
+    if pts_E is None:
+        return None
+    # เลือก E ที่อยู่ต่ำกว่า (foot อยู่ใต้มอเตอร์)
+    return pts_E[1] if pts_E[1][1] < pts_E[0][1] else pts_E[0]
+
+
+def _home_ik_reference_rad() -> np.ndarray | None:
+    """
+    คำนวณมุมมอเตอร์ที่ home position (radians) โดยเลือก lower-elbow solution
+    ใช้เป็น reference สำหรับการเลือก IK solution ครั้งแรก
+    """
+    P_E = np.array([HOME_X, HOME_Y], dtype=float)
+    pts_C = _circle_intersect_both(P_A, L_AC, P_E, L_CE)
+    pts_D = _circle_intersect_both(P_B, L_BD, P_E, L_DE)
+    if pts_C is None or pts_D is None:
+        return None
+    C = pts_C[1] if pts_C[1][1] < pts_C[0][1] else pts_C[0]
+    D = pts_D[1] if pts_D[1][1] < pts_D[0][1] else pts_D[0]
+    tA = np.arctan2((C - P_A)[1], (C - P_A)[0])
+    tB = np.arctan2((D - P_B)[1], (D - P_B)[0])
+    return np.array([tA, tB])
+
+
+# IK continuity state — เก็บในหน่วย radians (เหมือน test_quadruped_control.py)
+# reset เป็น None เมื่อเรียก go_init() เพื่อให้ครั้งถัดไปอ้างอิง home
+_ik_prev_angles_rad: np.ndarray | None = None
 
 
 def calculate_ik(target_xy: np.ndarray) -> tuple[float, float] | None:
     """
     คำนวณ Inverse Kinematics สำหรับ Five-Bar linkage (ไม่มี EF link)
+
+    ใช้อัลกอริทึมเดียวกับ test_quadruped_control.py:
+    - ประเมิน 4 elbow configurations ทุกครั้ง
+    - เลือก solution ที่มี angular distance ต่ำสุด (radians, wrap-around)
+    - ครั้งแรก (หรือหลัง reset): เทียบกับ home reference angles
+    - ครั้งถัดไป: เทียบกับมุมก่อนหน้า (continuity)
+
+    หมายเหตุ: FK validation ไม่สามารถ discriminate IK solutions ได้
+    เนื่องจาก target E อยู่บน arm circles ของทุก candidate เสมอ
+    วิธีที่เชื่อถือได้คือ angle continuity เท่านั้น
 
     Args:
         target_xy: [x, y] ตำแหน่งปลายขา (mm) ในระบบพิกัดขา
@@ -421,20 +473,56 @@ def calculate_ik(target_xy: np.ndarray) -> tuple[float, float] | None:
         (theta_A_deg, theta_B_deg) มุมมอเตอร์ (output-shaft, degrees)
         หรือ None ถ้าไม่มี solution
     """
+    global _ik_prev_angles_rad
+
     P_E = np.array(target_xy, dtype=float)
 
-    P_C = _circle_intersect(P_A, L_AC, P_E, L_CE, choose_lower=True)
-    if np.isnan(P_C).any():
+    pts_C = _circle_intersect_both(P_A, L_AC, P_E, L_CE)
+    if pts_C is None:
         return None
 
-    P_D = _circle_intersect(P_B, L_BD, P_E, L_DE, choose_lower=True)
-    if np.isnan(P_D).any():
+    pts_D = _circle_intersect_both(P_B, L_BD, P_E, L_DE)
+    if pts_D is None:
         return None
 
-    theta_A_rad = np.arctan2((P_C - P_A)[1], (P_C - P_A)[0])
-    theta_B_rad = np.arctan2((P_D - P_B)[1], (P_D - P_B)[0])
+    # กำหนด reference (radians)
+    if _ik_prev_angles_rad is None:
+        ref = _home_ik_reference_rad()
+        if ref is None:
+            ref = np.deg2rad(np.array([MOTOR_INIT_ANGLE, MOTOR_INIT_ANGLE]))
+    else:
+        ref = _ik_prev_angles_rad
 
-    return np.rad2deg(theta_A_rad), np.rad2deg(theta_B_rad)
+    # ประเมิน 4 configurations (ci, di) = index เข้า pts_C, pts_D
+    # เรียงลำดับ: (0,0), (0,1), (1,0), (1,1)
+    # ตรงกับ test_quadruped: (True,False),(True,True),(False,False),(False,True)
+    best_solution = None
+    best_distance = float('inf')
+
+    for ci in range(2):
+        for di in range(2):
+            C = pts_C[ci]
+            D = pts_D[di]
+            tA = np.arctan2((C - P_A)[1], (C - P_A)[0])   # radians
+            tB = np.arctan2((D - P_B)[1], (D - P_B)[0])   # radians
+            solution = np.array([tA, tB])
+
+            # Angular distance ใน radians พร้อม wrap-around
+            # (เหมือน test_quadruped_control.py บรรทัด 1944-1946)
+            diff = np.abs(solution - ref)
+            diff = np.minimum(diff, 2 * np.pi - diff)
+            distance = np.sum(diff)
+
+            if distance < best_distance:
+                best_distance = distance
+                best_solution = solution
+
+    if best_solution is None:
+        return None
+
+    _ik_prev_angles_rad = best_solution
+    return float(np.rad2deg(best_solution[0])), float(np.rad2deg(best_solution[1]))
+
 
 
 # ============================================================================
@@ -568,6 +656,7 @@ class SingleLegController:
 
     def go_init(self):
         """ส่ง motor กลับตำแหน่ง init (-90°) ก่อน disconnect"""
+        global _ik_prev_angles_rad
         print("\n  Moving to init angle (-90°)...")
         if self.use_scurve:
             self.motor_a.set_position_scurve(MOTOR_INIT_ANGLE, duration_ms=1000)
@@ -575,6 +664,7 @@ class SingleLegController:
         else:
             self.motor_a.set_position_direct(MOTOR_INIT_ANGLE)
             self.motor_b.set_position_direct(MOTOR_INIT_ANGLE)
+        _ik_prev_angles_rad = None   # reset IK state เพื่อให้ครั้งถัดไปอ้างอิง home
         time.sleep(1.2)
 
     # ------------------------------------------------------------------
@@ -599,8 +689,12 @@ class SingleLegController:
 
         theta_A_deg, theta_B_deg = result
 
+        fk_pos = calculate_fk(theta_A_deg, theta_B_deg)
+        fk_err = np.linalg.norm(fk_pos - np.array([x, y])) if fk_pos is not None else float('nan')
+
         print(f"  → target ({x:+.1f}, {y:+.1f}) mm  "
-              f"│  θA={theta_A_deg:+.2f}°  θB={theta_B_deg:+.2f}°", end='  ')
+              f"│  θA={theta_A_deg:+.2f}°  θB={theta_B_deg:+.2f}°  "
+              f"│  FK err={fk_err:.3f} mm", end='  ')
 
         if self.use_scurve:
             ok_a = self.motor_a.set_position_scurve(theta_A_deg)
@@ -697,6 +791,8 @@ HELP_TEXT = """
   info         แสดงข้อมูล workspace / leg frame
   s            สลับ profile: S-Curve ↔ Direct
   scan         แสดง COM ports ที่มีอยู่
+  grid         รันการทดสอบไล่ตำแหน่งตาม calibration_grid.csv (ทุกจุดตามลำดับ)
+  grid N       เริ่มที่ point_id = N  เช่น  grid 10
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -718,6 +814,105 @@ def parse_xy(text: str) -> tuple[float, float] | None:
     except ValueError:
         pass
     return None
+
+
+def run_grid_sweep(
+    leg: 'SingleLegController',
+    csv_path: str = GRID_FILE,
+    dwell_s: float = GRID_DWELL_S,
+    auto: bool = GRID_AUTO,
+    start_id: int = 1,
+) -> None:
+    """
+    ไล่ตำแหน่งตาม calibration grid CSV ตามลำดับ point_id
+
+    Args:
+        leg      : SingleLegController ที่เชื่อมต่อแล้ว
+        csv_path : path ของ CSV ไฟล์  (columns: point_id, target_x_mm, target_y_mm)
+        dwell_s  : เวลาหยุดที่แต่ละจุด (วินาที)  ใช้เมื่อ auto=True
+        auto     : True = เดินหน้าอัตโนมัติ, False = รอกด Enter
+        start_id : point_id แรกที่ต้องการเริ่ม (ข้ามจุดก่อนหน้า)
+    """
+    import csv as _csv
+
+    # ─── โหลด CSV ────────────────────────────────────────────────────
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            reader = _csv.DictReader(f)
+            points = [
+                (int(row['point_id']), float(row['target_x_mm']), float(row['target_y_mm']))
+                for row in reader
+            ]
+    except FileNotFoundError:
+        print(f"  ❌ ไม่พบไฟล์: {csv_path}")
+        return
+    except Exception as e:
+        print(f"  ❌ โหลด CSV ล้มเหลว: {e}")
+        return
+
+    if not points:
+        print("  ❌ ไม่มีข้อมูลใน CSV")
+        return
+
+    # กรองจุดที่ point_id >= start_id แล้วเรียงลำดับ
+    points = sorted([p for p in points if p[0] >= start_id], key=lambda p: p[0])
+    total  = len(points)
+
+    if total == 0:
+        print(f"  ❌ ไม่มีจุดที่ point_id >= {start_id}")
+        return
+
+    mode_str = f'auto  (dwell={dwell_s:.1f} s)' if auto else 'manual (Enter to advance)'
+    print(f"\n  ─── Grid Sweep ─────────────────────────────────")
+    print(f"    File    : {csv_path}")
+    print(f"    Points  : {total} จุด (เริ่มที่ ID={points[0][0]})")
+    print(f"    Mode    : {mode_str}")
+    print(f"    Profile : {'S-Curve' if leg.use_scurve else 'Direct'}")
+    print(f"  ────────────────────────────────────────────────")
+    if not auto:
+        print("  กด Enter เพื่อไปจุดถัดไป  |  พิมพ์ q + Enter เพื่อหยุด")
+    else:
+        print("  กด Ctrl+C เพื่อหยุดกลางคัน")
+    print()
+
+    failed = []
+    skipped = []
+
+    try:
+        for idx, (pid, tx, ty) in enumerate(points, start=1):
+            print(f"  [{idx:3d}/{total}] ID={pid:3d}  target=({tx:+6.1f}, {ty:+7.1f}) mm", end='  ')
+
+            ok = leg.move_to(tx, ty)
+            if not ok:
+                failed.append(pid)
+
+            if auto:
+                time.sleep(dwell_s)
+            else:
+                try:
+                    ans = input()
+                    if ans.strip().lower() == 'q':
+                        print("  ⏹️  ยกเลิกโดย user")
+                        break
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+
+    except KeyboardInterrupt:
+        print("\n  ⏹️  ยกเลิกโดย Ctrl+C")
+
+    # ─── สรุปผล ──────────────────────────────────────────────────────
+    print()
+    print(f"  ─── สรุปผล Grid Sweep ──────────────────────────")
+    print(f"    จำนวนจุดทั้งหมด : {total}")
+    print(f"    สำเร็จ           : {total - len(failed) - len(skipped)}")
+    if failed:
+        print(f"    IK ล้มเหลว      : {len(failed)} จุด  → ID {failed}")
+    print(f"  ────────────────────────────────────────────────")
+
+    # กลับ home หลังจบ sweep
+    print("\n  กลับ home position...")
+    leg.go_home()
 
 
 def run_interactive(leg: SingleLegController):
@@ -768,6 +963,12 @@ def run_interactive(leg: SingleLegController):
             print(f"\n  COM ports ({len(ports)}):")
             for p in ports:
                 print(f"    • {p}")
+
+        # ─── Grid sweep ──────────────────────────────────────────────
+        elif cmd == 'grid' or cmd.startswith('grid '):
+            parts   = cmd.split()
+            start_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+            run_grid_sweep(leg, start_id=start_id)
 
         # ─── Emergency Stop ──────────────────────────────────────────
         elif cmd in ('e', 'estop', 'stop'):
