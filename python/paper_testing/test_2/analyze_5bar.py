@@ -324,10 +324,10 @@ def process_image(
 
     # ─── Annotate image ─────────────────────────────────────────────────
     scale_f = max(1, img_u.shape[1] // 1000)   # ปรับขนาดตามความละเอียดภาพ
-    lw       = 3 * scale_f    # line width
-    cr       = 16 * scale_f   # circle radius
-    ft       = 0.9 * scale_f  # font scale
-    ft_thick = max(2, 2 * scale_f)
+    lw       = 2 * scale_f    # line width
+    cr       = 10 * scale_f   # circle radius
+    ft       = 0.55 * scale_f # font scale
+    ft_thick = max(1, 2 * scale_f)
 
     # เส้น link
     for p1_id, p2_id in LINK_PAIRS:
@@ -378,9 +378,9 @@ def process_image(
     # ข้อมูล metadata (ชื่อไฟล์/target) ที่ด้านล่าง
     if meta:
         info_str = (f"ID={meta['point_id']}  "
-                    f"target=({meta['target_x_mm']:+.1f},{meta['target_y_mm']:+.1f}) mm  "
-                    f"cmdA={meta['cmd_thetaA_deg']:+.1f}° cmdB={meta['cmd_thetaB_deg']:+.1f}°  "
-                    f"actA={meta['act_thetaA_deg']:+.1f}° actB={meta['act_thetaB_deg']:+.1f}°")
+                    f"tgt=({meta['target_x_mm']:+.1f},{meta['target_y_mm']:+.1f})mm  "
+                    f"cA={meta['cmd_thetaA_deg']:+.1f} cB={meta['cmd_thetaB_deg']:+.1f}  "
+                    f"aA={meta['act_thetaA_deg']:+.1f} aB={meta['act_thetaB_deg']:+.1f}deg")
         margin = 15 * scale_f
         cv2.putText(img_u, info_str,
                     (20, img_u.shape[0] - margin),

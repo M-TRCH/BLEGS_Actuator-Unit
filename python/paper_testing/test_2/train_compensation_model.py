@@ -1,0 +1,147 @@
+import pandas as pd
+import os
+_DIR = os.path.dirname(os.path.abspath(__file__))
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import root_mean_squared_error, r2_score
+
+def main():
+    print("🚀 เริ่มต้นการเทรนแบบจำลองชดเชยความคลาดเคลื่อน (Kinematic Compensation Model)")
+    print("-" * 60)
+    
+    # 1. โหลดข้อมูล Dataset ของเรา
+    try:
+        df = pd.read_csv(os.path.join(_DIR, 'analysis_results.csv'))
+        print(f"✅ โหลดข้อมูลสำเร็จ: จำนวน {len(df)} จุดทดสอบ")
+    except FileNotFoundError:
+        print("❌ ไม่พบไฟล์ analysis_results.csv กรุณาตรวจสอบพาร์ท")
+        return
+
+    # 2. กำหนดตัวแปรต้น (Features) และตัวแปรตาม (Targets)
+    X = df[['act_thetaA_deg', 'act_thetaB_deg']].values
+    y_x = df['error_x_mm'].values
+    y_y = df['error_y_mm'].values
+
+    # 3. สร้างฟีเจอร์พหุนาม (Polynomial Features Degree 2)
+    # ลำดับฟีเจอร์ที่จะได้: 1, thetaA, thetaB, thetaA^2, thetaA*thetaB, thetaB^2
+    poly = PolynomialFeatures(degree=2, include_bias=False)
+    X_poly = poly.fit_transform(X)
+
+    # 4. เทรนโมเดล (Linear Regression ซ้อนบน Polynomial Features)
+    model_x = LinearRegression()
+    model_x.fit(X_poly, y_x)
+    pred_x = model_x.predict(X_poly)
+
+    model_y = LinearRegression()
+    model_y.fit(X_poly, y_y)
+    pred_y = model_y.predict(X_poly)
+
+    # 5. ประเมินและแสดงผลสมรรถนะโมเดล
+    print("\n📊 ผลการประเมินความแม่นยำ (Training Metrics):")
+    print(f"[แกน X] RMSE ก่อนชดเชย: {root_mean_squared_error(y_x, [0]*len(y_x)):.3f} mm  ->  หลังชดเชย: {root_mean_squared_error(y_x, pred_x):.3f} mm (R2 = {r2_score(y_x, pred_x):.3f})")
+    print(f"[แกน Y] RMSE ก่อนชดเชย: {root_mean_squared_error(y_y, [0]*len(y_y)):.3f} mm  ->  หลังชดเชย: {root_mean_squared_error(y_y, pred_y):.3f} mm (R2 = {r2_score(y_y, pred_y):.3f})")
+
+    # 6. ดึงค่าสัมประสิทธิ์เพื่อนำไปใช้กับ STM32 (C/C++)
+    C0_x = model_x.intercept_
+    C_x = model_x.coef_
+    
+    C0_y = model_y.intercept_
+    C_y = model_y.coef_
+
+    # 7. สร้างและพิมพ์โค้ด C/C++ ออกมาทางหน้าจอ
+    generate_cpp_code(C0_x, C_x, C0_y, C_y)
+
+    # 8. สร้างกราฟ 3D Surface Map สำหรับเปเปอร์
+    plot_3d_surface(X, y_x, y_y, poly, model_x, model_y)
+
+
+def generate_cpp_code(C0_x, C_x, C0_y, C_y):
+    """ฟังก์ชันสำหรับสร้างโค้ดภาษา C/C++"""
+    cpp_code = f"""
+\n{"="*60}
+// โค้ด C/C++ สำหรับนำไปฝังในฟังก์ชัน Inverse Kinematics ของ STM32
+// คัดลอกส่วนนี้ไปใช้งานได้เลยครับ
+{"="*60}
+
+// ฟังก์ชันชดเชยความคลาดเคลื่อน (Data-driven Kinematic Compensation)
+void apply_kinematic_compensation(float thetaA_deg, float thetaB_deg, float* target_x_mm, float* target_y_mm) {{
+    
+    // คำนวณตัวแปรพหุนาม
+    float tA = thetaA_deg;
+    float tB = thetaB_deg;
+    float tA2 = tA * tA;
+    float tB2 = tB * tB;
+    float tAB = tA * tB;
+
+    // คำนวณ Error แกน X (mm) จากสมการที่เทรนมาได้
+    float err_x = {C0_x: .6f}f 
+                + ({C_x[0]: .6f}f * tA) 
+                + ({C_x[1]: .6f}f * tB) 
+                + ({C_x[2]: .6f}f * tA2) 
+                + ({C_x[3]: .6f}f * tAB) 
+                + ({C_x[4]: .6f}f * tB2);
+
+    // คำนวณ Error แกน Y (mm) จากสมการที่เทรนมาได้
+    float err_y = {C0_y: .6f}f 
+                + ({C_y[0]: .6f}f * tA) 
+                + ({C_y[1]: .6f}f * tB) 
+                + ({C_y[2]: .6f}f * tA2) 
+                + ({C_y[3]: .6f}f * tAB) 
+                + ({C_y[4]: .6f}f * tB2);
+
+    // ปรับแก้พิกัดเป้าหมาย (นำเป้าหมายอุดมคติ มาลบด้วย Error ที่คาดการณ์)
+    *target_x_mm = *target_x_mm - err_x;
+    *target_y_mm = *target_y_mm - err_y;
+}}
+"""
+    print(cpp_code)
+
+
+def plot_3d_surface(X, y_x, y_y, poly, model_x, model_y):
+    """ฟังก์ชันสำหรับสร้างกราฟ 3D Surface และเซฟเป็นไฟล์รูปภาพ"""
+    print(f"\n🎨 กำลังสร้างรูปภาพ 3D Surface Map...")
+    fig = plt.figure(figsize=(16, 7))
+
+    # สร้างกริดสมมติเพื่อวาดพื้นผิว
+    tA_range = np.linspace(X[:,0].min() - 5, X[:,0].max() + 5, 30)
+    tB_range = np.linspace(X[:,1].min() - 5, X[:,1].max() + 5, 30)
+    TA, TB = np.meshgrid(tA_range, tB_range)
+    
+    mesh_X = np.c_[TA.ravel(), TB.ravel()]
+    mesh_X_poly = poly.transform(mesh_X)
+
+    pred_mesh_x = model_x.predict(mesh_X_poly).reshape(TA.shape)
+    pred_mesh_y = model_y.predict(mesh_X_poly).reshape(TA.shape)
+
+    # วาดแกน X
+    ax1 = fig.add_subplot(121, projection='3d')
+    ax1.scatter(X[:,0], X[:,1], y_x, color='red', label='Measured Error', s=30, alpha=0.8)
+    surf1 = ax1.plot_surface(TA, TB, pred_mesh_x, cmap='viridis', alpha=0.6)
+    ax1.set_title('Error X Surface Map')
+    ax1.set_xlabel('Theta A (deg)')
+    ax1.set_ylabel('Theta B (deg)')
+    ax1.set_zlabel('Error X (mm)')
+    ax1.view_init(elev=20, azim=45) # ปรับมุมมองกล้อง
+    fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=10)
+
+    # วาดแกน Y
+    ax2 = fig.add_subplot(122, projection='3d')
+    ax2.scatter(X[:,0], X[:,1], y_y, color='red', label='Measured Error', s=30, alpha=0.8)
+    surf2 = ax2.plot_surface(TA, TB, pred_mesh_y, cmap='plasma', alpha=0.6)
+    ax2.set_title('Error Y Surface Map')
+    ax2.set_xlabel('Theta A (deg)')
+    ax2.set_ylabel('Theta B (deg)')
+    ax2.set_zlabel('Error Y (mm)')
+    ax2.view_init(elev=20, azim=45) # ปรับมุมมองกล้อง
+    fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=10)
+
+    plt.tight_layout()
+    filename = 'error_surface_maps.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    print(f"💾 บันทึกรูปภาพสำเร็จ: {filename} (พร้อมนำไปใส่ในเปเปอร์แล้ว!)")
+
+
+if __name__ == "__main__":
+    main()
