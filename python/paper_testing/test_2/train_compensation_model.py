@@ -39,9 +39,16 @@ def main():
     pred_y = model_y.predict(X_poly)
 
     # 5. ประเมินและแสดงผลสมรรถนะโมเดล
+    rmse_x_before = root_mean_squared_error(y_x, [0] * len(y_x))
+    rmse_x_after  = root_mean_squared_error(y_x, pred_x)
+    r2_x          = r2_score(y_x, pred_x)
+    rmse_y_before = root_mean_squared_error(y_y, [0] * len(y_y))
+    rmse_y_after  = root_mean_squared_error(y_y, pred_y)
+    r2_y          = r2_score(y_y, pred_y)
+
     print("\n📊 ผลการประเมินความแม่นยำ (Training Metrics):")
-    print(f"[แกน X] RMSE ก่อนชดเชย: {root_mean_squared_error(y_x, [0]*len(y_x)):.3f} mm  ->  หลังชดเชย: {root_mean_squared_error(y_x, pred_x):.3f} mm (R2 = {r2_score(y_x, pred_x):.3f})")
-    print(f"[แกน Y] RMSE ก่อนชดเชย: {root_mean_squared_error(y_y, [0]*len(y_y)):.3f} mm  ->  หลังชดเชย: {root_mean_squared_error(y_y, pred_y):.3f} mm (R2 = {r2_score(y_y, pred_y):.3f})")
+    print(f"[แกน X] RMSE ก่อนชดเชย: {rmse_x_before:.3f} mm  ->  หลังชดเชย: {rmse_x_after:.3f} mm (R2 = {r2_x:.3f})")
+    print(f"[แกน Y] RMSE ก่อนชดเชย: {rmse_y_before:.3f} mm  ->  หลังชดเชย: {rmse_y_after:.3f} mm (R2 = {r2_y:.3f})")
 
     # 6. ดึงค่าสัมประสิทธิ์เพื่อนำไปใช้กับ STM32 (C/C++)
     C0_x = model_x.intercept_
@@ -56,9 +63,51 @@ def main():
     # 8. สร้างกราฟ 3D Surface Map สำหรับเปเปอร์
     plot_3d_surface(X, y_x, y_y, poly, model_x, model_y)
 
+    # 9. บันทึกผลลัพธ์ทั้งหมดลงไฟล์
+    metrics = {
+        'rmse_x_before': rmse_x_before, 'rmse_x_after': rmse_x_after, 'r2_x': r2_x,
+        'rmse_y_before': rmse_y_before, 'rmse_y_after': rmse_y_after, 'r2_y': r2_y,
+    }
+    save_results(metrics, C0_x, C_x, C0_y, C_y)
+
+
+def save_results(metrics: dict, C0_x, C_x, C0_y, C_y) -> None:
+    """บันทึกผลลัพธ์การเทรนลงไฟล์ JSON และ text summary"""
+    import json
+
+    # บันทึก coefficients + metrics → JSON
+    model_data = {
+        'polynomial_degree': 2,
+        'feature_names': ['thetaA', 'thetaB', 'thetaA^2', 'thetaA*thetaB', 'thetaB^2'],
+        'model_x': {'intercept': float(C0_x), 'coef': [float(c) for c in C_x]},
+        'model_y': {'intercept': float(C0_y), 'coef': [float(c) for c in C_y]},
+        'metrics': {k: float(v) for k, v in metrics.items()},
+    }
+    json_path = os.path.join(_DIR, 'compensation_model.json')
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(model_data, f, indent=2)
+    print(f"💾 บันทึกโมเดล (JSON)  : {json_path}")
+
+    # บันทึก training summary → text
+    txt_path = os.path.join(_DIR, 'training_summary.txt')
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write("Kinematic Compensation Model — Training Summary\n")
+        f.write("=" * 52 + "\n\n")
+        f.write(f"[X]  RMSE before : {metrics['rmse_x_before']:.4f} mm\n")
+        f.write(f"     RMSE after  : {metrics['rmse_x_after']:.4f} mm\n")
+        f.write(f"     R²          : {metrics['r2_x']:.4f}\n\n")
+        f.write(f"[Y]  RMSE before : {metrics['rmse_y_before']:.4f} mm\n")
+        f.write(f"     RMSE after  : {metrics['rmse_y_after']:.4f} mm\n")
+        f.write(f"     R²          : {metrics['r2_y']:.4f}\n\n")
+        f.write("Coefficients (X): intercept={:.6f}  coef={}\n".format(
+            float(C0_x), [f"{c:.6f}" for c in C_x]))
+        f.write("Coefficients (Y): intercept={:.6f}  coef={}\n".format(
+            float(C0_y), [f"{c:.6f}" for c in C_y]))
+    print(f"💾 บันทึกสรุปผล (TXT) : {txt_path}")
+
 
 def generate_cpp_code(C0_x, C_x, C0_y, C_y):
-    """ฟังก์ชันสำหรับสร้างโค้ดภาษา C/C++"""
+    """ฟังก์ชันสำหรับสร้างโค้ดภาษา C/C++ และบันทึกเป็นไฟล์ .h"""
     cpp_code = f"""
 \n{"="*60}
 // โค้ด C/C++ สำหรับนำไปฝังในฟังก์ชัน Inverse Kinematics ของ STM32
@@ -97,6 +146,11 @@ void apply_kinematic_compensation(float thetaA_deg, float thetaB_deg, float* tar
 }}
 """
     print(cpp_code)
+
+    h_path = os.path.join(_DIR, 'compensation_model.h')
+    with open(h_path, 'w', encoding='utf-8') as f:
+        f.write(cpp_code)
+    print(f"💾 บันทึกโค้ด C/C++ (H): {h_path}")
 
 
 def plot_3d_surface(X, y_x, y_y, poly, model_x, model_y):
@@ -138,7 +192,7 @@ def plot_3d_surface(X, y_x, y_y, poly, model_x, model_y):
     fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=10)
 
     plt.tight_layout()
-    filename = 'error_surface_maps.png'
+    filename = os.path.join(_DIR, 'error_surface_maps.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     print(f"💾 บันทึกรูปภาพสำเร็จ: {filename} (พร้อมนำไปใส่ในเปเปอร์แล้ว!)")
 

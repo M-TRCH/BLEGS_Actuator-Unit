@@ -1,0 +1,13 @@
+Kinematic Compensation Model — Training Summary
+====================================================
+
+[X]  RMSE before : 3.2033 mm
+     RMSE after  : 0.3272 mm
+     R²          : 0.7140
+
+[Y]  RMSE before : 2.3428 mm
+     RMSE after  : 0.8340 mm
+     R²          : 0.6374
+
+Coefficients (X): intercept=-10.724399  coef=['-0.053052', '-0.100359', '0.000185', '-0.001052', '0.000016']
+Coefficients (Y): intercept=14.230538  coef=['0.037770', '0.477321', '-0.000356', '0.002805', '0.001469']
