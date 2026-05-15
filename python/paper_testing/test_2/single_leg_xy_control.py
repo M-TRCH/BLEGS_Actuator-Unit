@@ -89,6 +89,15 @@ GRID_AUTO = True            # True = auto advance, False = กด Enter เพ�
 CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
 CAPTURE_TIMEOUT_S = 20.0    # วินาที รอไฟล์รูปใหม่ก่อน timeout
 
+# Circle path trajectory
+CIRCLE_CENTER_X  =  0.0    # จุดกึ่งกลาง x (mm)
+CIRCLE_CENTER_Y  = -200.0  # จุดกึ่งกลาง y (mm)
+CIRCLE_RADIUS    =  25.0   # รัศมี (mm) — แนะนำ 20-30 mm
+CIRCLE_POINTS    =  36     # จำนวนจุดต่อรอบ (36 = ทุก 10°, 72 = ทุก 5°)
+CIRCLE_REVS      =  1      # จำนวนรอบ
+CIRCLE_DWELL_S   =  0.0    # เวลาหยุดต่อจุด (วินาที); 0 = ใช้แค่ S-Curve duration
+CIRCLE_FREQ_HZ   =  0.6    # ความเร็ว (รอบ/วินาที); 0 = ใช้ SCURVE_DURATION_MS แทน
+
 # ============================================================================
 # PROTOCOL / COMMUNICATION CONSTANTS
 # ============================================================================
@@ -675,9 +684,13 @@ class SingleLegController:
     # Core move
     # ------------------------------------------------------------------
 
-    def move_to(self, x: float, y: float) -> bool:
+    def move_to(self, x: float, y: float, duration_ms: int | None = None) -> bool:
         """
         เคลื่อนปลายขาไปยัง (x, y) mm
+
+        Args:
+            duration_ms: S-Curve duration (ms) สำหรับการเคลื่อนที่นี้โดยเฉพาะ;
+                         None = ใช้ค่า SCURVE_DURATION_MS จาก config
 
         Returns:
             True ถ้าส่งคำสั่งสำเร็จ, False ถ้า IK ล้มเหลว
@@ -700,9 +713,10 @@ class SingleLegController:
               f"│  θA={theta_A_deg:+.2f}°  θB={theta_B_deg:+.2f}°  "
               f"│  FK err={fk_err:.3f} mm", end='  ')
 
+        _dur = duration_ms if duration_ms is not None else SCURVE_DURATION_MS
         if self.use_scurve:
-            ok_a = self.motor_a.set_position_scurve(theta_A_deg)
-            ok_b = self.motor_b.set_position_scurve(theta_B_deg)
+            ok_a = self.motor_a.set_position_scurve(theta_A_deg, duration_ms=_dur)
+            ok_b = self.motor_b.set_position_scurve(theta_B_deg, duration_ms=_dur)
         else:
             ok_a = self.motor_a.set_position_direct(theta_A_deg)
             ok_b = self.motor_b.set_position_direct(theta_B_deg)
@@ -798,6 +812,10 @@ HELP_TEXT = """
   grid         รันการทดสอบไล่ตำแหน่งตาม calibration_grid.csv (ทุกจุดตามลำดับ)
   grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
   capture N    เหมือน grid N แต่รอรับรูปใน capture_image แล้วเปลี่ยนชื่อพร้อมข้อมูลตำแหน่ง
+  circle       เคลื่อนที่ตาม path วงกลม (ใช้ค่า default จาก config)
+  circle R     เช่น  circle 25         → วงกลม R=25 mm ที่ center default
+  circle R cx cy     เช่น  circle 25 0 -200  → กำหนด center ด้วย
+  circle R cx cy N   เช่น  circle 25 0 -200 3 → N รอบ
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -1109,6 +1127,99 @@ def run_grid_sweep(
     leg.go_home()
 
 
+# ============================================================================
+# CIRCLE PATH MODE
+# ============================================================================
+
+def run_circle_path(
+    leg: 'SingleLegController',
+    cx:          float = CIRCLE_CENTER_X,
+    cy:          float = CIRCLE_CENTER_Y,
+    radius:      float = CIRCLE_RADIUS,
+    n_points:    int   = CIRCLE_POINTS,
+    revolutions: int   = CIRCLE_REVS,
+    dwell_s:     float = CIRCLE_DWELL_S,
+    freq_hz:     float = CIRCLE_FREQ_HZ,
+) -> None:
+    """เคลื่อนที่ตาม path วงกลม
+
+    X(θ) = cx + R·cos(θ)
+    Y(θ) = cy + R·sin(θ)
+    θ ไล่จาก 0 → 2π × revolutions (ทวนเข็มนาฬิกาในระบบพิกัดมาตรฐาน)
+
+    freq_hz > 0 : ควบคุมความเร็ว (รอบ/วินาที) — S-Curve duration คำนวณอัตโนมัติ
+    freq_hz = 0 : ใช้ SCURVE_DURATION_MS + dwell_s แทน
+    """
+    total_pts = n_points * revolutions
+    step_rad  = 2 * np.pi / n_points
+
+    # คำนวณ timing
+    if freq_hz > 0:
+        step_s  = 1.0 / (freq_hz * n_points)        # วินาทีต่อจุด
+        step_ms = max(20, int(step_s * 1000))        # S-Curve duration (ms), ขั้นต่ำ 20 ms
+    else:
+        step_s  = max(dwell_s, SCURVE_DURATION_MS / 1000.0 if leg.use_scurve else 0.05)
+        step_ms = SCURVE_DURATION_MS
+
+    print(f"\n  ─── Circle Path ───────────────────────────────")
+    print(f"    Center     : ({cx:+.1f}, {cy:+.1f}) mm")
+    print(f"    Radius     : {radius:.1f} mm")
+    print(f"    Points     : {n_points} ต่อรอบ  ×{revolutions} รอบ  = {total_pts} จุด")
+    if freq_hz > 0:
+        print(f"    Frequency  : {freq_hz:.2f} Hz  ({step_s*1000:.0f} ms/จุด, S-Curve {step_ms} ms)")
+    else:
+        print(f"    Wait/point : {step_s*1000:.0f} ms")
+    print(f"    Profile    : {'S-Curve' if leg.use_scurve else 'Direct'}")
+    print(f"  ────────────────────────────────────────────────")
+    print(f"  กด Ctrl+C เพื่อหยุด\n")
+
+    # ตรวจสอบทุกจุดก่อนเริ่ม
+    reachable = 0
+    for i in range(total_pts):
+        theta = step_rad * i
+        x = cx + radius * np.cos(theta)
+        y = cy + radius * np.sin(theta)
+        if calculate_ik(np.array([x, y])) is not None:
+            reachable += 1
+    if reachable < total_pts:
+        print(f"  ⚠️  {total_pts - reachable}/{total_pts} จุด อยู่นอก workspace — ดำเนินการต่อ? (y/n)")
+        if input("  > ").strip().lower() not in ('y', 'yes'):
+            print("  ยกเลิก")
+            return
+
+    done = 0
+    failed = 0
+    try:
+        for i in range(total_pts):
+            theta = step_rad * i
+            x = cx + radius * np.cos(theta)
+            y = cy + radius * np.sin(theta)
+
+            sys.stdout.write(
+                f"\r  [{i+1:4d}/{total_pts}]  θ={np.degrees(theta):+7.2f}°  "
+                f"({x:+7.2f}, {y:+7.2f}) mm  "
+            )
+            sys.stdout.flush()
+
+            ok = leg.move_to(x, y, duration_ms=step_ms if leg.use_scurve else None)
+            if ok is False:
+                failed += 1
+                sys.stdout.write("[IK fail]")
+                sys.stdout.flush()
+            else:
+                done += 1
+                time.sleep(step_s)
+
+    except KeyboardInterrupt:
+        print("\n\n  ⛔ หยุดโดย Ctrl+C")
+
+    print(f"\n\n  ─── สรุป Circle Path ──────────────────────────")
+    print(f"    สำเร็จ    : {done}/{total_pts}")
+    if failed:
+        print(f"    IK ล้มเหลว: {failed} จุด")
+    print(f"  ────────────────────────────────────────────────")
+
+
 def run_interactive(leg: SingleLegController):
     """Main interactive command loop"""
     print(HELP_TEXT)
@@ -1165,6 +1276,26 @@ def run_interactive(leg: SingleLegController):
                 run_capture_point(leg, int(parts[1]))
             else:
                 print("  ⚠️  ใช้งาน: capture N  (N = point_id)")
+
+        # ─── Circle path ──────────────────────────────────────────────
+        elif cmd == 'circle' or cmd.startswith('circle '):
+            parts = cmd.split()
+            try:
+                if len(parts) == 1:
+                    run_circle_path(leg)
+                elif len(parts) == 2:
+                    run_circle_path(leg, radius=float(parts[1]))
+                elif len(parts) == 4:
+                    run_circle_path(leg, radius=float(parts[1]),
+                                    cx=float(parts[2]), cy=float(parts[3]))
+                elif len(parts) == 5:
+                    run_circle_path(leg, radius=float(parts[1]),
+                                    cx=float(parts[2]), cy=float(parts[3]),
+                                    revolutions=int(parts[4]))
+                else:
+                    print("  ⚠️  รูปแบบ: circle [R [cx cy [N]]]  เช่น  circle 25 0 -200 2")
+            except ValueError:
+                print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200")
 
         # ─── Grid sweep / single point ────────────────────────────────
         elif cmd == 'grid' or cmd.startswith('grid '):
