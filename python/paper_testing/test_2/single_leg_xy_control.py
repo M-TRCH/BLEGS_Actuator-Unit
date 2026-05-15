@@ -97,6 +97,10 @@ CIRCLE_POINTS    =  36     # จำนวนจุดต่อรอบ (36 = �
 CIRCLE_REVS      =  1      # จำนวนรอบ
 CIRCLE_DWELL_S   =  0.0    # เวลาหยุดต่อจุด (วินาที); 0 = ใช้แค่ S-Curve duration
 CIRCLE_FREQ_HZ   =  0.6    # ความเร็ว (รอบ/วินาที); 0 = ใช้ SCURVE_DURATION_MS แทน
+CIRCLE_COMPENSATION = False  # True = เปิด feed-forward kinematic error compensation
+COMPENSATION_MODEL_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'compensation_model.json'
+)
 
 # ============================================================================
 # PROTOCOL / COMMUNICATION CONSTANTS
@@ -816,6 +820,8 @@ HELP_TEXT = """
   circle R     เช่น  circle 25         → วงกลม R=25 mm ที่ center default
   circle R cx cy     เช่น  circle 25 0 -200  → กำหนด center ด้วย
   circle R cx cy N   เช่น  circle 25 0 -200 3 → N รอบ
+  (เพิ่ม comp หรือ nocomp ท้ายคำสั่ง เพื่อเปิด/ปิด kinematic error compensation)
+  เช่น  circle comp  |  circle 25 0 -200 1 comp  |  circle nocomp
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -1131,6 +1137,50 @@ def run_grid_sweep(
 # CIRCLE PATH MODE
 # ============================================================================
 
+def load_compensation_model(path: str = COMPENSATION_MODEL_FILE) -> dict | None:
+    """โหลด polynomial regression model จาก JSON สำหรับชดเชย kinematic error"""
+    import json
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            model = json.load(f)
+        print(f"  ✅ โหลด compensation model: {os.path.basename(path)}")
+        m = model.get('metrics', {})
+        if m:
+            print(f"     RMSE X: {m.get('rmse_x_before',0):.3f} → {m.get('rmse_x_after',0):.3f} mm  "
+                  f"RMSE Y: {m.get('rmse_y_before',0):.3f} → {m.get('rmse_y_after',0):.3f} mm")
+        return model
+    except FileNotFoundError:
+        print(f"  ⚠️  ไม่พบ compensation model: {path}")
+        return None
+    except Exception as e:
+        print(f"  ⚠️  โหลด compensation model ล้มเหลว: {e}")
+        return None
+
+
+def predict_kinematic_error(
+    thetaA_deg: float, thetaB_deg: float, model: dict
+) -> tuple[float, float]:
+    """
+    ทำนาย kinematic error จากมุมมอเตอร์ด้วย Second-Order Polynomial Regression
+
+    Features: [tA, tB, tA², tA·tB, tB²]  (ลำดับตาม compensation_model.json)
+
+    Returns:
+        (err_x, err_y) — ค่า error ที่คาดการณ์ (mm)
+    """
+    tA  = thetaA_deg
+    tB  = thetaB_deg
+    phi = np.array([tA, tB, tA * tA, tA * tB, tB * tB])
+
+    mx    = model['model_x']
+    err_x = mx['intercept'] + float(np.dot(mx['coef'], phi))
+
+    my    = model['model_y']
+    err_y = my['intercept'] + float(np.dot(my['coef'], phi))
+
+    return err_x, err_y
+
+
 def run_circle_path(
     leg: 'SingleLegController',
     cx:          float = CIRCLE_CENTER_X,
@@ -1140,6 +1190,7 @@ def run_circle_path(
     revolutions: int   = CIRCLE_REVS,
     dwell_s:     float = CIRCLE_DWELL_S,
     freq_hz:     float = CIRCLE_FREQ_HZ,
+    compensate:  bool  = CIRCLE_COMPENSATION,
 ) -> None:
     """เคลื่อนที่ตาม path วงกลม
 
@@ -1147,8 +1198,9 @@ def run_circle_path(
     Y(θ) = cy + R·sin(θ)
     θ ไล่จาก 0 → 2π × revolutions (ทวนเข็มนาฬิกาในระบบพิกัดมาตรฐาน)
 
-    freq_hz > 0 : ควบคุมความเร็ว (รอบ/วินาที) — S-Curve duration คำนวณอัตโนมัติ
-    freq_hz = 0 : ใช้ SCURVE_DURATION_MS + dwell_s แทน
+    freq_hz > 0  : ควบคุมความเร็ว (รอบ/วินาที) — S-Curve duration คำนวณอัตโนมัติ
+    freq_hz = 0  : ใช้ SCURVE_DURATION_MS + dwell_s แทน
+    compensate   : True = เปิด feed-forward kinematic error compensation
     """
     total_pts = n_points * revolutions
     step_rad  = 2 * np.pi / n_points
@@ -1170,8 +1222,16 @@ def run_circle_path(
     else:
         print(f"    Wait/point : {step_s*1000:.0f} ms")
     print(f"    Profile    : {'S-Curve' if leg.use_scurve else 'Direct'}")
+    print(f"    Compensate : {'✅ เปิด' if compensate else '❌ ปิด'}")
     print(f"  ────────────────────────────────────────────────")
     print(f"  กด Ctrl+C เพื่อหยุด\n")
+
+    # โหลด compensation model ถ้าเปิดใช้งาน
+    comp_model: dict | None = None
+    if compensate:
+        comp_model = load_compensation_model()
+        if comp_model is None:
+            print("  ⚠️  โหลดโมเดลล้มเหลว — วิ่งโดยไม่มี compensation\n")
 
     # ตรวจสอบทุกจุดก่อนเริ่ม
     reachable = 0
@@ -1189,19 +1249,42 @@ def run_circle_path(
 
     done = 0
     failed = 0
+    comp_applied = 0
     try:
         for i in range(total_pts):
-            theta = step_rad * i
-            x = cx + radius * np.cos(theta)
-            y = cy + radius * np.sin(theta)
+            theta   = step_rad * i
+            ideal_x = cx + radius * np.cos(theta)
+            ideal_y = cy + radius * np.sin(theta)
+
+            # ─── Feed-forward Kinematic Error Compensation ──────────
+            if compensate and comp_model is not None:
+                # Step 2: IK รอบที่ 1 — หามุมอุดมคติ
+                ik_ideal = calculate_ik([ideal_x, ideal_y])
+                if ik_ideal is not None:
+                    ideal_tA, ideal_tB = ik_ideal
+                    # Step 3: ทำนาย error จากมุมอุดมคติ
+                    err_x, err_y = predict_kinematic_error(
+                        ideal_tA, ideal_tB, comp_model)
+                    # Step 4: พิกัดที่ชดเชยแล้ว
+                    target_x = ideal_x - err_x
+                    target_y = ideal_y - err_y
+                    comp_applied += 1
+                else:
+                    target_x, target_y = ideal_x, ideal_y
+            else:
+                target_x, target_y = ideal_x, ideal_y
+            # ────────────────────────────────────────────────────────
 
             sys.stdout.write(
                 f"\r  [{i+1:4d}/{total_pts}]  θ={np.degrees(theta):+7.2f}°  "
-                f"({x:+7.2f}, {y:+7.2f}) mm  "
+                f"ideal=({ideal_x:+7.2f},{ideal_y:+7.2f})  "
+                f"cmd=({target_x:+7.2f},{target_y:+7.2f}) mm  "
             )
             sys.stdout.flush()
 
-            ok = leg.move_to(x, y, duration_ms=step_ms if leg.use_scurve else None)
+            # Step 5: IK รอบที่ 2 (ผ่าน leg.move_to) + ส่งคำสั่งมอเตอร์
+            ok = leg.move_to(target_x, target_y,
+                             duration_ms=step_ms if leg.use_scurve else None)
             if ok is False:
                 failed += 1
                 sys.stdout.write("[IK fail]")
@@ -1215,6 +1298,8 @@ def run_circle_path(
 
     print(f"\n\n  ─── สรุป Circle Path ──────────────────────────")
     print(f"    สำเร็จ    : {done}/{total_pts}")
+    if compensate and comp_model is not None:
+        print(f"    ชดเชยแล้ว : {comp_applied}/{total_pts} จุด")
     if failed:
         print(f"    IK ล้มเหลว: {failed} จุด")
     print(f"  ────────────────────────────────────────────────")
@@ -1280,22 +1365,34 @@ def run_interactive(leg: SingleLegController):
         # ─── Circle path ──────────────────────────────────────────────
         elif cmd == 'circle' or cmd.startswith('circle '):
             parts = cmd.split()
+            # แยก flag comp / nocomp ก่อน parse ตัวเลข
+            if 'comp' in parts:
+                _compensate = True
+                parts = [p for p in parts if p != 'comp']
+            elif 'nocomp' in parts:
+                _compensate = False
+                parts = [p for p in parts if p != 'nocomp']
+            else:
+                _compensate = CIRCLE_COMPENSATION
             try:
                 if len(parts) == 1:
-                    run_circle_path(leg)
+                    run_circle_path(leg, compensate=_compensate)
                 elif len(parts) == 2:
-                    run_circle_path(leg, radius=float(parts[1]))
+                    run_circle_path(leg, radius=float(parts[1]),
+                                    compensate=_compensate)
                 elif len(parts) == 4:
                     run_circle_path(leg, radius=float(parts[1]),
-                                    cx=float(parts[2]), cy=float(parts[3]))
+                                    cx=float(parts[2]), cy=float(parts[3]),
+                                    compensate=_compensate)
                 elif len(parts) == 5:
                     run_circle_path(leg, radius=float(parts[1]),
                                     cx=float(parts[2]), cy=float(parts[3]),
-                                    revolutions=int(parts[4]))
+                                    revolutions=int(parts[4]),
+                                    compensate=_compensate)
                 else:
-                    print("  ⚠️  รูปแบบ: circle [R [cx cy [N]]]  เช่น  circle 25 0 -200 2")
+                    print("  ⚠️  รูปแบบ: circle [R [cx cy [N]]] [comp|nocomp]")
             except ValueError:
-                print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200")
+                print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200 comp")
 
         # ─── Grid sweep / single point ────────────────────────────────
         elif cmd == 'grid' or cmd.startswith('grid '):
