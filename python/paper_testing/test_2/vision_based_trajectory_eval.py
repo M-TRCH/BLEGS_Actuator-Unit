@@ -21,7 +21,7 @@ REF_WORLD = {
 }
 REF_DIST_MM = np.linalg.norm(REF_WORLD[1] - REF_WORLD[0])  # = 85.0 mm
 
-FRAME_STEP  = 100      # ประมวลผลทุก N เฟรม (1 = ทุกเฟรม, 3 = ข้าม 2)
+FRAME_STEP  = 1      # ประมวลผลทุก N เฟรม (1 = ทุกเฟรม, 3 = ข้าม 2)
 
 CENTER_X_MM = 0.0       # จุดศูนย์กลางวงโคจรอุดมคติ แกน X
 CENTER_Y_MM = -190.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
@@ -150,9 +150,22 @@ mm_comp_y   = data_comp[:, 1]
 # สรุป RMS error เทียบกับวงโคจรอุดมคติ
 err_uncomp = np.sqrt((mm_uncomp_x - CENTER_X_MM)**2 + (mm_uncomp_y - CENTER_Y_MM)**2) - RADIUS_MM
 err_comp   = np.sqrt((mm_comp_x   - CENTER_X_MM)**2 + (mm_comp_y   - CENTER_Y_MM)**2) - RADIUS_MM
-print(f"\nRMS radial error:")
-print(f"  Uncompensated : {np.sqrt(np.mean(err_uncomp**2)):.3f} mm")
-print(f"  ML Compensated: {np.sqrt(np.mean(err_comp**2)):.3f} mm")
+rms_u  = np.sqrt(np.mean(err_uncomp**2))
+rms_c  = np.sqrt(np.mean(err_comp**2))
+mean_u = np.mean(err_uncomp)
+mean_c = np.mean(err_comp)
+std_u  = np.std(err_uncomp)
+std_c  = np.std(err_comp)
+max_u  = np.max(np.abs(err_uncomp))
+max_c  = np.max(np.abs(err_comp))
+
+print(f"\n{'Metric':<18} {'Uncompensated':>16} {'ML Compensated':>16}")
+print("-" * 52)
+print(f"{'Mean error':<18} {mean_u:>14.3f} mm {mean_c:>14.3f} mm")
+print(f"{'Std dev':<18} {std_u:>14.3f} mm {std_c:>14.3f} mm")
+print(f"{'RMS error':<18} {rms_u:>14.3f} mm {rms_c:>14.3f} mm")
+print(f"{'Max  error':<18} {max_u:>14.3f} mm {max_c:>14.3f} mm")
+print(f"{'Improvement':<18} {'—':>16} {(1 - rms_c/rms_u)*100:>13.1f} %")
 
 # ==========================================
 # 6. วาดกราฟวงโคจรอุดมคติ
