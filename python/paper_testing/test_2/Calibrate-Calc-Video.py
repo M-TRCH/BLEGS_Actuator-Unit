@@ -1,6 +1,8 @@
 ﻿import cv2
 import numpy as np
 import os
+import threading
+import time
 
 # ==========================================
 # 1. ตั้งค่าพารามิเตอร์การสอบเทียบ
@@ -16,7 +18,7 @@ CHESSBOARD_SIZE = (9, 6)
 SQUARE_SIZE = 0.03125  
 
 # การดึงเฟรม (Sub-sampling): วิดีโอ 120fps ดึงทุกๆ 60 เฟรม (ดึง 2 รูปต่อวินาที)
-FRAME_STEP = 15
+FRAME_STEP = 120
 
 # ==========================================
 # 2. เตรียมตัวแปร
@@ -72,9 +74,27 @@ cap.release()
 # ==========================================
 if valid_frames > 10:
     print(f"\nRunning calibration with {valid_frames} frames...")
+
+    # --- Spinner: แสดง animation ขณะ calibrateCamera block ---
+    _stop = threading.Event()
+    def _spin():
+        chars = ['|', '/', '-', '\\']
+        i = 0
+        t0 = time.time()
+        while not _stop.is_set():
+            print(f"  {chars[i % 4]}  Computing...  {time.time()-t0:.1f}s",
+                  end='\r', flush=True)
+            i += 1
+            _stop.wait(0.15)
+    _t = threading.Thread(target=_spin, daemon=True)
+    _t.start()
+
+    t0 = time.time()
     ret, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
         objpoints, imgpoints, gray.shape[::-1], None, None
     )
+    _stop.set(); _t.join()
+    print(f"\r  [OK] calibrateCamera done  ({time.time()-t0:.2f}s)          ")
     
     # คำนวณ Re-projection Error รายภาพ
     per_errors = []
