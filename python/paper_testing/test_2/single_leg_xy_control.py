@@ -81,9 +81,10 @@ USE_SCURVE = True           # True = S-Curve smooth, False = Direct position
 SCURVE_DURATION_MS = 500    # ระยะเวลาการเคลื่อนที่แบบ S-Curve (ms)
 
 # Grid sweep (calibration LUT)
-GRID_FILE = r'C:\Users\mteer\OneDrive\Desktop\calibration_grid.csv'
+GRID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calibration_grid.csv')
 GRID_DWELL_S = 1.5          # เวลาหยุดที่แต่ละจุด (วินาที) ในโหมด auto
 GRID_AUTO = True            # True = auto advance, False = กด Enter เพื่อไปจุดถัดไป
+GRID_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'grid_log.csv')
 
 # Capture mode
 CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
@@ -1034,6 +1035,50 @@ def run_capture_point(
     return False
 
 
+def _write_grid_log(
+    point_id: int,
+    target_x: float, target_y: float,
+    tA_cmd: float, tB_cmd: float,
+    tA_act: float, tB_act: float,
+    log_path: str = GRID_LOG_FILE,
+) -> None:
+    """
+    บันทึกผล grid N ลง CSV (append mode)
+    สร้าง header อัตโนมัติถ้ายังไม่มีไฟล์
+
+    Columns:
+        point_id, target_x_mm, target_y_mm,
+        cmd_thetaA_deg, cmd_thetaB_deg,
+        act_thetaA_deg, act_thetaB_deg
+    """
+    import csv as _csv
+    _FIELDNAMES = [
+        'point_id', 'target_x_mm', 'target_y_mm',
+        'cmd_thetaA_deg', 'cmd_thetaB_deg',
+        'act_thetaA_deg', 'act_thetaB_deg',
+    ]
+    write_header = not os.path.isfile(log_path)
+    try:
+        with open(log_path, 'a', newline='', encoding='utf-8') as _f:
+            _w = _csv.DictWriter(_f, fieldnames=_FIELDNAMES)
+            if write_header:
+                _w.writeheader()
+            _w.writerow({
+                'point_id':       point_id,
+                'target_x_mm':    f'{target_x:.4f}',
+                'target_y_mm':    f'{target_y:.4f}',
+                'cmd_thetaA_deg': f'{tA_cmd:.4f}',
+                'cmd_thetaB_deg': f'{tB_cmd:.4f}',
+                'act_thetaA_deg': f'{tA_act:.4f}',
+                'act_thetaB_deg': f'{tB_act:.4f}',
+            })
+        print(f"  📄 บันทึก → {os.path.basename(log_path)}  "
+              f"(cmd θA={tA_cmd:+.2f}° θB={tB_cmd:+.2f}°  "
+              f"act θA={tA_act:+.2f}° θB={tB_act:+.2f}°)")
+    except Exception as _e:
+        print(f"  ⚠️  เขียน log ล้มเหลว: {_e}")
+
+
 def run_grid_sweep(
     leg: 'SingleLegController',
     csv_path: str = GRID_FILE,
@@ -1104,6 +1149,14 @@ def run_grid_sweep(
             if not ok:
                 failed.append(pid)
 
+            # บันทึกมุมที่สั่ง จาก IK state ล่าสุด
+            if _ik_prev_angles_rad is not None:
+                tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
+                tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
+            else:
+                tA_cmd = tB_cmd = float('nan')
+
+            _should_break = False
             if auto:
                 time.sleep(dwell_s)
             else:
@@ -1111,10 +1164,23 @@ def run_grid_sweep(
                     ans = input()
                     if ans.strip().lower() == 'q':
                         print("  ⏹️  ยกเลิกโดย user")
-                        break
+                        _should_break = True
                 except (EOFError, KeyboardInterrupt):
                     print()
-                    break
+                    _should_break = True
+
+            # อ่าน actual angles หลัง dwell แล้วเขียน log
+            if ok:
+                fb_a = leg.motor_a.ping()
+                fb_b = leg.motor_b.ping()
+                leg.motor_a.set_timeout(FAST_TIMEOUT)
+                leg.motor_b.set_timeout(FAST_TIMEOUT)
+                _write_grid_log(pid, tx, ty, tA_cmd, tB_cmd,
+                                fb_a['position'] if fb_a else float('nan'),
+                                fb_b['position'] if fb_b else float('nan'))
+
+            if _should_break:
+                break
 
     except KeyboardInterrupt:
         print("\n  ⏹️  ยกเลิกโดย Ctrl+C")
@@ -1413,9 +1479,19 @@ def run_interactive(leg: SingleLegController):
                         tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
                         print(f"  Grid ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
                         leg.move_to(tx, ty)
+                        # บันทึกมุมที่สั่ง จาก IK state ล่าสุด
+                        if _ik_prev_angles_rad is not None:
+                            tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
+                            tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
+                        else:
+                            tA_cmd = tB_cmd = float('nan')
                         # รอให้มอเตอร์เคลื่อนที่เสร็จแล้วอ่าน feedback
                         time.sleep(max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2))
                         leg.print_status()
+                        # เขียน CSV log (current_position อัปเดตแล้วใน print_status)
+                        _write_grid_log(target_id, tx, ty, tA_cmd, tB_cmd,
+                                        leg.motor_a.current_position,
+                                        leg.motor_b.current_position)
                 except FileNotFoundError:
                     print(f"  ❌ ไม่พบไฟล์: {GRID_FILE}")
                 except Exception as _e:
