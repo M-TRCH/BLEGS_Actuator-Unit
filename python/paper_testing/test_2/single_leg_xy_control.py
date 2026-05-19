@@ -1210,6 +1210,14 @@ def load_compensation_model(path: str = COMPENSATION_MODEL_FILE) -> dict | None:
         with open(path, 'r', encoding='utf-8') as f:
             model = json.load(f)
         print(f"  ✅ โหลด compensation model: {os.path.basename(path)}")
+        deg = model.get('polynomial_degree', '?')
+        features = model.get('feature_names', [])
+        print(f"     Degree   : {deg}")
+        print(f"     Features : {features}")
+        mx = model.get('model_x', {})
+        my = model.get('model_y', {})
+        print(f"     model_x  : intercept={mx.get('intercept', float('nan')):+.4f}  coef={mx.get('coef', [])}")
+        print(f"     model_y  : intercept={my.get('intercept', float('nan')):+.4f}  coef={my.get('coef', [])}")
         m = model.get('metrics', {})
         if m:
             print(f"     RMSE X: {m.get('rmse_x_before',0):.3f} → {m.get('rmse_x_after',0):.3f} mm  "

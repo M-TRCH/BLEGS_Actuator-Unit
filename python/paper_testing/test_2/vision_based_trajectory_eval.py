@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 # ==========================================
 # 1. ตั้งค่าพารามิเตอร์
 # ==========================================
-VIDEO_UNCOMP = r"C:\Users\mteer\OneDrive\Desktop\uncomp_25_0_-190_5.MOV"   # ไฟล์วิดีโอแบบ ไม่ชดเชย (ปิด ML)
-VIDEO_COMP   = r"C:\Users\mteer\OneDrive\Desktop\comp_25_0_-190_5.MOV"     # ไฟล์วิดีโอแบบ ชดเชย (เปิด ML)
+VIDEO_UNCOMP = r"C:\Users\mteer\OneDrive\Desktop\nocomp_45_0_-180_5.MOV"   # ไฟล์วิดีโอแบบ ไม่ชดเชย (ปิด ML)
+VIDEO_COMP   = r"C:\Users\mteer\OneDrive\Desktop\comp_45_0_-180_5.MOV"     # ไฟล์วิดีโอแบบ ชดเชย (เปิด ML)
 CALIB_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_olympus25mm.npz")
 
 TARGET_ID = 4  # ID ของ ArTag ที่ปลายเท้า (เคลื่อนที่)
@@ -24,8 +24,8 @@ REF_DIST_MM = np.linalg.norm(REF_WORLD[1] - REF_WORLD[0])  # = 85.0 mm
 FRAME_STEP  = 1      # ประมวลผลทุก N เฟรม (1 = ทุกเฟรม, 3 = ข้าม 2)
 
 CENTER_X_MM = 0.0       # จุดศูนย์กลางวงโคจรอุดมคติ แกน X
-CENTER_Y_MM = -190.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
-RADIUS_MM   = 25.0      # รัศมีวงโคจรอุดมคติ
+CENTER_Y_MM = -180.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
+RADIUS_MM   = 45.0      # รัศมีวงโคจรอุดมคติ
 
 # ==========================================
 # 2. Helper: แปลงผล detectMarkers เป็น dict {id: center_px}
@@ -193,6 +193,24 @@ plt.ylabel('Y Position (mm)', fontsize=12)
 plt.axis('equal')
 plt.grid(True, linestyle=':', alpha=0.7)
 plt.legend(loc='lower right')
+
+metrics_text = (
+    f"{'Metric':<14} {'Uncomp':>9} {'Comp':>9}\n"
+    f"{'─'*34}\n"
+    f"{'Mean error':<14} {mean_u:>7.3f}mm {mean_c:>7.3f}mm\n"
+    f"{'Std dev':<14} {std_u:>7.3f}mm {std_c:>7.3f}mm\n"
+    f"{'RMS error':<14} {rms_u:>7.3f}mm {rms_c:>7.3f}mm\n"
+    f"{'Max error':<14} {max_u:>7.3f}mm {max_c:>7.3f}mm\n"
+    f"{'─'*34}\n"
+    f"{'Improvement':<14} {(1 - rms_c/rms_u)*100:>17.1f}%"
+)
+plt.gca().text(
+    0.02, 0.02, metrics_text,
+    transform=plt.gca().transAxes,
+    fontsize=9, verticalalignment='bottom',
+    fontfamily='monospace',
+    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.85, edgecolor='gray')
+)
 
 out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trajectory_comparison.png')
 plt.savefig(out_path, dpi=300)
