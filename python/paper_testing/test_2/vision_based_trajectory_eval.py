@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 # ==========================================
 # 1. ตั้งค่าพารามิเตอร์
 # ==========================================
-VIDEO_UNCOMP = r"C:\Users\mteer\OneDrive\Desktop\nocomp_45_0_-180_5.MOV"   # ไฟล์วิดีโอแบบ ไม่ชดเชย (ปิด ML)
-VIDEO_COMP   = r"C:\Users\mteer\OneDrive\Desktop\comp_45_0_-180_5.MOV"     # ไฟล์วิดีโอแบบ ชดเชย (เปิด ML)
+VIDEO_UNCOMP = r"C:\Users\mteer\OneDrive\Desktop\nocomp_28_0_-190_5.MOV"   # ไฟล์วิดีโอแบบ ไม่ชดเชย (ปิด ML)
+VIDEO_COMP   = r"C:\Users\mteer\OneDrive\Desktop\comp_28_0_-190_5.MOV"     # ไฟล์วิดีโอแบบ ชดเชย (เปิด ML)
 CALIB_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_olympus25mm.npz")
 
 TARGET_ID = 4  # ID ของ ArTag ที่ปลายเท้า (เคลื่อนที่)
@@ -24,8 +24,8 @@ REF_DIST_MM = np.linalg.norm(REF_WORLD[1] - REF_WORLD[0])  # = 85.0 mm
 FRAME_STEP  = 1      # ประมวลผลทุก N เฟรม (1 = ทุกเฟรม, 3 = ข้าม 2)
 
 CENTER_X_MM = 0.0       # จุดศูนย์กลางวงโคจรอุดมคติ แกน X
-CENTER_Y_MM = -180.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
-RADIUS_MM   = 45.0      # รัศมีวงโคจรอุดมคติ
+CENTER_Y_MM = -190.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
+RADIUS_MM   = 28.0      # รัศมีวงโคจรอุดมคติ
 
 # ==========================================
 # 2. Helper: แปลงผล detectMarkers เป็น dict {id: center_px}
