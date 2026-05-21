@@ -1,5 +1,5 @@
 {
-    "model_name": "compensation_model_poly4",
+    "model_name": "model_poly4",
     "polynomial_degree": 4,
     "feature_names": [
         "thetaA",
