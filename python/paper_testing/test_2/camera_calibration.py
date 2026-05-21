@@ -7,8 +7,8 @@ import time
 # ==========================================
 # 1. ตั้งค่าพารามิเตอร์การสอบเทียบ
 # ==========================================
-VIDEO_PATH  = r"C:\Users\mteer\OneDrive\Desktop\chess_board.MOV"
-OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_olympus25mm.npz")
+VIDEO_PATH  = r"D:\THESIS\chess_board.MOV"
+OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "params", "calibration_olympus25f1.2.npz")
 
 # ขนาดของตารางหมากรุก (จำนวนจุดตัดขอบด้านใน ไม่ใช่จำนวนช่อง)
 # ตัวอย่าง: ตาราง 9x6 ช่อง จะมีจุดตัดด้านใน = (8, 5)
