@@ -58,6 +58,14 @@ import serial.tools.list_ports
 if sys.platform == 'win32':
     import msvcrt
 
+# Optional: OpenCV for live capture mode (ArUco-based position measurement)
+try:
+    import cv2
+    import cv2.aruco as _cv2_aruco
+    _CV2_OK = True
+except ImportError:
+    _CV2_OK = False
+
 # ============================================================================
 # USER CONFIGURATION  ← แก้ไขส่วนนี้ก่อนใช้งาน
 # ============================================================================
@@ -86,9 +94,22 @@ GRID_DWELL_S = 0.5          # เวลาหยุดที่แต่ละ�
 GRID_AUTO = True            # True = auto advance, False = กด Enter เพื่อไปจุดถัดไป
 GRID_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'data', 'grid_log.csv')
 
-# Capture mode
-CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
-CAPTURE_TIMEOUT_S = 20.0    # วินาที รอไฟล์รูปใหม่ก่อน timeout
+# Capture mode — ArUco-based live position measurement
+CAPTURE_DIR       = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
+CAPTURE_TIMEOUT_S = 20.0    # (ไม่ใช้แล้ว — เก็บไว้สำหรับ backward-compat)
+CAMERA_INDEX      = 1       # index กล้อง: 0 = built-in, 1 = HDMI capture card
+CAMERA_WIDTH      = 3840    # ความกว้างภาพที่ต้องการ (px); 0 = default
+CAMERA_HEIGHT     = 2160    # ความสูงภาพ
+CALIB_NPZ         = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'calibration_olympus25mm.npz')
+ARUCO_E_ID        = 4       # ArUco marker ID ของ end-effector E
+ARUCO_A_ID        = 0       # ArUco marker ID ของ Motor A
+ARUCO_B_ID        = 1       # ArUco marker ID ของ Motor B
+CAPTURE_SETTLE_S  = 0.3     # รอให้ภาพนิ่งก่อนจับภาพ (วินาที) — เพิ่มเติมจาก dwell
+CAPTURE_N_FRAMES  = 10      # จำนวน frame ที่ใช้เฉลี่ยตำแหน่ง ArUco
+CAPTURE_FLUSH_N   = 4       # frame ที่ flush ทิ้งก่อนจับ (ล้าง buffer กล้อง)
+CAPTURE_WIN_W     = 1280    # ความกว้างหน้าต่าง preview (px)
+SHOW_CAPTURE_WIN  = True    # True = แสดงหน้าต่าง annotated ระหว่างทำงาน
 
 # Circle path trajectory
 CIRCLE_CENTER_X  =  0.0    # จุดกึ่งกลาง x (mm)
@@ -852,7 +873,8 @@ HELP_TEXT = """
   scan         แสดง COM ports ที่มีอยู่
   grid         รันการทดสอบไล่ตำแหน่งตาม workspace_grid.csv (ทุกจุดตามลำดับ)
   grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
-  capture N    เหมือน grid N แต่รอรับรูปใน capture_image แล้วเปลี่ยนชื่อพร้อมข้อมูลตำแหน่ง
+  capture      ไล่ตำแหน่งตาม workspace_grid.csv พร้อมวัด actual XY ด้วยกล้อง+ArUco
+  capture N    เคลื่อนไปจุด N จุดเดียว วัด actual XY จาก ArUco แล้ว log ใน grid_log.csv
   circle       เคลื่อนที่ตาม path วงกลม (ใช้ค่า default จาก config)
   circle R     เช่น  circle 25         → วงกลม R=25 mm ที่ center default
   circle R cx cy     เช่น  circle 25 0 -200  → กำหนด center ด้วย
@@ -884,84 +906,276 @@ def parse_xy(text: str) -> tuple[float, float] | None:
 
 
 # ============================================================================
-# CAPTURE MODE
+# CAPTURE MODE — ArUco-based live position measurement
 # ============================================================================
 
-_IMAGE_EXTS = {
-    '.jpg', '.JPG', '.png', '.bmp', '.tiff', '.tif', '.webp',
-    '.heic', '.heif', '.raw', '.dng', '.cr2', '.cr3', '.nef',
-    '.arw', '.orf', '.rw2', '.pef', '.srw',
-}
 
-
-def _snapshot_files(folder: str) -> set:
-    """คืน set ของชื่อไฟล์ทั้งหมดใน folder (ไม่กรอง extension)"""
+def _load_calib(path: str):
+    """โหลด camera_matrix, dist_coeffs จาก .npz — คืน (None, None) ถ้าไม่พบ"""
     try:
-        return {f for f in os.listdir(folder)
-                if os.path.isfile(os.path.join(folder, f))}
-    except FileNotFoundError:
-        return set()
+        data = np.load(path)
+        return data['camera_matrix'], data['dist_coeffs']
+    except Exception:
+        return None, None
 
 
-def _is_image(filename: str) -> bool:
-    """ตรวจว่าชื่อไฟล์มี extension เป็นรูปภาพ (case-insensitive)"""
-    return os.path.splitext(filename)[1].lower() in _IMAGE_EXTS
-
-
-def _wait_for_new_image(folder: str, known: set, timeout_s: float) -> str | None:
+def _open_camera(index: int, width: int, height: int):
     """
-    รอไฟล์รูปใหม่ใน folder → คืน full path หรือ None ถ้า timeout
-    - known: snapshot ของไฟล์ทั้งหมด (จาก _snapshot_files) ก่อนเริ่มรอ
-    - กรอง image extension ที่ระดับนี้ เพื่อไม่พลาดนามสกุลตัวพิมพ์ใหญ่
+    เปิดกล้องด้วย cv2.CAP_DSHOW (Windows) และตั้งค่า resolution
+    คืน cv2.VideoCapture หรือ None ถ้าเปิดไม่ได้
     """
-    deadline = time.time() + timeout_s
-    last_print = 0.0
-    while time.time() < deadline:
-        current = _snapshot_files(folder)
-        new_images = {f for f in current - known if _is_image(f)}
-        if new_images:
-            return os.path.join(folder, sorted(new_images)[0])
-        # แสดง countdown ทุก 5 วินาที
-        now = time.time()
-        if now - last_print >= 5.0:
-            remaining = deadline - now
-            print(f"     รอ... {remaining:.0f} s  (ไฟล์ใน folder: {len(current)})", flush=True)
-            last_print = now
-        time.sleep(0.3)
-    return None
+    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        return None
+    if width > 0 and height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"  📷 Camera index={index}  {actual_w}×{actual_h}")
+    return cap
 
 
-def _angle_fmt(v: float) -> str:
+def _build_leg_transform(a_px: np.ndarray, b_px: np.ndarray):
     """
-    ฟอร์แมตมุม (degrees) สำหรับชื่อไฟล์ — ใช้อักขระที่ Windows รองรับ
-    ตัวอย่าง:  +15.0 → 'p15p0'   -63.5 → 'n63p5'   nan → 'nan'
+    สร้าง transform pixel → leg-frame จากตำแหน่ง Motor A และ B ใน pixel
+
+    Returns: (origin_px, v_x, v_y_down, px_per_mm)
+        origin_px  : กึ่งกลาง A–B (pixel)
+        v_x        : unit vector ทิศ +x (A→B)
+        v_y_down   : unit vector ทิศลงในภาพ (ตรงกับทิศ y− ใน leg frame)
+        px_per_mm  : scale
     """
-    if np.isnan(v):
-        return 'nan'
-    sign = 'p' if v >= 0 else 'n'
-    return f"{sign}{abs(v):.1f}".replace('.', 'p')
+    origin = (a_px + b_px) / 2.0
+    v_AB   = b_px - a_px
+    dist   = np.linalg.norm(v_AB)
+    if dist < 1e-6:
+        return None
+    vx    = v_AB / dist
+    vy_dn = np.array([-vx[1], vx[0]])   # 90° CCW ใน image space → ลง
+    ppmm  = dist / MOTOR_SPACING
+    return origin, vx, vy_dn, ppmm
+
+
+def _px_to_legframe(pt_px: np.ndarray, transform) -> tuple[float, float]:
+    """pixel → (x_mm, y_mm) ในระบบพิกัดขา"""
+    origin, vx, vy_dn, ppmm = transform
+    d = pt_px - origin
+    return float(np.dot(d, vx) / ppmm), float(-np.dot(d, vy_dn) / ppmm)
+
+
+def _grab_aruco_sample(
+    cap,
+    detector,
+    camera_matrix,
+    dist_coeffs,
+    n_frames: int   = CAPTURE_N_FRAMES,
+    flush_n:  int   = CAPTURE_FLUSH_N,
+) -> tuple[dict, np.ndarray | None]:
+    """
+    Flush กล้อง flush_n frame แล้วจับ n_frames frame ใหม่
+    ตรวจ ArUco ทุก frame และหาค่า median ตำแหน่งของแต่ละ marker
+
+    Returns:
+        markers   : {marker_id: center_px (float64 ndarray)}
+                    ว่างถ้าไม่พบ marker ใดเลย
+        last_frame: frame สุดท้ายที่ undistort แล้ว (BGR) หรือ None
+    """
+    # Flush old frames from buffer
+    for _ in range(flush_n):
+        cap.read()
+
+    accumulator: dict[int, list] = {}
+    last_frame = None
+
+    for _ in range(n_frames):
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        if camera_matrix is not None:
+            frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
+        last_frame = frame
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = detector.detectMarkers(gray)
+        if ids is not None:
+            for i, mid in enumerate(ids.flatten()):
+                center = corners[i][0].mean(axis=0)
+                accumulator.setdefault(int(mid), []).append(center)
+
+    markers = {mid: np.median(pts, axis=0)
+               for mid, pts in accumulator.items()}
+    return markers, last_frame
+
+
+def _show_capture_frame(
+    frame:          np.ndarray,
+    markers:        dict,
+    transform,
+    pid:            int,
+    target_xy:      tuple[float, float],
+    video_xy:       tuple[float, float],
+    point_num:      int,
+    total_points:   int,
+    motor_feedback: dict | None = None,
+) -> None:
+    """
+    วาด annotation บน frame แล้วแสดงใน cv2 window (non-blocking)
+
+    Annotations:
+      • เส้น Motor A–B (แกนอ้างอิง)
+      • วงกลมที่ Motor A, B, E พร้อม label
+      • cross-hair ที่ E
+      • กรอบ info ด้านซ้ายบน: ID, progress, target, actual, error
+      • scale bar
+    """
+    vis = frame.copy()
+    h, w = vis.shape[:2]
+
+    # ─── Marker colors ───────────────────────────────────────────────
+    _COLORS = {
+        ARUCO_A_ID: (  0, 220,   0),   # green — Motor A
+        ARUCO_B_ID: ( 50, 180, 255),   # sky-blue — Motor B
+        ARUCO_E_ID: (  0,  80, 255),   # orange-red — end-effector E
+    }
+    _LABELS = {ARUCO_A_ID: 'A', ARUCO_B_ID: 'B', ARUCO_E_ID: 'E'}
+
+    # ─── Motor axis line A–B ─────────────────────────────────────────
+    if ARUCO_A_ID in markers and ARUCO_B_ID in markers:
+        pa = tuple(markers[ARUCO_A_ID].astype(int))
+        pb = tuple(markers[ARUCO_B_ID].astype(int))
+        cv2.line(vis, pa, pb, (0, 220, 0), 2)
+        # Origin (midpoint)
+        if transform is not None:
+            orig = tuple(transform[0].astype(int))
+            cv2.circle(vis, orig, 6, (0, 255, 255), -1)
+            cv2.putText(vis, 'O', (orig[0] + 10, orig[1] - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    # ─── Detected markers ────────────────────────────────────────────
+    for mid, pos_px in markers.items():
+        cx, cy = int(pos_px[0]), int(pos_px[1])
+        color  = _COLORS.get(mid, (180, 180, 180))
+        label  = _LABELS.get(mid, f'ID{mid}')
+        cv2.circle(vis, (cx, cy), 14, color, 2)
+        cv2.putText(vis, label, (cx + 18, cy + 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+    # ─── Cross-hair at E ─────────────────────────────────────────────
+    if ARUCO_E_ID in markers:
+        ex, ey = int(markers[ARUCO_E_ID][0]), int(markers[ARUCO_E_ID][1])
+        cv2.drawMarker(vis, (ex, ey), _COLORS[ARUCO_E_ID],
+                       cv2.MARKER_CROSS, 40, 2)
+        cv2.circle(vis, (ex, ey), 20, _COLORS[ARUCO_E_ID], 2)
+
+    # ─── Scale bar (50 mm) ───────────────────────────────────────────
+    if transform is not None:
+        ppmm = transform[3]
+        bar_px = int(ppmm * 50)
+        bar_y  = h - 40
+        bar_x0 = 40
+        bar_x1 = bar_x0 + bar_px
+        cv2.line(vis, (bar_x0, bar_y), (bar_x1, bar_y), (255, 255, 255), 3)
+        cv2.line(vis, (bar_x0, bar_y - 8), (bar_x0, bar_y + 8), (255, 255, 255), 2)
+        cv2.line(vis, (bar_x1, bar_y - 8), (bar_x1, bar_y + 8), (255, 255, 255), 2)
+        cv2.putText(vis, '50 mm', (bar_x0, bar_y - 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    # ─── Info overlay ────────────────────────────────────────────────
+    tx, ty   = target_xy
+    vx_mm, vy_mm = video_xy
+    err_mm   = (np.sqrt((vx_mm - tx)**2 + (vy_mm - ty)**2)
+                if not (np.isnan(vx_mm) or np.isnan(vy_mm)) else float('nan'))
+
+    if motor_feedback:
+        mot_str = (f"tA={motor_feedback.get('tA_act', float('nan')):+.1f}  "
+                   f"tB={motor_feedback.get('tB_act', float('nan')):+.1f} deg")
+    else:
+        mot_str = ''
+
+    markers_ids = sorted(markers.keys())
+    info_lines = [
+        (f"Point {pid}  [{point_num}/{total_points}]",  (255, 255, 100)),
+        (f"Target : ({tx:+.1f}, {ty:+.1f}) mm",        (220, 220, 220)),
+        (f"Actual : ({vx_mm:+.1f}, {vy_mm:+.1f}) mm"
+         if not np.isnan(vx_mm)
+         else "Actual : N/A (E not detected)",           (100, 200, 255)),
+        (f"Error  : {err_mm:.2f} mm"
+         if not np.isnan(err_mm)
+         else "Error  : N/A",
+         (100, 255, 150) if (not np.isnan(err_mm) and err_mm < 5.0) else (80, 80, 255)),
+        (f"Motors : {mot_str}",                         (200, 200, 200)),
+        (f"Markers: {markers_ids}",                     (180, 220, 180)),
+    ]
+
+    # Semi-transparent background box
+    box_h   = len(info_lines) * 42 + 20
+    box_w   = 560
+    overlay = vis.copy()
+    cv2.rectangle(overlay, (10, 10), (box_w, box_h), (0, 0, 0), cv2.FILLED)
+    cv2.addWeighted(overlay, 0.55, vis, 0.45, 0, vis)
+
+    y_off = 44
+    for line_text, color in info_lines:
+        cv2.putText(vis, line_text, (20, y_off),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.80, (0, 0, 0), 3)
+        cv2.putText(vis, line_text, (20, y_off),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.80, color, 2)
+        y_off += 42
+
+    # ─── Resize and show ─────────────────────────────────────────────
+    win_w  = CAPTURE_WIN_W
+    win_h  = max(1, int(h * win_w / w))
+    small  = cv2.resize(vis, (win_w, win_h))
+    WIN    = 'Capture Mode — ArUco Position Tracking  [q=stop]'
+    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN, win_w, win_h)
+    cv2.imshow(WIN, small)
+    key = cv2.waitKey(1) & 0xFF
+    return key  # caller can check for 'q' (113)
+
+
+def _motor_dwell_and_feedback(leg: 'SingleLegController', dwell_s: float) -> dict:
+    """
+    รอ dwell_s วินาที แล้วอ่าน motor feedback
+    คืน dict {tA_cmd, tB_cmd, tA_act, tB_act}
+    """
+    time.sleep(dwell_s)
+    if _ik_prev_angles_rad is not None:
+        tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
+        tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
+    else:
+        tA_cmd = tB_cmd = float('nan')
+    fb_a = leg.motor_a.ping()
+    fb_b = leg.motor_b.ping()
+    leg.motor_a.set_timeout(FAST_TIMEOUT)
+    leg.motor_b.set_timeout(FAST_TIMEOUT)
+    tA_act = fb_a['position'] if fb_a else float('nan')
+    tB_act = fb_b['position'] if fb_b else float('nan')
+    return {'tA_cmd': tA_cmd, 'tB_cmd': tB_cmd,
+            'tA_act': tA_act, 'tB_act': tB_act}
 
 
 def run_capture_point(
     leg: 'SingleLegController',
     target_id: int,
+    cap=None,
     csv_path: str = GRID_FILE,
-    capture_dir: str = CAPTURE_DIR,
-    capture_timeout_s: float = CAPTURE_TIMEOUT_S,
 ) -> bool:
     """
-    เคลื่อนไปยัง point_id = target_id, รับ motor feedback
-    แล้วรอไฟล์รูปใหม่ใน capture_dir และเปลี่ยนชื่อไฟล์ดังนี้:
+    เคลื่อนไปยัง point_id = target_id แล้วถ่ายภาพจากกล้อง
+    ตรวจจับ ArUco markers คำนวณ actual position (x,y) ใน leg frame
+    บันทึกลง grid_log.csv และแสดงภาพ annotated
 
-        p{id:03d}_x{x}_y{y}_cA{tA_cmd}_cB{tB_cmd}_aA{tA_act}_aB{tB_act}{ext}
-
-    โดย  x/y/angle ใช้ _angle_fmt(): +15.0→p15p0, -63.5→n63p5
-    ตัวอย่าง:
-        p010_xp15p0_yn180p0_cAn63p5_cBn85p2_aAn63p1_aBn85p0.jpg
+    Args:
+        cap: cv2.VideoCapture ที่เปิดอยู่แล้ว (ถ้า None จะเปิด/ปิดเอง)
 
     Returns:
-        True ถ้าสำเร็จทั้งหมด
+        True ถ้าสำเร็จ (เคลื่อนที่ได้และ log แล้ว)
     """
+    if not _CV2_OK:
+        print("  ❌ capture mode ต้องการ opencv-python  (pip install opencv-python opencv-contrib-python)")
+        return False
+
     import csv as _csv
 
     # ─── โหลดตำแหน่งจาก CSV ──────────────────────────────────────────
@@ -986,92 +1200,81 @@ def run_capture_point(
 
     tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
 
-    # ─── เตรียม capture_dir ──────────────────────────────────────────
-    os.makedirs(capture_dir, exist_ok=True)
-    known_images = _snapshot_files(capture_dir)
-
-    # ─── เคลื่อนที่ไปยังตำแหน่ง ─────────────────────────────────────
-    print(f"\n  Capture ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
-    ok = leg.move_to(tx, ty)
-    if not ok:
-        return False
-
-    # บันทึกมุมที่สั่ง (output-shaft, degrees) จาก IK state ล่าสุด
-    if _ik_prev_angles_rad is not None:
-        tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
-        tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
-    else:
-        tA_cmd = tB_cmd = float('nan')
-
-    # ─── รอให้มอเตอร์เสร็จ → รับ feedback จริง ──────────────────────
-    time.sleep(max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2))
-
-    fb_a = leg.motor_a.ping()
-    fb_b = leg.motor_b.ping()
-    leg.motor_a.set_timeout(FAST_TIMEOUT)
-    leg.motor_b.set_timeout(FAST_TIMEOUT)
-
-    tA_act = fb_a['position'] if fb_a else float('nan')
-    tB_act = fb_b['position'] if fb_b else float('nan')
-
-    print("\n  ─── Motor Status ───────────────────────────────")
-    for label, fb in [('A', fb_a), ('B', fb_b)]:
-        if fb:
-            flags = fb['flags']
-            moving  = '🔄' if (flags & 0x01) else '  '
-            at_goal = '🎯' if (flags & 0x04) else '  '
-            error   = '⚠️ ' if (flags & 0x02) else '  '
-            print(f"    Motor {label}: pos={fb['position']:+7.2f}°  "
-                  f"current={fb['current']:5d} mA  "
-                  f"flags=0x{flags:02X}  {moving}{at_goal}{error}")
-        else:
-            print(f"    Motor {label}: ❌ ไม่ได้รับ feedback")
-    print(f"    Cmd   A: {tA_cmd:+.2f}°  B: {tB_cmd:+.2f}°")
-    print(f"    Actual A: {tA_act:+.2f}°  B: {tB_act:+.2f}°")
-    print("  ────────────────────────────────────────────────")
-
-    # ─── รอไฟล์รูปใหม่ ───────────────────────────────────────────────
-    print(f"\n  ⏳ รอไฟล์รูปใหม่ใน {capture_dir}")
-    print(f"     (timeout={capture_timeout_s:.0f} s — ถ่ายรูปหรือ copy ไฟล์เข้าโฟลเดอร์)")
-    new_path = _wait_for_new_image(capture_dir, known_images, capture_timeout_s)
-
-    if new_path is None:
-        print("  ⚠️  ไม่พบไฟล์รูปใหม่ภายใน timeout")
-        return False
-
-    # ─── เปลี่ยนชื่อไฟล์ ─────────────────────────────────────────────
-    ext = os.path.splitext(new_path)[1].lower()
-    new_name = (
-        f"p{target_id:03d}"
-        f"_x{_angle_fmt(tx)}_y{_angle_fmt(ty)}"
-        f"_cA{_angle_fmt(tA_cmd)}_cB{_angle_fmt(tB_cmd)}"
-        f"_aA{_angle_fmt(tA_act)}_aB{_angle_fmt(tB_act)}"
-        f"{ext}"
-    )
-    new_full = os.path.join(capture_dir, new_name)
-
-    # retry loop: รอให้แอปกล้อง/Windows ปล่อย file handle ก่อน rename
-    _RENAME_RETRIES = 10
-    _RENAME_DELAY   = 0.5   # seconds
-    for _attempt in range(_RENAME_RETRIES):
-        try:
-            os.rename(new_path, new_full)
-            print(f"  ✅ {os.path.basename(new_path)}")
-            print(f"     → {new_name}")
-            return True
-        except PermissionError:
-            if _attempt < _RENAME_RETRIES - 1:
-                print(f"     ไฟล์ถูกล็อก รอ {_RENAME_DELAY:.1f}s... ({_attempt + 1}/{_RENAME_RETRIES})",
-                      flush=True)
-                time.sleep(_RENAME_DELAY)
-            else:
-                print(f"  ❌ เปลี่ยนชื่อไฟล์ล้มเหลว: ไฟล์ยังถูกล็อกอยู่หลังจากลอง {_RENAME_RETRIES} ครั้ง")
-                return False
-        except Exception as _e:
-            print(f"  ❌ เปลี่ยนชื่อไฟล์ล้มเหลว: {_e}")
+    # ─── เปิดกล้องถ้ายังไม่มี ────────────────────────────────────────
+    _own_cap = False
+    if cap is None:
+        camera_matrix, dist_coeffs = _load_calib(CALIB_NPZ)
+        cap = _open_camera(CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT)
+        if cap is None:
+            print(f"  ❌ ไม่สามารถเปิดกล้อง index={CAMERA_INDEX}")
             return False
+        _own_cap = True
+    camera_matrix, dist_coeffs = _load_calib(CALIB_NPZ)
+    aruco_dict   = _cv2_aruco.getPredefinedDictionary(_cv2_aruco.DICT_6X6_250)
+    aruco_params = _cv2_aruco.DetectorParameters()
+    detector     = _cv2_aruco.ArucoDetector(aruco_dict, aruco_params)
 
-    return False
+    try:
+        # ─── เคลื่อนที่ไปยังตำแหน่ง ─────────────────────────────────
+        print(f"\n  Capture ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
+        ok = leg.move_to(tx, ty, force=True)
+
+        # รอ dwell + อ่าน motor feedback
+        dwell_total = max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2)
+        fb = _motor_dwell_and_feedback(leg, dwell_total)
+
+        print(f"    Motor cmd  θA={fb['tA_cmd']:+.2f}°  θB={fb['tB_cmd']:+.2f}°")
+        print(f"    Motor act  θA={fb['tA_act']:+.2f}°  θB={fb['tB_act']:+.2f}°")
+
+        # ─── รอให้ภาพนิ่ง แล้วจับ ArUco ─────────────────────────────
+        time.sleep(CAPTURE_SETTLE_S)
+        markers, frame = _grab_aruco_sample(
+            cap, detector, camera_matrix, dist_coeffs,
+            n_frames=CAPTURE_N_FRAMES, flush_n=CAPTURE_FLUSH_N,
+        )
+
+        # ─── คำนวณ actual position ───────────────────────────────────
+        transform = None
+        video_x = video_y = float('nan')
+
+        if ARUCO_A_ID in markers and ARUCO_B_ID in markers:
+            transform = _build_leg_transform(markers[ARUCO_A_ID], markers[ARUCO_B_ID])
+
+        if transform is not None and ARUCO_E_ID in markers:
+            video_x, video_y = _px_to_legframe(markers[ARUCO_E_ID], transform)
+
+        err_mm = (np.sqrt((video_x - tx)**2 + (video_y - ty)**2)
+                  if not (np.isnan(video_x) or np.isnan(video_y)) else float('nan'))
+
+        print(f"    ArUco markers detected: {sorted(markers.keys())}")
+        if not np.isnan(video_x):
+            print(f"    Actual pos  x={video_x:+.2f}  y={video_y:+.2f} mm  |  err={err_mm:.2f} mm")
+        else:
+            print(f"    Actual pos  N/A (E marker not detected)")
+
+        # ─── แสดงภาพ annotated ───────────────────────────────────────
+        if SHOW_CAPTURE_WIN and frame is not None:
+            _show_capture_frame(
+                frame, markers, transform,
+                pid=target_id, target_xy=(tx, ty),
+                video_xy=(video_x, video_y),
+                point_num=1, total_points=1,
+                motor_feedback=fb,
+            )
+
+        # ─── บันทึก grid_log ─────────────────────────────────────────
+        _write_grid_log(
+            target_id, tx, ty,
+            fb['tA_cmd'], fb['tB_cmd'],
+            fb['tA_act'], fb['tB_act'],
+            video_x=video_x, video_y=video_y,
+        )
+        return ok
+
+    finally:
+        if _own_cap:
+            cap.release()
+            cv2.destroyAllWindows()
 
 
 def _write_grid_log(
@@ -1079,23 +1282,42 @@ def _write_grid_log(
     target_x: float, target_y: float,
     tA_cmd: float, tB_cmd: float,
     tA_act: float, tB_act: float,
+    video_x: float | None = None,
+    video_y: float | None = None,
     log_path: str = GRID_LOG_FILE,
 ) -> None:
     """
-    บันทึกผล grid N ลง CSV (append mode)
+    บันทึกผล grid/capture ลง CSV (append mode)
     สร้าง header อัตโนมัติถ้ายังไม่มีไฟล์
 
     Columns:
         point_id, target_x_mm, target_y_mm,
         cmd_thetaA_deg, cmd_thetaB_deg,
-        act_thetaA_deg, act_thetaB_deg
+        act_thetaA_deg, act_thetaB_deg,
+        video_act_x_mm, video_act_y_mm,
+        video_err_x_mm, video_err_y_mm, video_err_dist_mm
     """
     import csv as _csv
     _FIELDNAMES = [
         'point_id', 'target_x_mm', 'target_y_mm',
         'cmd_thetaA_deg', 'cmd_thetaB_deg',
         'act_thetaA_deg', 'act_thetaB_deg',
+        'video_act_x_mm', 'video_act_y_mm',
+        'video_err_x_mm', 'video_err_y_mm', 'video_err_dist_mm',
     ]
+
+    _vx = video_x if video_x is not None else float('nan')
+    _vy = video_y if video_y is not None else float('nan')
+    if not (np.isnan(_vx) or np.isnan(_vy)):
+        _ex   = _vx - target_x
+        _ey   = _vy - target_y
+        _edst = float(np.sqrt(_ex**2 + _ey**2))
+    else:
+        _ex = _ey = _edst = float('nan')
+
+    def _fmt(v): return '' if np.isnan(v) else f'{v:.4f}'
+
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
     write_header = not os.path.isfile(log_path)
     try:
         with open(log_path, 'a', newline='', encoding='utf-8') as _f:
@@ -1103,19 +1325,208 @@ def _write_grid_log(
             if write_header:
                 _w.writeheader()
             _w.writerow({
-                'point_id':       point_id,
-                'target_x_mm':    f'{target_x:.4f}',
-                'target_y_mm':    f'{target_y:.4f}',
-                'cmd_thetaA_deg': f'{tA_cmd:.4f}',
-                'cmd_thetaB_deg': f'{tB_cmd:.4f}',
-                'act_thetaA_deg': f'{tA_act:.4f}',
-                'act_thetaB_deg': f'{tB_act:.4f}',
+                'point_id':          point_id,
+                'target_x_mm':       f'{target_x:.4f}',
+                'target_y_mm':       f'{target_y:.4f}',
+                'cmd_thetaA_deg':    f'{tA_cmd:.4f}',
+                'cmd_thetaB_deg':    f'{tB_cmd:.4f}',
+                'act_thetaA_deg':    f'{tA_act:.4f}',
+                'act_thetaB_deg':    f'{tB_act:.4f}',
+                'video_act_x_mm':    _fmt(_vx),
+                'video_act_y_mm':    _fmt(_vy),
+                'video_err_x_mm':    _fmt(_ex),
+                'video_err_y_mm':    _fmt(_ey),
+                'video_err_dist_mm': _fmt(_edst),
             })
-        print(f"  📄 บันทึก → {os.path.basename(log_path)}  "
-              f"(cmd θA={tA_cmd:+.2f}° θB={tB_cmd:+.2f}°  "
-              f"act θA={tA_act:+.2f}° θB={tB_act:+.2f}°)")
+        _vid_str = (f"  vid ({_vx:+.2f},{_vy:+.2f}) mm  err={_edst:.2f} mm"
+                    if not np.isnan(_vx) else "")
+        print(f"  📄 log ID={point_id}  "
+              f"cmd θA={tA_cmd:+.2f}° θB={tB_cmd:+.2f}°  "
+              f"act θA={tA_act:+.2f}° θB={tB_act:+.2f}°"
+              f"{_vid_str}")
     except Exception as _e:
         print(f"  ⚠️  เขียน log ล้มเหลว: {_e}")
+
+
+def run_capture_sweep(
+    leg: 'SingleLegController',
+    csv_path: str  = GRID_FILE,
+    dwell_s: float = GRID_DWELL_S,
+    start_id: int  = 1,
+) -> None:
+    """
+    ไล่ตำแหน่งตาม calibration grid CSV เหมือน run_grid_sweep
+    แต่เพิ่มการวัด actual position ด้วยกล้องและ ArUco markers
+    บันทึก video_act_x/y + error ลง grid_log.csv ขณะทำงาน
+    แสดงภาพ annotated พร้อม info ใน window (ไม่บันทึกรูป)
+
+    ArUco IDs:
+        0 = Motor A  (reference — fixed)
+        1 = Motor B  (reference — fixed)
+        4 = End-effector E  (target ที่วัด)
+    """
+    if not _CV2_OK:
+        print("  ❌ capture mode ต้องการ opencv-python")
+        print("     pip install opencv-python opencv-contrib-python")
+        return
+
+    import csv as _csv
+
+    # ─── โหลด CSV ────────────────────────────────────────────────────
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            reader = _csv.DictReader(f)
+            points = [
+                (int(row['point_id']) if 'point_id' in row else idx + 1,
+                 float(row['target_x_mm']), float(row['target_y_mm']))
+                for idx, row in enumerate(reader)
+            ]
+    except FileNotFoundError:
+        print(f"  ❌ ไม่พบไฟล์: {csv_path}")
+        return
+    except Exception as e:
+        print(f"  ❌ โหลด CSV ล้มเหลว: {e}")
+        return
+
+    if not points:
+        print("  ❌ ไม่มีข้อมูลใน CSV")
+        return
+
+    points = sorted([p for p in points if p[0] >= start_id], key=lambda p: p[0])
+    total  = len(points)
+    if total == 0:
+        print(f"  ❌ ไม่มีจุดที่ point_id >= {start_id}")
+        return
+
+    # ─── เปิดกล้องและ ArUco detector ────────────────────────────────
+    camera_matrix, dist_coeffs = _load_calib(CALIB_NPZ)
+    cap = _open_camera(CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT)
+    if cap is None:
+        print(f"  ❌ ไม่สามารถเปิดกล้อง index={CAMERA_INDEX}")
+        print("     ลองเปลี่ยน CAMERA_INDEX ใน config section")
+        return
+
+    aruco_dict   = _cv2_aruco.getPredefinedDictionary(_cv2_aruco.DICT_6X6_250)
+    aruco_params = _cv2_aruco.DetectorParameters()
+    detector     = _cv2_aruco.ArucoDetector(aruco_dict, aruco_params)
+
+    # ─── แสดงสรุปก่อนเริ่ม ──────────────────────────────────────────
+    print(f"\n  ─── Capture Sweep ──────────────────────────────")
+    print(f"    File     : {csv_path}")
+    print(f"    Points   : {total} จุด (เริ่ม ID={points[0][0]})")
+    print(f"    Dwell    : {dwell_s:.1f} s/จุด")
+    print(f"    Camera   : index={CAMERA_INDEX}  settle={CAPTURE_SETTLE_S}s  "
+          f"frames={CAPTURE_N_FRAMES}")
+    print(f"    Calib    : {'✅ โหลดแล้ว' if camera_matrix is not None else '⚠️ ไม่พบ (ไม่ undistort)'}")
+    print(f"    ArUco    : E=ID{ARUCO_E_ID}  A=ID{ARUCO_A_ID}  B=ID{ARUCO_B_ID}")
+    print(f"    Log      : {GRID_LOG_FILE}")
+    print(f"  ────────────────────────────────────────────────")
+    print("  กด Ctrl+C เพื่อหยุดกลางคัน\n")
+
+    # ─── cached transform จาก marker A,B ────────────────────────────
+    _transform_cache = None
+
+    n_ok_move  = 0
+    n_ok_video = 0
+    errors_mm  = []
+
+    WIN_NAME = 'Capture Mode — ArUco Position Tracking  [q=stop]'
+
+    try:
+        for idx, (pid, tx, ty) in enumerate(points, start=1):
+            print(f"\n  [{idx:3d}/{total}] ID={pid:3d}  target=({tx:+6.1f}, {ty:+7.1f}) mm",
+                  end='  ', flush=True)
+
+            # ── เคลื่อนที่ ──────────────────────────────────────────
+            ok_move = leg.move_to(tx, ty, force=True)
+            if ok_move:
+                n_ok_move += 1
+
+            # ── รอ dwell + อ่าน feedback ─────────────────────────
+            dwell_total = max(dwell_s, SCURVE_DURATION_MS / 1000.0 + 0.2)
+            fb = _motor_dwell_and_feedback(leg, dwell_total)
+
+            # ── รอภาพนิ่ง ────────────────────────────────────────
+            time.sleep(CAPTURE_SETTLE_S)
+
+            # ── จับ ArUco ─────────────────────────────────────────
+            markers, frame = _grab_aruco_sample(
+                cap, detector, camera_matrix, dist_coeffs,
+                n_frames=CAPTURE_N_FRAMES, flush_n=CAPTURE_FLUSH_N,
+            )
+
+            # ── คำนวณ transform จาก A,B ──────────────────────────
+            if ARUCO_A_ID in markers and ARUCO_B_ID in markers:
+                t = _build_leg_transform(markers[ARUCO_A_ID], markers[ARUCO_B_ID])
+                if t is not None:
+                    _transform_cache = t
+
+            # ── คำนวณ actual position ─────────────────────────────
+            video_x = video_y = float('nan')
+            if _transform_cache is not None and ARUCO_E_ID in markers:
+                video_x, video_y = _px_to_legframe(
+                    markers[ARUCO_E_ID], _transform_cache
+                )
+                n_ok_video += 1
+                err_mm = float(np.sqrt((video_x - tx)**2 + (video_y - ty)**2))
+                errors_mm.append(err_mm)
+                print(f"E=({video_x:+.1f},{video_y:+.1f}) err={err_mm:.2f}mm", flush=True)
+            else:
+                detected_str = str(sorted(markers.keys()))
+                print(f"E not detected  markers={detected_str}", flush=True)
+
+            # ── แสดงภาพ annotated ─────────────────────────────────
+            if SHOW_CAPTURE_WIN and frame is not None:
+                key = _show_capture_frame(
+                    frame, markers, _transform_cache,
+                    pid=pid, target_xy=(tx, ty),
+                    video_xy=(video_x, video_y),
+                    point_num=idx, total_points=total,
+                    motor_feedback=fb,
+                )
+                if key == ord('q'):
+                    print("\n  ⏹️  ยกเลิกโดยกด q ในหน้าต่างภาพ")
+                    break
+
+            # ── บันทึก log ────────────────────────────────────────
+            _write_grid_log(
+                pid, tx, ty,
+                fb['tA_cmd'], fb['tB_cmd'],
+                fb['tA_act'], fb['tB_act'],
+                video_x=video_x, video_y=video_y,
+            )
+
+            # ── ตรวจ keyboard interrupt ───────────────────────────
+            if sys.platform == 'win32' and msvcrt.kbhit():
+                ch = msvcrt.getch()
+                if ch in (b'q', b'Q'):
+                    print("\n  ⏹️  ยกเลิกโดยกด q")
+                    break
+
+    except KeyboardInterrupt:
+        print("\n  ⏹️  ยกเลิกโดย Ctrl+C")
+    finally:
+        cap.release()
+        if SHOW_CAPTURE_WIN:
+            cv2.destroyWindow(WIN_NAME)
+
+    # ─── สรุปผล ──────────────────────────────────────────────────────
+    print(f"\n  ─── สรุปผล Capture Sweep ──────────────────────")
+    print(f"    จุดทั้งหมด    : {total}")
+    print(f"    เคลื่อนที่ได้  : {n_ok_move}")
+    print(f"    วัดได้ (ArUco): {n_ok_video}")
+    if errors_mm:
+        print(f"    Error mean    : {np.mean(errors_mm):.2f} mm")
+        print(f"    Error max     : {np.max(errors_mm):.2f} mm")
+        print(f"    Error min     : {np.min(errors_mm):.2f} mm")
+    print(f"    Log บันทึกที่  : {GRID_LOG_FILE}")
+    print(f"  ────────────────────────────────────────────────")
+
+    print("\n  กลับ home position...")
+    leg.go_home()
+
+
+
 
 
 def run_grid_sweep(
@@ -1472,13 +1883,17 @@ def run_interactive(leg: SingleLegController):
             for p in ports:
                 print(f"    • {p}")
 
-        # ─── Capture mode (grid N + image rename) ───────────────────
-        elif cmd.startswith('capture '):
+        # ─── Capture mode (ArUco-based position measurement) ───────────
+        elif cmd == 'capture' or cmd.startswith('capture '):
             parts = cmd.split()
-            if len(parts) > 1 and parts[1].isdigit():
+            if len(parts) == 1:
+                # capture → full sweep
+                run_capture_sweep(leg)
+            elif len(parts) > 1 and parts[1].isdigit():
+                # capture N → single point
                 run_capture_point(leg, int(parts[1]))
             else:
-                print("  ⚠️  ใช้งาน: capture N  (N = point_id)")
+                print("  ⚠️  ใช้งาน: capture  (sweep ทั้งหมด)  หรือ  capture N  (จุดเดียว)")
 
         # ─── Circle path ──────────────────────────────────────────────
         elif cmd == 'circle' or cmd.startswith('circle '):
