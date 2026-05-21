@@ -81,10 +81,10 @@ USE_SCURVE = True           # True = S-Curve smooth, False = Direct position
 SCURVE_DURATION_MS = 500    # ระยะเวลาการเคลื่อนที่แบบ S-Curve (ms)
 
 # Grid sweep (calibration LUT)
-GRID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'calibration_grid.csv')
-GRID_DWELL_S = 1.5          # เวลาหยุดที่แต่ละจุด (วินาที) ในโหมด auto
+GRID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'data', 'workspace_grid.csv')
+GRID_DWELL_S = 0.5          # เวลาหยุดที่แต่ละจุด (วินาที) ในโหมด auto
 GRID_AUTO = True            # True = auto advance, False = กด Enter เพื่อไปจุดถัดไป
-GRID_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'grid_log.csv')
+GRID_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'data', 'grid_log.csv')
 
 # Capture mode
 CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capture_image')
@@ -428,6 +428,23 @@ def _circle_intersect_both(c1, r1, c2, r2):
     return c1 + a*vd + h*vp, c1 + a*vd - h*vp
 
 
+def _circle_intersect_clamped(c1, r1, c2, r2):
+    """เหมือน _circle_intersect_both แต่ clamp d ให้อยู่ใน valid range เสมอ
+    เมื่อจุดเป้าหมายเกิน singularity boundary จะคืนค่า tangent point
+    (แขนยืดสุด / งอสุดในทิศทางของเป้าหมาย) แทนที่จะ return None
+    ใช้ใน forced IK สำหรับ grid sweep นอก workspace"""
+    d = np.linalg.norm(c2 - c1)
+    if d == 0:
+        return None
+    d_safe = np.clip(d, abs(r1 - r2) + 1e-9, r1 + r2 - 1e-9)
+    a  = (r1**2 - r2**2 + d_safe**2) / (2 * d_safe)
+    h2 = max(0.0, r1**2 - a**2)
+    h  = np.sqrt(h2)
+    vd = (c2 - c1) / d
+    vp = np.array([-vd[1], vd[0]])
+    return c1 + a*vd + h*vp, c1 + a*vd - h*vp
+
+
 def calculate_fk(theta_A_deg: float, theta_B_deg: float) -> np.ndarray | None:
     """
     คำนวณ Forward Kinematics: มุมมอเตอร์ → ตำแหน่งปลายขา E (lower branch)
@@ -470,7 +487,7 @@ def _home_ik_reference_rad() -> np.ndarray | None:
 _ik_prev_angles_rad: np.ndarray | None = None
 
 
-def calculate_ik(target_xy: np.ndarray) -> tuple[float, float] | None:
+def calculate_ik(target_xy: np.ndarray, force: bool = False) -> tuple[float, float] | None:
     """
     คำนวณ Inverse Kinematics สำหรับ Five-Bar linkage (ไม่มี EF link)
 
@@ -486,6 +503,8 @@ def calculate_ik(target_xy: np.ndarray) -> tuple[float, float] | None:
 
     Args:
         target_xy: [x, y] ตำแหน่งปลายขา (mm) ในระบบพิกัดขา
+        force    : True = ใช้ clamped IK (สั่งงานนอก workspace ได้ โดย clamp
+                   ไปที่ singularity boundary ในทิศทางของเป้าหมาย)
 
     Returns:
         (theta_A_deg, theta_B_deg) มุมมอเตอร์ (output-shaft, degrees)
@@ -494,12 +513,13 @@ def calculate_ik(target_xy: np.ndarray) -> tuple[float, float] | None:
     global _ik_prev_angles_rad
 
     P_E = np.array(target_xy, dtype=float)
+    _intersect = _circle_intersect_clamped if force else _circle_intersect_both
 
-    pts_C = _circle_intersect_both(P_A, L_AC, P_E, L_CE)
+    pts_C = _intersect(P_A, L_AC, P_E, L_CE)
     if pts_C is None:
         return None
 
-    pts_D = _circle_intersect_both(P_B, L_BD, P_E, L_DE)
+    pts_D = _intersect(P_B, L_BD, P_E, L_DE)
     if pts_D is None:
         return None
 
@@ -689,13 +709,15 @@ class SingleLegController:
     # Core move
     # ------------------------------------------------------------------
 
-    def move_to(self, x: float, y: float, duration_ms: int | None = None) -> bool:
+    def move_to(self, x: float, y: float, duration_ms: int | None = None,
+                force: bool = False) -> bool:
         """
         เคลื่อนปลายขาไปยัง (x, y) mm
 
         Args:
             duration_ms: S-Curve duration (ms) สำหรับการเคลื่อนที่นี้โดยเฉพาะ;
                          None = ใช้ค่า SCURVE_DURATION_MS จาก config
+            force      : True = ใช้ clamped IK (สั่งงานนอก workspace ได้)
 
         Returns:
             True ถ้าส่งคำสั่งสำเร็จ, False ถ้า IK ล้มเหลว
@@ -704,7 +726,7 @@ class SingleLegController:
             print("  ❌ ยังไม่ได้เชื่อมต่อ")
             return False
 
-        result = calculate_ik([x, y])
+        result = calculate_ik([x, y], force=force)
         if result is None:
             print(f"  ❌ IK ล้มเหลว: ({x:.1f}, {y:.1f}) อยู่นอก workspace")
             return False
@@ -795,9 +817,23 @@ def print_workspace_info():
     print(f"    Link lengths    : L_AC={L_AC} L_BD={L_BD} L_CE={L_CE} L_DE={L_DE} mm")
     print(f"    Gear ratio      : {GEAR_RATIO}:1")
     print(f"    Home position   : ({HOME_X:+.1f}, {HOME_Y:+.1f}) mm")
-    print("  ─── Approximate Workspace ──────────────────────")
-    print("    x : -60 … +60  mm  (horizontal)")
-    print("    y : -260 … -120 mm (vertical, negative = below motors)")
+    print("  ─── Safe Calibration Workspace ─────────────────")
+    _d_out = L_AC + L_CE          # outer singularity radius (mm) = 250
+    _d_in  = abs(L_AC - L_CE)     # inner singularity radius (mm) = 40
+    _margin = 15.0                # safety margin (mm)
+    _d_lim  = _d_out - _margin    # 235 mm
+    import math as _m
+    # x limit at y = -200 mm  (from outer singularity of Motor A/B)
+    _x_at200 = int(_m.sqrt(max(0, _d_lim**2 - 200**2)) - MOTOR_SPACING/2)
+    # deepest safe y at x = 0
+    _y_min0  = -int(_m.sqrt(_d_lim**2 - (MOTOR_SPACING/2)**2))
+    # deepest safe y at x = 75 mm
+    _y_min75 = -int(_m.sqrt(max(0, _d_lim**2 - (75 + MOTOR_SPACING/2)**2)))
+    print(f"    Outer singularity : d = L_AC+L_CE = {int(_d_out)} mm  (ห้ามเกิน)")
+    print(f"    Inner singularity : d = |L_AC-L_CE| = {int(_d_in)} mm  (ห้ามต่ำกว่า)")
+    print(f"    Safety margin     : {int(_margin)} mm  → d_limit = {int(_d_lim)} mm")
+    print(f"    x : ±{_x_at200} mm  (ที่ y = -200 mm)  |  ±75 mm  (ที่ y > -200 mm)")
+    print(f"    y : -80 … {_y_min0} mm  (x=0)  |  -80 … {_y_min75} mm  (x=±75 mm)")
     print("  ────────────────────────────────────────────────")
 
 
@@ -814,7 +850,7 @@ HELP_TEXT = """
   info         แสดงข้อมูล workspace / leg frame
   s            สลับ profile: S-Curve ↔ Direct
   scan         แสดง COM ports ที่มีอยู่
-  grid         รันการทดสอบไล่ตำแหน่งตาม calibration_grid.csv (ทุกจุดตามลำดับ)
+  grid         รันการทดสอบไล่ตำแหน่งตาม workspace_grid.csv (ทุกจุดตามลำดับ)
   grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
   capture N    เหมือน grid N แต่รอรับรูปใน capture_image แล้วเปลี่ยนชื่อพร้อมข้อมูลตำแหน่ง
   circle       เคลื่อนที่ตาม path วงกลม (ใช้ค่า default จาก config)
@@ -827,11 +863,12 @@ HELP_TEXT = """
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
   ─────────────────────────────────────────────────────────────────────
-  ตัวอย่างตำแหน่ง:
-    0,-220    → home (ยืนตรง)
-    0,-180    → ยกขาขึ้น 40 mm
-    30,-220   → เหยียบไปทางขวา 30 mm
-    -30,-200  → เหยียบซ้าย ยกขึ้นเล็กน้อย
+  ตัวอย่างตำแหน่ง  [ปลอดภัย: d_A,d_B ∈ (40, 250) mm — margin ≥ 15 mm]:
+    0,-155    → กลาง workspace    (d_A=d_B≈161 mm)
+    50,-155   → ขวา, y ตื้น      (d_A≈181 mm, d_B≈155 mm)
+    -50,-180  → ซ้าย, y กลาง    (d_A≈180 mm, d_B≈202 mm)
+    0,-200    → ล่างกลาง         (d_A=d_B≈200 mm)
+  หลีกเลี่ยง: |x| > 80 mm ที่ y < -200 mm  (ใกล้ outer singularity)
 """
 
 
@@ -930,8 +967,10 @@ def run_capture_point(
     # ─── โหลดตำแหน่งจาก CSV ──────────────────────────────────────────
     try:
         with open(csv_path, newline='', encoding='utf-8') as _f:
+            _rows = list(_csv.DictReader(_f))
             _row = next(
-                (r for r in _csv.DictReader(_f) if int(r['point_id']) == target_id),
+                (r for idx, r in enumerate(_rows)
+                 if (int(r['point_id']) if 'point_id' in r else idx + 1) == target_id),
                 None
             )
     except FileNotFoundError:
@@ -1103,8 +1142,9 @@ def run_grid_sweep(
         with open(csv_path, newline='', encoding='utf-8') as f:
             reader = _csv.DictReader(f)
             points = [
-                (int(row['point_id']), float(row['target_x_mm']), float(row['target_y_mm']))
-                for row in reader
+                (int(row['point_id']) if 'point_id' in row else idx + 1,
+                 float(row['target_x_mm']), float(row['target_y_mm']))
+                for idx, row in enumerate(reader)
             ]
     except FileNotFoundError:
         print(f"  ❌ ไม่พบไฟล์: {csv_path}")
@@ -1145,7 +1185,7 @@ def run_grid_sweep(
         for idx, (pid, tx, ty) in enumerate(points, start=1):
             print(f"  [{idx:3d}/{total}] ID={pid:3d}  target=({tx:+6.1f}, {ty:+7.1f}) mm", end='  ')
 
-            ok = leg.move_to(tx, ty)
+            ok = leg.move_to(tx, ty, force=True)
             if not ok:
                 failed.append(pid)
 
@@ -1158,26 +1198,30 @@ def run_grid_sweep(
 
             _should_break = False
             if auto:
-                time.sleep(dwell_s)
+                if ok:
+                    time.sleep(dwell_s)   # รอ settle เฉพาะเมื่อ IK สำเร็จ
             else:
-                try:
-                    ans = input()
-                    if ans.strip().lower() == 'q':
-                        print("  ⏹️  ยกเลิกโดย user")
+                if ok:
+                    try:
+                        ans = input()
+                        if ans.strip().lower() == 'q':
+                            print("  ⏹️  ยกเลิกโดย user")
+                            _should_break = True
+                    except (EOFError, KeyboardInterrupt):
+                        print()
                         _should_break = True
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    _should_break = True
 
-            # อ่าน actual angles หลัง dwell แล้วเขียน log
+            # อ่าน actual angles หลัง dwell แล้วเขียน log (ทุกจุด รวมถึง IK ล้มเหลว)
             if ok:
                 fb_a = leg.motor_a.ping()
                 fb_b = leg.motor_b.ping()
                 leg.motor_a.set_timeout(FAST_TIMEOUT)
                 leg.motor_b.set_timeout(FAST_TIMEOUT)
-                _write_grid_log(pid, tx, ty, tA_cmd, tB_cmd,
-                                fb_a['position'] if fb_a else float('nan'),
-                                fb_b['position'] if fb_b else float('nan'))
+                actual_a = fb_a['position'] if fb_a else float('nan')
+                actual_b = fb_b['position'] if fb_b else float('nan')
+            else:
+                actual_a = actual_b = float('nan')
+            _write_grid_log(pid, tx, ty, tA_cmd, tB_cmd, actual_a, actual_b)
 
             if _should_break:
                 break
@@ -1477,8 +1521,10 @@ def run_interactive(leg: SingleLegController):
                 import csv as _csv
                 try:
                     with open(GRID_FILE, newline='', encoding='utf-8') as _f:
+                        _rows = list(_csv.DictReader(_f))
                         _row = next(
-                            (r for r in _csv.DictReader(_f) if int(r['point_id']) == target_id),
+                            (r for idx, r in enumerate(_rows)
+                             if (int(r['point_id']) if 'point_id' in r else idx + 1) == target_id),
                             None
                         )
                     if _row is None:
