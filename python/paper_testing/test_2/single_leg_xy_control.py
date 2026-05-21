@@ -872,9 +872,7 @@ HELP_TEXT = """
   s            สลับ profile: S-Curve ↔ Direct
   scan         แสดง COM ports ที่มีอยู่
   grid         รันการทดสอบไล่ตำแหน่งตาม workspace_grid.csv (ทุกจุดตามลำดับ)
-  grid N       เคลื่อนไปยังตำแหน่ง point_id = N จุดเดียว  เช่น  grid 10
   capture      ไล่ตำแหน่งตาม workspace_grid.csv พร้อมวัด actual XY ด้วยกล้อง+ArUco
-  capture N    เคลื่อนไปจุด N จุดเดียว วัด actual XY จาก ArUco แล้ว log ใน grid_log.csv
   circle       เคลื่อนที่ตาม path วงกลม (ใช้ค่า default จาก config)
   circle R     เช่น  circle 25         → วงกลม R=25 mm ที่ center default
   circle R cx cy     เช่น  circle 25 0 -200  → กำหนด center ด้วย
@@ -1884,16 +1882,8 @@ def run_interactive(leg: SingleLegController):
                 print(f"    • {p}")
 
         # ─── Capture mode (ArUco-based position measurement) ───────────
-        elif cmd == 'capture' or cmd.startswith('capture '):
-            parts = cmd.split()
-            if len(parts) == 1:
-                # capture → full sweep
-                run_capture_sweep(leg)
-            elif len(parts) > 1 and parts[1].isdigit():
-                # capture N → single point
-                run_capture_point(leg, int(parts[1]))
-            else:
-                print("  ⚠️  ใช้งาน: capture  (sweep ทั้งหมด)  หรือ  capture N  (จุดเดียว)")
+        elif cmd == 'capture':
+            run_capture_sweep(leg)
 
         # ─── Circle path ──────────────────────────────────────────────
         elif cmd == 'circle' or cmd.startswith('circle '):
@@ -1927,47 +1917,9 @@ def run_interactive(leg: SingleLegController):
             except ValueError:
                 print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200 comp")
 
-        # ─── Grid sweep / single point ────────────────────────────────
-        elif cmd == 'grid' or cmd.startswith('grid '):
-            parts = cmd.split()
-            if len(parts) > 1 and parts[1].isdigit():
-                # grid N → เคลื่อนไปจุดเดียว
-                target_id = int(parts[1])
-                import csv as _csv
-                try:
-                    with open(GRID_FILE, newline='', encoding='utf-8') as _f:
-                        _rows = list(_csv.DictReader(_f))
-                        _row = next(
-                            (r for idx, r in enumerate(_rows)
-                             if (int(r['point_id']) if 'point_id' in r else idx + 1) == target_id),
-                            None
-                        )
-                    if _row is None:
-                        print(f"  ⚠️  ไม่พบ point_id={target_id} ใน {GRID_FILE}")
-                    else:
-                        tx, ty = float(_row['target_x_mm']), float(_row['target_y_mm'])
-                        print(f"  Grid ID={target_id}: ({tx:+.1f}, {ty:+.1f}) mm")
-                        leg.move_to(tx, ty)
-                        # บันทึกมุมที่สั่ง จาก IK state ล่าสุด
-                        if _ik_prev_angles_rad is not None:
-                            tA_cmd = float(np.rad2deg(_ik_prev_angles_rad[0]))
-                            tB_cmd = float(np.rad2deg(_ik_prev_angles_rad[1]))
-                        else:
-                            tA_cmd = tB_cmd = float('nan')
-                        # รอให้มอเตอร์เคลื่อนที่เสร็จแล้วอ่าน feedback
-                        time.sleep(max(GRID_DWELL_S, SCURVE_DURATION_MS / 1000.0 + 0.2))
-                        leg.print_status()
-                        # เขียน CSV log (current_position อัปเดตแล้วใน print_status)
-                        _write_grid_log(target_id, tx, ty, tA_cmd, tB_cmd,
-                                        leg.motor_a.current_position,
-                                        leg.motor_b.current_position)
-                except FileNotFoundError:
-                    print(f"  ❌ ไม่พบไฟล์: {GRID_FILE}")
-                except Exception as _e:
-                    print(f"  ❌ โหลด CSV ล้มเหลว: {_e}")
-            else:
-                # grid → sweep ทุกจุด
-                run_grid_sweep(leg)
+        # ─── Grid sweep ───────────────────────────────────────────────
+        elif cmd == 'grid':
+            run_grid_sweep(leg)
 
         # ─── Emergency Stop ──────────────────────────────────────────
         elif cmd in ('e', 'estop', 'stop'):
