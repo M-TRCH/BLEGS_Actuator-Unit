@@ -74,7 +74,7 @@ def main():
         }
     }
 
-    json_path = os.path.join(_DIR, 'compensation_model.json')
+    json_path = os.path.join(_DIR, 'output', 'models', 'compensation_model.json')
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(model_data, f, indent=4)
     print(f"\n💾 บันทึกค่าสัมประสิทธิ์ลงไฟล์สำเร็จ: {json_path}")

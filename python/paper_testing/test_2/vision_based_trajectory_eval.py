@@ -212,7 +212,7 @@ plt.gca().text(
     bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.85, edgecolor='gray')
 )
 
-out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trajectory_comparison.png')
+out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'plots', 'trajectory_comparison.png')
 plt.savefig(out_path, dpi=300)
 plt.show()
 print(f"Saved: {out_path}")

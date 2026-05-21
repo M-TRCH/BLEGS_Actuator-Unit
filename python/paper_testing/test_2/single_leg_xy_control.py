@@ -100,7 +100,7 @@ CIRCLE_DWELL_S   =  0.0    # เวลาหยุดต่อจุด (วิ�
 CIRCLE_FREQ_HZ   =  0.6    # ความเร็ว (รอบ/วินาที); 0 = ใช้ SCURVE_DURATION_MS แทน
 CIRCLE_COMPENSATION = False  # True = เปิด feed-forward kinematic error compensation
 COMPENSATION_MODEL_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), 'compensation_model.json'
+    os.path.dirname(os.path.abspath(__file__)), 'output', 'models', 'compensation_model.json'
 )
 
 # ============================================================================

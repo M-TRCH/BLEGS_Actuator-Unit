@@ -50,7 +50,7 @@ RADIUS_MM   = 28.0
 OUT_VIDEO   = os.path.join(os.path.dirname(os.path.abspath(VIDEO_PATH)),
                             "calibration_coverage_video.mp4")
 OUT_PLOT    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "calibration_coverage_plot.png")
+                            "output", "plots", "calibration_coverage_plot.png")
 
 # ─────────────────────────────────────────
 # 2. โหลด calibration grid
