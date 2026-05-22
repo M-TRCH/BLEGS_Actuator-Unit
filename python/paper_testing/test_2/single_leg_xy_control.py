@@ -119,10 +119,9 @@ CIRCLE_POINTS    =  36     # จำนวนจุดต่อรอบ (36 = �
 CIRCLE_REVS      =  1      # จำนวนรอบ
 CIRCLE_DWELL_S   =  0.0    # เวลาหยุดต่อจุด (วินาที); 0 = ใช้แค่ S-Curve duration
 CIRCLE_FREQ_HZ   =  0.6    # ความเร็ว (รอบ/วินาที); 0 = ใช้ SCURVE_DURATION_MS แทน
-CIRCLE_COMPENSATION = False  # True = เปิด feed-forward kinematic error compensation
-COMPENSATION_MODEL_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), 'output', 'models', 'compensation_model.json'
-)
+CIRCLE_COMPENSATION     = False          # True = เปิด feed-forward kinematic error compensation
+COMPENSATION_MODEL_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'models')
+COMPENSATION_MODEL_NAME = 'model_poly4'  # ชื่อโมเดลเริ่มต้น (ไม่ต้องใส่ .pkl/.json)
 
 # ============================================================================
 # PROTOCOL / COMMUNICATION CONSTANTS
@@ -877,8 +876,9 @@ HELP_TEXT = """
   circle R     เช่น  circle 25         → วงกลม R=25 mm ที่ center default
   circle R cx cy     เช่น  circle 25 0 -200  → กำหนด center ด้วย
   circle R cx cy N   เช่น  circle 25 0 -200 3 → N รอบ
-  (เพิ่ม comp หรือ nocomp ท้ายคำสั่ง เพื่อเปิด/ปิด kinematic error compensation)
-  เช่น  circle comp  |  circle 25 0 -200 1 comp  |  circle nocomp
+  (เพิ่ม comp/nocomp เพื่อเปิด/ปิด compensation; เพิ่ม <ชื่อโมเดล> เพื่อเลือกโมเดล)
+  เช่น  circle comp  |  circle 25 0 -200 comp model_mlp  |  circle nocomp
+  models       แสดงรายการโมเดล compensation ที่มีใน output/models/
   e / estop    Emergency Stop
   h / help     แสดง help นี้
   q / quit     ออกจากโปรแกรม
@@ -1656,56 +1656,155 @@ def run_grid_sweep(
 # CIRCLE PATH MODE
 # ============================================================================
 
-def load_compensation_model(path: str = COMPENSATION_MODEL_FILE) -> dict | None:
-    """โหลด polynomial regression model จาก JSON สำหรับชดเชย kinematic error"""
-    import json
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            model = json.load(f)
-        print(f"  ✅ โหลด compensation model: {os.path.basename(path)}")
-        deg = model.get('polynomial_degree', '?')
-        features = model.get('feature_names', [])
-        print(f"     Degree   : {deg}")
-        print(f"     Features : {features}")
-        mx = model.get('model_x', {})
-        my = model.get('model_y', {})
-        print(f"     model_x  : intercept={mx.get('intercept', float('nan')):+.4f}  coef={mx.get('coef', [])}")
-        print(f"     model_y  : intercept={my.get('intercept', float('nan')):+.4f}  coef={my.get('coef', [])}")
-        m = model.get('metrics', {})
-        if m:
-            print(f"     RMSE X: {m.get('rmse_x_before',0):.3f} → {m.get('rmse_x_after',0):.3f} mm  "
-                  f"RMSE Y: {m.get('rmse_y_before',0):.3f} → {m.get('rmse_y_after',0):.3f} mm")
-        return model
-    except FileNotFoundError:
-        print(f"  ⚠️  ไม่พบ compensation model: {path}")
-        return None
-    except Exception as e:
-        print(f"  ⚠️  โหลด compensation model ล้มเหลว: {e}")
-        return None
+def _build_poly_features(tA: float, tB: float, degree: int) -> np.ndarray:
+    """
+    สร้าง polynomial features แบบเดียวกับ sklearn PolynomialFeatures(include_bias=False)
+    สำหรับ 2 ตัวแปร [tA, tB]
+
+    degree=2 → [tA, tB, tA², tA·tB, tB²]
+    degree=3 → [tA, tB, tA², tA·tB, tB², tA³, tA²tB, tA·tB², tB³]
+    degree=4 → ... (14 features)
+    """
+    feats = []
+    for d in range(1, degree + 1):
+        for i in range(d + 1):           # i = power of tB, d-i = power of tA
+            feats.append(tA ** (d - i) * tB ** i)
+    return np.array(feats)
+
+
+def _list_models() -> list[str]:
+    """คืนรายชื่อโมเดลใน COMPENSATION_MODEL_DIR (ไม่มี extension, ไม่ซ้ำ, เรียงลำดับ)"""
+    names: set[str] = set()
+    if os.path.isdir(COMPENSATION_MODEL_DIR):
+        for f in os.listdir(COMPENSATION_MODEL_DIR):
+            if f.endswith(('.pkl', '.json')):
+                names.add(os.path.splitext(f)[0])
+    return sorted(names)
+
+
+def print_models() -> None:
+    """แสดงรายการโมเดลที่มีใน COMPENSATION_MODEL_DIR พร้อม format และ default"""
+    names = _list_models()
+    if not names:
+        print(f"  ⚠️  ไม่พบโมเดลใน output/models/  (ยังไม่ได้รัน train_compensation_model.py)")
+        return
+    print(f"\n  ─── โมเดลที่มีใน output/models/ ───────────────────────")
+    for name in names:
+        has_pkl  = os.path.isfile(os.path.join(COMPENSATION_MODEL_DIR, name + '.pkl'))
+        has_json = os.path.isfile(os.path.join(COMPENSATION_MODEL_DIR, name + '.json'))
+        fmts = []
+        if has_pkl:  fmts.append('pkl')
+        if has_json: fmts.append('json')
+        default = '  ← default' if name == COMPENSATION_MODEL_NAME else ''
+        print(f"    {name:<30}  [{', '.join(fmts)}]{default}")
+    print(f"  ────────────────────────────────────────────────────")
+    print(f"  ใช้งาน:  circle comp <ชื่อโมเดล>  เช่น  circle comp model_mlp\n")
+
+
+def load_compensation_model(name: str = COMPENSATION_MODEL_NAME) -> dict | None:
+    """
+    โหลด compensation model จาก output/models/
+    รองรับ .pkl (sklearn Pipeline) และ .json (polynomial coefficients)
+
+    Args:
+        name: ชื่อโมเดล (ไม่ต้องใส่ extension) หรือ full path
+              เช่น 'model_poly4', 'model_mlp', 'model_svr_rbf'
+
+    Returns:
+        dict พร้อม key 'type' = 'pkl' หรือ 'json'
+        - pkl: {'type': 'pkl', 'model_name': str, 'model_x': Pipeline,
+                'model_y': Pipeline, 'metrics': dict}
+        - json: {'type': 'json', 'model_name': str, 'polynomial_degree': int,
+                 'feature_names': list, 'model_x': dict, 'model_y': dict, ...}
+        หรือ None ถ้าโหลดไม่สำเร็จ
+    """
+    import json as _json
+
+    # Resolve path: ถ้าไม่ใช่ absolute path ให้หาในโฟลเดอร์ models
+    if os.path.isabs(name) or (os.sep in name) or ('/' in name):
+        base = os.path.splitext(name)[0]  # strip extension ถ้ามี
+    else:
+        stem = os.path.splitext(name)[0]  # เผื่อ user ใส่ .pkl/.json มาด้วย
+        base = os.path.join(COMPENSATION_MODEL_DIR, stem)
+
+    pkl_path  = base + '.pkl'
+    json_path = base + '.json'
+
+    # ─── ลอง .pkl ก่อน ──────────────────────────────────────────────
+    if os.path.isfile(pkl_path):
+        try:
+            import joblib
+            data: dict = joblib.load(pkl_path)
+            data['type'] = 'pkl'
+            model_name = data.get('model_name', os.path.basename(pkl_path))
+            metrics    = data.get('metrics', {})
+            print(f"  ✅ โหลดโมเดล: {model_name}  [pkl / sklearn Pipeline]")
+            if metrics:
+                print(f"     RMSE X={metrics.get('rmse_x', float('nan')):.4f} mm  "
+                      f"R²X={metrics.get('r2_x', float('nan')):.4f}  "
+                      f"RMSE Y={metrics.get('rmse_y', float('nan')):.4f} mm  "
+                      f"R²Y={metrics.get('r2_y', float('nan')):.4f}")
+            return data
+        except Exception as e:
+            print(f"  ⚠️  โหลด pkl ล้มเหลว: {e}")
+
+    # ─── ลอง .json ───────────────────────────────────────────────────
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            data['type'] = 'json'
+            model_name = data.get('model_name', os.path.basename(json_path))
+            deg        = data.get('polynomial_degree', '?')
+            features   = data.get('feature_names', [])
+            print(f"  ✅ โหลดโมเดล: {model_name}  [json / poly deg={deg}]")
+            print(f"     Features: {features}")
+            mx = data.get('model_x', {})
+            my = data.get('model_y', {})
+            print(f"     model_x: intercept={mx.get('intercept', float('nan')):+.4f}  "
+                  f"coef (first 5)={mx.get('coef', [])[:5]}")
+            print(f"     model_y: intercept={my.get('intercept', float('nan')):+.4f}  "
+                  f"coef (first 5)={my.get('coef', [])[:5]}")
+            return data
+        except Exception as e:
+            print(f"  ⚠️  โหลด json ล้มเหลว: {e}")
+
+    # ─── ไม่พบ ────────────────────────────────────────────────────────
+    print(f"  ⚠️  ไม่พบโมเดล '{os.path.basename(base)}'  ใน {COMPENSATION_MODEL_DIR}")
+    print(f"     พิมพ์ 'models' เพื่อดูรายการโมเดลที่มี")
+    return None
 
 
 def predict_kinematic_error(
     thetaA_deg: float, thetaB_deg: float, model: dict
 ) -> tuple[float, float]:
     """
-    ทำนาย kinematic error จากมุมมอเตอร์ด้วย Second-Order Polynomial Regression
+    ทำนาย kinematic error จากมุมมอเตอร์
+    รองรับทั้ง sklearn Pipeline (.pkl) และ polynomial coefficients (.json)
 
-    Features: [tA, tB, tA², tA·tB, tB²]  (ลำดับตาม compensation_model.json)
+    Args:
+        thetaA_deg: มุม Motor A (degrees)
+        thetaB_deg: มุม Motor B (degrees)
+        model: dict ที่โหลดจาก load_compensation_model()
 
     Returns:
-        (err_x, err_y) — ค่า error ที่คาดการณ์ (mm)
+        (err_x, err_y) — ค่า error ที่คาดการณ์ (mm) สำหรับชดเชย
     """
-    tA  = thetaA_deg
-    tB  = thetaB_deg
-    phi = np.array([tA, tB, tA * tA, tA * tB, tB * tB])
-
-    mx    = model['model_x']
-    err_x = mx['intercept'] + float(np.dot(mx['coef'], phi))
-
-    my    = model['model_y']
-    err_y = my['intercept'] + float(np.dot(my['coef'], phi))
-
-    return err_x, err_y
+    if model.get('type') == 'pkl':
+        # sklearn Pipeline: รองรับ Poly, SVR, Random Forest, MLP ฯลฯ
+        X = [[thetaA_deg, thetaB_deg]]
+        err_x = float(model['model_x'].predict(X)[0])
+        err_y = float(model['model_y'].predict(X)[0])
+        return err_x, err_y
+    else:
+        # JSON polynomial model
+        degree = model.get('polynomial_degree', 2)
+        phi    = _build_poly_features(thetaA_deg, thetaB_deg, degree)
+        mx     = model['model_x']
+        my     = model['model_y']
+        err_x  = mx['intercept'] + float(np.dot(mx['coef'], phi))
+        err_y  = my['intercept'] + float(np.dot(my['coef'], phi))
+        return err_x, err_y
 
 
 def run_circle_path(
@@ -1718,6 +1817,7 @@ def run_circle_path(
     dwell_s:     float = CIRCLE_DWELL_S,
     freq_hz:     float = CIRCLE_FREQ_HZ,
     compensate:  bool  = CIRCLE_COMPENSATION,
+    model_name:  str | None = None,   # None = ใช้ COMPENSATION_MODEL_NAME
 ) -> None:
     """เคลื่อนที่ตาม path วงกลม
 
@@ -1728,6 +1828,7 @@ def run_circle_path(
     freq_hz > 0  : ควบคุมความเร็ว (รอบ/วินาที) — S-Curve duration คำนวณอัตโนมัติ
     freq_hz = 0  : ใช้ SCURVE_DURATION_MS + dwell_s แทน
     compensate   : True = เปิด feed-forward kinematic error compensation
+    model_name   : ชื่อโมเดล เช่น 'model_poly4', 'model_mlp'  (None = ใช้ default)
     """
     total_pts = n_points * revolutions
     step_rad  = 2 * np.pi / n_points
@@ -1749,14 +1850,16 @@ def run_circle_path(
     else:
         print(f"    Wait/point : {step_s*1000:.0f} ms")
     print(f"    Profile    : {'S-Curve' if leg.use_scurve else 'Direct'}")
-    print(f"    Compensate : {'✅ เปิด' if compensate else '❌ ปิด'}")
+    _eff_model = model_name or COMPENSATION_MODEL_NAME
+    print(f"    Compensate : {'✅ เปิด' if compensate else '❌ ปิด'}"
+          + (f"  [{_eff_model}]" if compensate else ''))
     print(f"  ────────────────────────────────────────────────")
     print(f"  กด Ctrl+C เพื่อหยุด\n")
 
     # โหลด compensation model ถ้าเปิดใช้งาน
     comp_model: dict | None = None
     if compensate:
-        comp_model = load_compensation_model()
+        comp_model = load_compensation_model(_eff_model)
         if comp_model is None:
             print("  ⚠️  โหลดโมเดลล้มเหลว — วิ่งโดยไม่มี compensation\n")
 
@@ -1888,7 +1991,8 @@ def run_interactive(leg: SingleLegController):
         # ─── Circle path ──────────────────────────────────────────────
         elif cmd == 'circle' or cmd.startswith('circle '):
             parts = cmd.split()
-            # แยก flag comp / nocomp ก่อน parse ตัวเลข
+            # แยก flag comp / nocomp / model_<name> ก่อน parse ตัวเลข
+            _model_name = None
             if 'comp' in parts:
                 _compensate = True
                 parts = [p for p in parts if p != 'comp']
@@ -1897,25 +2001,41 @@ def run_interactive(leg: SingleLegController):
                 parts = [p for p in parts if p != 'nocomp']
             else:
                 _compensate = CIRCLE_COMPENSATION
+            # ดึง token ที่เป็นชื่อโมเดล (ขึ้นต้นด้วย model_)
+            num_parts = []
+            for _p in parts:
+                if _p.startswith('model_'):
+                    _model_name = _p
+                else:
+                    num_parts.append(_p)
+            parts = num_parts
             try:
                 if len(parts) == 1:
-                    run_circle_path(leg, compensate=_compensate)
+                    run_circle_path(leg, compensate=_compensate,
+                                    model_name=_model_name)
                 elif len(parts) == 2:
                     run_circle_path(leg, radius=float(parts[1]),
-                                    compensate=_compensate)
+                                    compensate=_compensate,
+                                    model_name=_model_name)
                 elif len(parts) == 4:
                     run_circle_path(leg, radius=float(parts[1]),
                                     cx=float(parts[2]), cy=float(parts[3]),
-                                    compensate=_compensate)
+                                    compensate=_compensate,
+                                    model_name=_model_name)
                 elif len(parts) == 5:
                     run_circle_path(leg, radius=float(parts[1]),
                                     cx=float(parts[2]), cy=float(parts[3]),
                                     revolutions=int(parts[4]),
-                                    compensate=_compensate)
+                                    compensate=_compensate,
+                                    model_name=_model_name)
                 else:
-                    print("  ⚠️  รูปแบบ: circle [R [cx cy [N]]] [comp|nocomp]")
+                    print("  ⚠️  รูปแบบ: circle [R [cx cy [N]]] [comp|nocomp] [model_<ชื่อ>]")
             except ValueError:
-                print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200 comp")
+                print("  ⚠️  ค่าพารามิเตอร์ไม่ถูกต้อง  เช่น  circle 25 0 -200 comp model_mlp")
+
+        # ─── Models list ─────────────────────────────────────────────
+        elif cmd == 'models':
+            print_models()
 
         # ─── Grid sweep ───────────────────────────────────────────────
         elif cmd == 'grid':
