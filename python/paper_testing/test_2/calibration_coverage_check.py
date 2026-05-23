@@ -26,11 +26,11 @@ from matplotlib.collections import PatchCollection
 # ─────────────────────────────────────────
 # 1. CONFIG  (แก้ค่าที่นี่)
 # ─────────────────────────────────────────
-VIDEO_PATH  = r"C:\Users\mteer\OneDrive\Desktop\comp_28_0_-190_5.MOV"
-CALIB_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "calibration_olympus25mm.npz")
+VIDEO_PATH  = r"D:\THESIS\model_forest.MOV"
+CALIB_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                           "output", "params", "calibration_olympus25f1.2.npz")
 GRID_CSV    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "calibration_grid.csv")
+                            "output", "data", "workspace_grid.csv")
 
 TARGET_ID   = 4          # ArTag ที่ปลายเท้า (เคลื่อนที่)
 FRAME_STEP  = 3         # ประมวลผลทุก N เฟรม
@@ -43,8 +43,8 @@ REF_WORLD = {
 
 # วงโคจรอุดมคติ
 CENTER_X_MM = 0.0
-CENTER_Y_MM = -190.0
-RADIUS_MM   = 28.0
+CENTER_Y_MM = -170.0
+RADIUS_MM   = 60.0
 
 # output paths
 OUT_VIDEO   = os.path.join(os.path.dirname(os.path.abspath(VIDEO_PATH)),
