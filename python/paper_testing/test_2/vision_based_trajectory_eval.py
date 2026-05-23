@@ -7,9 +7,16 @@ import matplotlib.pyplot as plt
 # ==========================================
 # 1. ตั้งค่าพารามิเตอร์
 # ==========================================
-VIDEO_UNCOMP = r"C:\Users\mteer\OneDrive\Desktop\nocomp_28_0_-190_5.MOV"   # ไฟล์วิดีโอแบบ ไม่ชดเชย (ปิด ML)
-VIDEO_COMP   = r"C:\Users\mteer\OneDrive\Desktop\comp_28_0_-190_5.MOV"     # ไฟล์วิดีโอแบบ ชดเชย (เปิด ML)
-CALIB_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_olympus25mm.npz")
+# (path, label, scatter_color)
+VIDEOS = [
+    (r"D:\THESIS\original.MOV",     "Original",            "dimgray"),
+    (r"D:\THESIS\model_mlp.MOV",    "MLP",                 "royalblue"),
+    (r"D:\THESIS\model_poly3.MOV",  "Poly-3",              "darkorange"),
+    (r"D:\THESIS\model_poly4.MOV",  "Poly-4",              "purple"),
+    (r"D:\THESIS\model_forest.MOV", "Random Forest",       "green"),
+    (r"D:\THESIS\model_svr.MOV",    "SVR",                 "crimson"),
+]
+CALIB_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "params", "calibration_olympus25f1.2.npz")
 
 TARGET_ID = 4  # ID ของ ArTag ที่ปลายเท้า (เคลื่อนที่)
 
@@ -24,8 +31,8 @@ REF_DIST_MM = np.linalg.norm(REF_WORLD[1] - REF_WORLD[0])  # = 85.0 mm
 FRAME_STEP  = 1      # ประมวลผลทุก N เฟรม (1 = ทุกเฟรม, 3 = ข้าม 2)
 
 CENTER_X_MM = 0.0       # จุดศูนย์กลางวงโคจรอุดมคติ แกน X
-CENTER_Y_MM = -190.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
-RADIUS_MM   = 28.0      # รัศมีวงโคจรอุดมคติ
+CENTER_Y_MM = -170.0    # จุดศูนย์กลางวงโคจรอุดมคติ แกน Y
+RADIUS_MM   = 60.0      # รัศมีวงโคจรอุดมคติ
 
 # ==========================================
 # 2. Helper: แปลงผล detectMarkers เป็น dict {id: center_px}
@@ -132,40 +139,52 @@ def track_video(video_path, calib_file, label):
     return np.array(tracked_data)
 
 # ==========================================
-# 5. รันประมวลผลทั้ง 2 คลิป
+# 5. รันประมวลผลทุกคลิป
 # ==========================================
-data_uncomp = track_video(VIDEO_UNCOMP, CALIB_FILE, "Uncompensated")
-data_comp   = track_video(VIDEO_COMP,   CALIB_FILE, "ML Compensated")
+results = []  # list of (label, color, data_array)
 
-if len(data_uncomp) == 0 or len(data_comp) == 0:
-    print("[ERROR] No data tracked. Check TARGET_ID and video files.")
-    exit(1)
+for vid_path, label, color in VIDEOS:
+    data = track_video(vid_path, CALIB_FILE, label)
+    results.append((label, color, data))
 
-# พิกัดอยู่ในหน่วย mm แล้ว (จาก homography) — ไม่ต้องแปลงเพิ่มเติม
-mm_uncomp_x = data_uncomp[:, 0]
-mm_uncomp_y = data_uncomp[:, 1]
-mm_comp_x   = data_comp[:, 0]
-mm_comp_y   = data_comp[:, 1]
+# ตรวจสอบว่ามีข้อมูลครบ
+for label, color, data in results:
+    if len(data) == 0:
+        print(f"[ERROR] No data tracked for '{label}'. Check TARGET_ID and video file.")
+        exit(1)
 
-# สรุป RMS error เทียบกับวงโคจรอุดมคติ
-err_uncomp = np.sqrt((mm_uncomp_x - CENTER_X_MM)**2 + (mm_uncomp_y - CENTER_Y_MM)**2) - RADIUS_MM
-err_comp   = np.sqrt((mm_comp_x   - CENTER_X_MM)**2 + (mm_comp_y   - CENTER_Y_MM)**2) - RADIUS_MM
-rms_u  = np.sqrt(np.mean(err_uncomp**2))
-rms_c  = np.sqrt(np.mean(err_comp**2))
-mean_u = np.mean(err_uncomp)
-mean_c = np.mean(err_comp)
-std_u  = np.std(err_uncomp)
-std_c  = np.std(err_comp)
-max_u  = np.max(np.abs(err_uncomp))
-max_c  = np.max(np.abs(err_comp))
+# ==========================================
+# 5a. คำนวณ metrics ของแต่ละคลิป
+# ==========================================
+def compute_metrics(data):
+    x, y = data[:, 0], data[:, 1]
+    err = np.sqrt((x - CENTER_X_MM)**2 + (y - CENTER_Y_MM)**2) - RADIUS_MM
+    return {
+        "mean": np.mean(err),
+        "std":  np.std(err),
+        "rms":  np.sqrt(np.mean(err**2)),
+        "max":  np.max(np.abs(err)),
+    }
 
-print(f"\n{'Metric':<18} {'Uncompensated':>16} {'ML Compensated':>16}")
-print("-" * 52)
-print(f"{'Mean error':<18} {mean_u:>14.3f} mm {mean_c:>14.3f} mm")
-print(f"{'Std dev':<18} {std_u:>14.3f} mm {std_c:>14.3f} mm")
-print(f"{'RMS error':<18} {rms_u:>14.3f} mm {rms_c:>14.3f} mm")
-print(f"{'Max  error':<18} {max_u:>14.3f} mm {max_c:>14.3f} mm")
-print(f"{'Improvement':<18} {'—':>16} {(1 - rms_c/rms_u)*100:>13.1f} %")
+metrics_list = [(label, color, data, compute_metrics(data)) for label, color, data in results]
+
+# baseline RMS คือ original (index 0)
+rms_baseline = metrics_list[0][3]["rms"]
+
+# พิมพ์ตารางสรุป
+col_w = 14
+header = f"{'Metric':<16}" + "".join(f"{m[0]:>{col_w}}" for m in metrics_list)
+print(f"\n{header}")
+print("-" * (16 + col_w * len(metrics_list)))
+for key, label_row in [("mean", "Mean error (mm)"), ("std", "Std dev (mm)"),
+                        ("rms",  "RMS error (mm)"),  ("max", "Max error (mm)")]:
+    row = f"{label_row:<16}" + "".join(f"{m[3][key]:>{col_w}.3f}" for m in metrics_list)
+    print(row)
+print("-" * (16 + col_w * len(metrics_list)))
+impr_row = f"{'Improvement':<16}" + f"{'—':>{col_w}}" + "".join(
+    f"{(1 - m[3]['rms'] / rms_baseline) * 100:>{col_w}.1f}" for m in metrics_list[1:]
+) + " %"
+print(impr_row)
 
 # ==========================================
 # 6. วาดกราฟวงโคจรอุดมคติ
@@ -175,44 +194,75 @@ ideal_x = CENTER_X_MM + RADIUS_MM * np.cos(theta)
 ideal_y = CENTER_Y_MM + RADIUS_MM * np.sin(theta)
 
 # ==========================================
-# 7. พล็อตกราฟเปรียบเทียบ (A/B Testing)
+# 7. พล็อตกราฟเปรียบเทียบ (Multi-model)
 # ==========================================
-plt.figure(figsize=(10, 10))
-plt.plot(ideal_x, ideal_y, 'k--', linewidth=2, label='Ideal Target (R=25mm)')
-plt.scatter(mm_uncomp_x, mm_uncomp_y, c='red',   s=10, alpha=0.5, label='Without ML (Uncompensated)')
-plt.scatter(mm_comp_x,   mm_comp_y,   c='green', s=10, alpha=0.5, label='With ML (Compensated)')
+fig, axes = plt.subplots(1, 2, figsize=(18, 9),
+                         gridspec_kw={'width_ratios': [1.4, 1]})
 
-# แสดงตำแหน่ง motor joints บนกราฟ
+# --- subplot ซ้าย: trajectory scatter ---
+ax = axes[0]
+ax.plot(ideal_x, ideal_y, 'k--', linewidth=2, label=f'Ideal Target (R={RADIUS_MM:.0f}mm)')
+
+for label, color, data, _ in metrics_list:
+    ax.scatter(data[:, 0], data[:, 1], c=color, s=8, alpha=0.45, label=label)
+
 for mid, pos in REF_WORLD.items():
-    plt.plot(*pos, 'bs', markersize=10)
-    plt.annotate(f'id{mid} (motor)', pos, textcoords='offset points', xytext=(6, 4), fontsize=9, color='blue')
+    ax.plot(*pos, 'bs', markersize=10)
+    ax.annotate(f'id{mid} (motor)', pos, textcoords='offset points', xytext=(6, 4),
+                fontsize=9, color='blue')
 
-plt.title('Dynamic Trajectory Tracking: Baseline vs ML Compensation', fontsize=14)
-plt.xlabel('X Position (mm)', fontsize=12)
-plt.ylabel('Y Position (mm)', fontsize=12)
-plt.axis('equal')
-plt.grid(True, linestyle=':', alpha=0.7)
-plt.legend(loc='lower right')
+ax.set_title('Dynamic Trajectory Tracking: Baseline vs ML Models', fontsize=13)
+ax.set_xlabel('X Position (mm)', fontsize=11)
+ax.set_ylabel('Y Position (mm)', fontsize=11)
+ax.axis('equal')
+ax.grid(True, linestyle=':', alpha=0.7)
+ax.legend(loc='lower right', fontsize=9)
 
-metrics_text = (
-    f"{'Metric':<14} {'Uncomp':>9} {'Comp':>9}\n"
-    f"{'─'*34}\n"
-    f"{'Mean error':<14} {mean_u:>7.3f}mm {mean_c:>7.3f}mm\n"
-    f"{'Std dev':<14} {std_u:>7.3f}mm {std_c:>7.3f}mm\n"
-    f"{'RMS error':<14} {rms_u:>7.3f}mm {rms_c:>7.3f}mm\n"
-    f"{'Max error':<14} {max_u:>7.3f}mm {max_c:>7.3f}mm\n"
-    f"{'─'*34}\n"
-    f"{'Improvement':<14} {(1 - rms_c/rms_u)*100:>17.1f}%"
-)
-plt.gca().text(
-    0.02, 0.02, metrics_text,
-    transform=plt.gca().transAxes,
-    fontsize=9, verticalalignment='bottom',
-    fontfamily='monospace',
-    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.85, edgecolor='gray')
-)
+# --- metrics table text box inside scatter ---
+_abbr  = {"Original": "Orig", "MLP": "MLP", "Poly-3": "Poly3",
+          "Poly-4": "Poly4", "Random Forest": "RF", "SVR": "SVR"}
+_cols  = [_abbr.get(m[0], m[0]) for m in metrics_list]
+_cw    = 8
+_lw    = 13
+_sep   = "-" * (_lw + _cw * len(metrics_list))
+_lines = [f"{'':>{_lw}}" + "".join(f"{c:>{_cw}}" for c in _cols), _sep]
+for _key, _lbl in [("mean", "Mean (mm)"), ("std",  "Std  (mm)"),
+                   ("rms",  "RMS  (mm)"), ("max",  "Max  (mm)")]:
+    _lines.append(f"{_lbl:>{_lw}}" + "".join(f"{m[3][_key]:>{_cw}.3f}" for m in metrics_list))
+_lines.append(_sep)
+_impr_vals = [f"{'—':>{_cw}}"] + [f"{(1 - m[3]['rms'] / rms_baseline) * 100:>+7.1f}%" for m in metrics_list[1:]]
+_lines.append(f"{'Improv. (%)':>{_lw}}" + "".join(_impr_vals))
+ax.text(0.02, 0.98, "\n".join(_lines),
+        transform=ax.transAxes, fontsize=7.5,
+        verticalalignment='top', fontfamily='monospace',
+        bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.88, edgecolor='gray'))
+
+# --- subplot ขวา: bar chart RMS error ---
+ax2 = axes[1]
+labels_bar  = [m[0] for m in metrics_list]
+rms_values  = [m[3]["rms"] for m in metrics_list]
+colors_bar  = [m[1] for m in metrics_list]
+
+bars = ax2.bar(labels_bar, rms_values, color=colors_bar, edgecolor='black', linewidth=0.7)
+ax2.set_title('RMS Trajectory Error per Model', fontsize=13)
+ax2.set_ylabel('RMS Error (mm)', fontsize=11)
+ax2.set_xlabel('Model', fontsize=11)
+ax2.tick_params(axis='x', rotation=20)
+ax2.grid(axis='y', linestyle=':', alpha=0.7)
+
+# ป้ายตัวเลขบนแท่ง + % improvement
+for bar, (label, color, data, m) in zip(bars, metrics_list):
+    impr = (1 - m["rms"] / rms_baseline) * 100
+    impr_str = f"—" if label == metrics_list[0][0] else f"{impr:+.1f}%"
+    ax2.text(bar.get_x() + bar.get_width() / 2,
+             bar.get_height() + 0.05,
+             f"{m['rms']:.3f}\n({impr_str})",
+             ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
 
 out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'plots', 'trajectory_comparison.png')
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
 plt.savefig(out_path, dpi=300)
 plt.show()
 print(f"Saved: {out_path}")
