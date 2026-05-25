@@ -26,7 +26,7 @@ from matplotlib.collections import PatchCollection
 # ─────────────────────────────────────────
 # 1. CONFIG  (แก้ค่าที่นี่)
 # ─────────────────────────────────────────
-VIDEO_PATH  = r"D:\THESIS\model_forest.MOV"
+VIDEO_PATH  = r"D:\THESIS\model_poly4.MOV"
 CALIB_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
                            "output", "params", "calibration_olympus25f1.2.npz")
 GRID_CSV    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -44,7 +44,7 @@ REF_WORLD = {
 # วงโคจรอุดมคติ
 CENTER_X_MM = 0.0
 CENTER_Y_MM = -170.0
-RADIUS_MM   = 60.0
+RADIUS_MM   = 30.0
 
 # output paths
 OUT_VIDEO   = os.path.join(os.path.dirname(os.path.abspath(VIDEO_PATH)),
