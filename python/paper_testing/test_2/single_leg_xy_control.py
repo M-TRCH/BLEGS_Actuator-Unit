@@ -776,6 +776,29 @@ class SingleLegController:
             print("❌ (ส่งคำสั่งล้มเหลว)")
             return False
 
+    def move_to_angles(self, theta_a: float, theta_b: float,
+                       duration_ms: int | None = None) -> bool:
+        """
+        ส่งคำสั่งมุมมอเตอร์โดยตรงจาก path ที่ pre-compute แล้ว (ไม่คำนวณ IK)
+
+        อัปเดต _ik_prev_angles_rad เพื่อรักษา IK continuity สำหรับคำสั่งถัดไป
+        (เช่น home, หรือ circle รอบถัดไป)
+        """
+        global _ik_prev_angles_rad
+        if not self.connected:
+            return False
+        _dur = duration_ms if duration_ms is not None else SCURVE_DURATION_MS
+        if self.use_scurve:
+            ok_a = self.motor_a.set_position_scurve(theta_a, duration_ms=_dur)
+            ok_b = self.motor_b.set_position_scurve(theta_b, duration_ms=_dur)
+        else:
+            ok_a = self.motor_a.set_position_direct(theta_a)
+            ok_b = self.motor_b.set_position_direct(theta_b)
+        if ok_a and ok_b:
+            _ik_prev_angles_rad = np.deg2rad(np.array([theta_a, theta_b]))
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
@@ -1807,6 +1830,92 @@ def predict_kinematic_error(
         return err_x, err_y
 
 
+def _precompute_circle_path(
+    cx: float, cy: float, radius: float,
+    n_points: int, revolutions: int,
+    compensate: bool, comp_model: dict | None,
+) -> tuple[list, int]:
+    """
+    คำนวณ path วงกลมทั้งหมดล่วงหน้า (IK + ML inference) ก่อนเริ่มเคลื่อนที่
+    เพื่อหลีกเลี่ยงภาระการคำนวณระหว่าง real-time loop
+
+    Flow ต่อ 1 จุด:
+        1. คำนวณ ideal (x, y) บนวงกลม
+        2. [ถ้า compensate] IK บน ideal → angles → predict error → compensated target
+        3. IK บน target → (tA_deg, tB_deg)  ← เก็บเป็น pre-computed command
+
+    IK continuity state บันทึกก่อนและคืนค่าหลัง pre-compute
+    เพื่อให้ execution phase เริ่มต้นจาก state เดิม
+
+    Returns:
+        path     : list[dict] — {'ideal':(x,y), 'target':(x,y),
+                                  'angles':(tA,tB)|None, 'comp':bool}
+        n_failed : จำนวนจุดที่ IK ล้มเหลว
+    """
+    global _ik_prev_angles_rad
+
+    total_pts = n_points * revolutions
+    step_rad  = 2 * np.pi / n_points
+
+    # บันทึก IK state เพื่อคืนหลัง pre-compute
+    saved_ik = _ik_prev_angles_rad
+
+    path: list[dict] = []
+    n_failed      = 0
+    n_compensated = 0
+    _dot_step = max(1, total_pts // 20)
+
+    print(f"  ⚙️  Pre-computing {total_pts} points ", end='', flush=True)
+
+    for i in range(total_pts):
+        theta   = step_rad * i
+        ideal_x = cx + radius * np.cos(theta)
+        ideal_y = cy + radius * np.sin(theta)
+
+        # ─── Feed-forward compensation ───────────────────────────────
+        comp_applied = False
+        if compensate and comp_model is not None:
+            ik_ideal = calculate_ik([ideal_x, ideal_y])
+            if ik_ideal is not None:
+                err_x, err_y = predict_kinematic_error(
+                    ik_ideal[0], ik_ideal[1], comp_model)
+                target_x     = ideal_x - err_x
+                target_y     = ideal_y - err_y
+                comp_applied = True
+                n_compensated += 1
+            else:
+                target_x, target_y = ideal_x, ideal_y
+        else:
+            target_x, target_y = ideal_x, ideal_y
+
+        # ─── IK สุดท้าย → มุมที่จะส่งมอเตอร์จริง ────────────────────
+        ik_result = calculate_ik([target_x, target_y])
+        if ik_result is None:
+            n_failed += 1
+            path.append({'ideal':  (ideal_x,  ideal_y),
+                         'target': (target_x, target_y),
+                         'angles': None, 'comp': comp_applied})
+        else:
+            path.append({'ideal':  (ideal_x,  ideal_y),
+                         'target': (target_x, target_y),
+                         'angles': ik_result,   # (tA_deg, tB_deg)
+                         'comp':   comp_applied})
+
+        if (i + 1) % _dot_step == 0:
+            print('.', end='', flush=True)
+
+    # คืน IK state กลับก่อน execution phase
+    _ik_prev_angles_rad = saved_ik
+
+    suffix = ''
+    if n_compensated:
+        suffix += f'  {n_compensated} compensated'
+    if n_failed:
+        suffix += f'  ⚠️ {n_failed} IK fail'
+    print(f" done{suffix}")
+    return path, n_failed
+
+
 def run_circle_path(
     leg: 'SingleLegController',
     cx:          float = CIRCLE_CENTER_X,
@@ -1854,56 +1963,38 @@ def run_circle_path(
     print(f"    Compensate : {'✅ เปิด' if compensate else '❌ ปิด'}"
           + (f"  [{_eff_model}]" if compensate else ''))
     print(f"  ────────────────────────────────────────────────")
-    print(f"  กด Ctrl+C เพื่อหยุด\n")
-
-    # โหลด compensation model ถ้าเปิดใช้งาน
+    # โหลด compensation model (ก่อน pre-compute)
     comp_model: dict | None = None
     if compensate:
         comp_model = load_compensation_model(_eff_model)
         if comp_model is None:
             print("  ⚠️  โหลดโมเดลล้มเหลว — วิ่งโดยไม่มี compensation\n")
 
-    # ตรวจสอบทุกจุดก่อนเริ่ม
-    reachable = 0
-    for i in range(total_pts):
-        theta = step_rad * i
-        x = cx + radius * np.cos(theta)
-        y = cy + radius * np.sin(theta)
-        if calculate_ik(np.array([x, y])) is not None:
-            reachable += 1
-    if reachable < total_pts:
-        print(f"  ⚠️  {total_pts - reachable}/{total_pts} จุด อยู่นอก workspace — ดำเนินการต่อ? (y/n)")
+    # ─── Pre-compute path ล่วงหน้า (IK + ML inference ทั้งหมด) ──────
+    path, n_failed = _precompute_circle_path(
+        cx, cy, radius, n_points, revolutions,
+        compensate=(compensate and comp_model is not None),
+        comp_model=comp_model,
+    )
+
+    if n_failed > 0:
+        print(f"  ⚠️  {n_failed}/{total_pts} จุด IK ล้มเหลว — ดำเนินการต่อ? (y/n)")
         if input("  > ").strip().lower() not in ('y', 'yes'):
             print("  ยกเลิก")
             return
 
-    done = 0
-    failed = 0
-    comp_applied = 0
-    try:
-        for i in range(total_pts):
-            theta   = step_rad * i
-            ideal_x = cx + radius * np.cos(theta)
-            ideal_y = cy + radius * np.sin(theta)
+    n_ok = total_pts - n_failed
+    print(f"  ✅ Path พร้อม {n_ok}/{total_pts} จุด — กด Ctrl+C เพื่อหยุด\n")
 
-            # ─── Feed-forward Kinematic Error Compensation ──────────
-            if compensate and comp_model is not None:
-                # Step 2: IK รอบที่ 1 — หามุมอุดมคติ
-                ik_ideal = calculate_ik([ideal_x, ideal_y])
-                if ik_ideal is not None:
-                    ideal_tA, ideal_tB = ik_ideal
-                    # Step 3: ทำนาย error จากมุมอุดมคติ
-                    err_x, err_y = predict_kinematic_error(
-                        ideal_tA, ideal_tB, comp_model)
-                    # Step 4: พิกัดที่ชดเชยแล้ว
-                    target_x = ideal_x - err_x
-                    target_y = ideal_y - err_y
-                    comp_applied += 1
-                else:
-                    target_x, target_y = ideal_x, ideal_y
-            else:
-                target_x, target_y = ideal_x, ideal_y
-            # ────────────────────────────────────────────────────────
+    # ─── Execute pre-computed path (ไม่มีการคำนวณ IK/ML ระหว่างทำงาน) ─
+    done       = 0
+    failed_run = 0
+    try:
+        for i, pt in enumerate(path):
+            angles             = pt['angles']
+            ideal_x, ideal_y   = pt['ideal']
+            target_x, target_y = pt['target']
+            theta              = step_rad * i
 
             sys.stdout.write(
                 f"\r  [{i+1:4d}/{total_pts}]  θ={np.degrees(theta):+7.2f}°  "
@@ -1912,12 +2003,18 @@ def run_circle_path(
             )
             sys.stdout.flush()
 
-            # Step 5: IK รอบที่ 2 (ผ่าน leg.move_to) + ส่งคำสั่งมอเตอร์
-            ok = leg.move_to(target_x, target_y,
-                             duration_ms=step_ms if leg.use_scurve else None)
-            if ok is False:
-                failed += 1
-                sys.stdout.write("[IK fail]")
+            if angles is None:
+                failed_run += 1
+                sys.stdout.write("[IK fail — skip]")
+                sys.stdout.flush()
+                continue
+
+            tA_deg, tB_deg = angles
+            ok = leg.move_to_angles(tA_deg, tB_deg,
+                                    duration_ms=step_ms if leg.use_scurve else None)
+            if not ok:
+                failed_run += 1
+                sys.stdout.write("[send fail]")
                 sys.stdout.flush()
             else:
                 done += 1
@@ -1926,12 +2023,13 @@ def run_circle_path(
     except KeyboardInterrupt:
         print("\n\n  ⛔ หยุดโดย Ctrl+C")
 
+    n_comp = sum(1 for pt in path if pt['comp'])
     print(f"\n\n  ─── สรุป Circle Path ──────────────────────────")
     print(f"    สำเร็จ    : {done}/{total_pts}")
     if compensate and comp_model is not None:
-        print(f"    ชดเชยแล้ว : {comp_applied}/{total_pts} จุด")
-    if failed:
-        print(f"    IK ล้มเหลว: {failed} จุด")
+        print(f"    ชดเชยแล้ว : {n_comp}/{total_pts} จุด")
+    if failed_run:
+        print(f"    ล้มเหลว   : {failed_run} จุด")
     print(f"  ────────────────────────────────────────────────")
 
 
@@ -2009,6 +2107,9 @@ def run_interactive(leg: SingleLegController):
                 else:
                     num_parts.append(_p)
             parts = num_parts
+            # ถ้าระบุชื่อโมเดลและไม่ได้พิมพ์ nocomp → เปิด compensation อัตโนมัติ
+            if _model_name is not None and 'nocomp' not in cmd.split():
+                _compensate = True
             try:
                 if len(parts) == 1:
                     run_circle_path(leg, compensate=_compensate,
