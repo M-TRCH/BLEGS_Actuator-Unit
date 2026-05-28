@@ -53,7 +53,7 @@ def _save_poly_json(pipe_x, pipe_y, model_name, poly_degree):
     data = {
         "model_name": model_name,
         "polynomial_degree": poly_degree,
-        "feature_names": poly.get_feature_names_out(['thetaA', 'thetaB']).tolist(),
+        "feature_names": poly.get_feature_names_out(['thetaA', 'thetaB', 'currA', 'currB']).tolist(),
         "model_x": {"intercept": lr_x.intercept_, "coef": lr_x.coef_.tolist()},
         "model_y": {"intercept": lr_y.intercept_, "coef": lr_y.coef_.tolist()},
     }
@@ -63,14 +63,19 @@ def _save_poly_json(pipe_x, pipe_y, model_name, poly_degree):
     return path
 
 
-def _save_surface_map(X, y_x, y_y, pipe_x, pipe_y, model_name, label, rmse_x, rmse_y):
-    """Save 3-D surface map (X-error and Y-error side by side) to plots dir."""
+def _save_surface_map(X, y_x, y_y, pipe_x, pipe_y, model_name, label, rmse_x, rmse_y,
+                      curr_a_med=0.0, curr_b_med=0.0):
+    """Save 3-D surface map (X-error and Y-error side by side) to plots dir.
+    current_a / current_b fixed at median values for visualization."""
     tA = np.linspace(X[:, 0].min(), X[:, 0].max(), 30)
     tB = np.linspace(X[:, 1].min(), X[:, 1].max(), 30)
     TA, TB = np.meshgrid(tA, tB)
-    mesh = np.c_[TA.ravel(), TB.ravel()]
+    n = TA.ravel().shape[0]
+    mesh = np.c_[TA.ravel(), TB.ravel(),
+                 np.full(n, curr_a_med), np.full(n, curr_b_med)]
     zx = pipe_x.predict(mesh).reshape(TA.shape)
     zy = pipe_y.predict(mesh).reshape(TA.shape)
+    curr_note = f'currA={curr_a_med:.0f}, currB={curr_b_med:.0f} (median)'
 
     fig = plt.figure(figsize=(14, 6))
 
@@ -78,7 +83,7 @@ def _save_surface_map(X, y_x, y_y, pipe_x, pipe_y, model_name, label, rmse_x, rm
     ax1.scatter(X[:, 0], X[:, 1], y_x, c='red', s=20, alpha=0.6,
                 edgecolors='k', linewidths=0.3, label='Measured')
     sf1 = ax1.plot_surface(TA, TB, zx, cmap='viridis', alpha=0.7, edgecolor='none')
-    ax1.set_title(f'Error X  [{label}]\nRMSE = {rmse_x:.3f} mm', fontweight='bold')
+    ax1.set_title(f'Error X  [{label}]\nRMSE = {rmse_x:.3f} mm\n{curr_note}', fontweight='bold')
     ax1.set_xlabel('Cmd θA (deg)'); ax1.set_ylabel('Cmd θB (deg)'); ax1.set_zlabel('Err X (mm)')
     ax1.view_init(elev=20, azim=-45)
     fig.colorbar(sf1, ax=ax1, shrink=0.5, aspect=10, pad=0.1)
@@ -87,7 +92,7 @@ def _save_surface_map(X, y_x, y_y, pipe_x, pipe_y, model_name, label, rmse_x, rm
     ax2.scatter(X[:, 0], X[:, 1], y_y, c='red', s=20, alpha=0.6,
                 edgecolors='k', linewidths=0.3, label='Measured')
     sf2 = ax2.plot_surface(TA, TB, zy, cmap='plasma', alpha=0.7, edgecolor='none')
-    ax2.set_title(f'Error Y  [{label}]\nRMSE = {rmse_y:.3f} mm', fontweight='bold')
+    ax2.set_title(f'Error Y  [{label}]\nRMSE = {rmse_y:.3f} mm\n{curr_note}', fontweight='bold')
     ax2.set_xlabel('Cmd θA (deg)'); ax2.set_ylabel('Cmd θB (deg)'); ax2.set_zlabel('Err Y (mm)')
     ax2.view_init(elev=20, azim=-45)
     fig.colorbar(sf2, ax=ax2, shrink=0.5, aspect=10, pad=0.1)
@@ -140,9 +145,13 @@ def main():
         print(f"❌ ไม่พบไฟล์: {csv_path}")
         return
 
-    X   = df[['cmd_thetaA_deg', 'cmd_thetaB_deg']].values
+    X   = df[['cmd_thetaA_deg', 'cmd_thetaB_deg', 'current_a', 'current_b']].values
     y_x = df['video_err_x_mm'].values
     y_y = df['video_err_y_mm'].values
+
+    curr_a_med = float(np.median(df['current_a']))
+    curr_b_med = float(np.median(df['current_b']))
+    print(f"   current median → currA={curr_a_med:.0f}  currB={curr_b_med:.0f}")
 
     os.makedirs(MODELS_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR,  exist_ok=True)
@@ -222,7 +231,8 @@ def main():
             print(f"   💾 JSON → {json_path}")
 
         plot_path = _save_surface_map(X, y_x, y_y, pipe_x, pipe_y,
-                                      model_name, label, rmse_x, rmse_y)
+                                      model_name, label, rmse_x, rmse_y,
+                                      curr_a_med, curr_b_med)
         print(f"   📈 Plot → {plot_path}")
 
         results.append(dict(label=label, model_name=model_name,
