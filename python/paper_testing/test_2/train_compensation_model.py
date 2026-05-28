@@ -34,12 +34,13 @@ def _train_and_eval(pipe_x, pipe_y, X, y_x, y_y):
     )
 
 
-def _save_pkl(pipe_x, pipe_y, model_name, metrics):
+def _save_pkl(pipe_x, pipe_y, model_name, metrics, input_stats=None):
     """Save model pair + metrics as .pkl (joblib compress=3)."""
     path = os.path.join(MODELS_DIR, f'{model_name}.pkl')
     joblib.dump(
         {"model_name": model_name, "model_x": pipe_x,
-         "model_y": pipe_y, "metrics": metrics},
+         "model_y": pipe_y, "metrics": metrics,
+         "input_stats": input_stats or {}},
         path, compress=3,
     )
     return path
@@ -152,7 +153,13 @@ def main():
     curr_a_med = float(np.median(df['current_a']))
     curr_b_med = float(np.median(df['current_b']))
     print(f"   current median → currA={curr_a_med:.0f}  currB={curr_b_med:.0f}")
-
+    input_stats = {
+        "n_features":    X.shape[1],
+        "feature_names": ['cmd_thetaA_deg', 'cmd_thetaB_deg',
+                          'current_a', 'current_b'][:X.shape[1]],
+        "mean":   X.mean(axis=0).tolist(),
+        "median": np.median(X, axis=0).tolist(),
+    }
     os.makedirs(MODELS_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR,  exist_ok=True)
 
@@ -223,7 +230,7 @@ def main():
 
         metrics = dict(rmse_x=rmse_x, rmse_y=rmse_y, r2_x=r2_x, r2_y=r2_y)
 
-        pkl_path = _save_pkl(pipe_x, pipe_y, model_name, metrics)
+        pkl_path = _save_pkl(pipe_x, pipe_y, model_name, metrics, input_stats)
         print(f"   💾 PKL  → {pkl_path}")
 
         if is_poly:
