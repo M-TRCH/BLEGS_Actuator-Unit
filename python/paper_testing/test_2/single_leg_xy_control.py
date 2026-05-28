@@ -156,7 +156,7 @@ else:  # RIGHT
 # ตำแหน่ง home (ท่ายืน)
 HOME_X = 0.0
 HOME_Y = -220.0
-MOTOR_INIT_ANGLE = -90.0   # degrees
+MOTOR_INIT_ANGLE   = -90.0   # degrees — มุมเริ่มต้น/park ของมอเตอร์ทั้งคู่
 
 # ============================================================================
 # PACKET TYPE ENUM (Binary Protocol v1.2)
@@ -487,16 +487,21 @@ def calculate_fk(theta_A_deg: float, theta_B_deg: float) -> np.ndarray | None:
 
 def _home_ik_reference_rad() -> np.ndarray | None:
     """
-    คำนวณมุมมอเตอร์ที่ home position (radians) โดยเลือก lower-elbow solution
-    ใช้เป็น reference สำหรับการเลือก IK solution ครั้งแรก
+    คำนวณมุมมอเตอร์ที่ home position (radians) ใช้เป็น reference สำหรับการเลือก IK solution ครั้งแรก
+
+    ท่า symmetric (elbow_C_down=True, elbow_D_down=True):
+    Motor A: lower C (y ต่ำกว่า) → θA ≈ −110°
+    Motor B: lower D (y ต่ำกว่า) → θB ≈ −70°  (outward, symmetric กับ Motor A)
     """
     P_E = np.array([HOME_X, HOME_Y], dtype=float)
     pts_C = _circle_intersect_both(P_A, L_AC, P_E, L_CE)
     pts_D = _circle_intersect_both(P_B, L_BD, P_E, L_DE)
     if pts_C is None or pts_D is None:
         return None
+    # Motor A: lower C (y ต่ำกว่า)
     C = pts_C[1] if pts_C[1][1] < pts_C[0][1] else pts_C[0]
-    D = pts_D[1] if pts_D[1][1] < pts_D[0][1] else pts_D[0]
+    # Motor B: lower D (y ต่ำกว่า) — outward, symmetric กับ Motor A
+    D = pts_D[0] if pts_D[0][1] < pts_D[1][1] else pts_D[1]
     tA = np.arctan2((C - P_A)[1], (C - P_A)[0])
     tB = np.arctan2((D - P_B)[1], (D - P_B)[0])
     return np.array([tA, tB])
@@ -534,6 +539,12 @@ def calculate_ik(target_xy: np.ndarray, force: bool = False) -> tuple[float, flo
 
     P_E = np.array(target_xy, dtype=float)
     _intersect = _circle_intersect_clamped if force else _circle_intersect_both
+
+    # ตรวจสอบว่า target อยู่ใน workspace จริงหรือไม่ (ใช้ใน force mode เพื่อป้องกัน branch drift)
+    _in_ws = (
+        abs(L_AC - L_CE) <= np.linalg.norm(P_A - P_E) <= L_AC + L_CE and
+        abs(L_BD - L_DE) <= np.linalg.norm(P_B - P_E) <= L_BD + L_DE
+    )
 
     pts_C = _intersect(P_A, L_AC, P_E, L_CE)
     if pts_C is None:
@@ -578,7 +589,10 @@ def calculate_ik(target_xy: np.ndarray, force: bool = False) -> tuple[float, flo
     if best_solution is None:
         return None
 
-    _ik_prev_angles_rad = best_solution
+    # อัปเดต IK state เฉพาะเมื่อ target อยู่ใน workspace จริง
+    # (ป้องกัน branch drift เมื่อ force=True นอก workspace)
+    if not force or _in_ws:
+        _ik_prev_angles_rad = best_solution
     return float(np.rad2deg(best_solution[0])), float(np.rad2deg(best_solution[1]))
 
 
