@@ -1184,10 +1184,13 @@ def _motor_dwell_and_feedback(leg: 'SingleLegController', dwell_s: float) -> dic
     fb_b = leg.motor_b.ping()
     leg.motor_a.set_timeout(FAST_TIMEOUT)
     leg.motor_b.set_timeout(FAST_TIMEOUT)
-    tA_act = fb_a['position'] if fb_a else float('nan')
-    tB_act = fb_b['position'] if fb_b else float('nan')
+    tA_act  = fb_a['position'] if fb_a else float('nan')
+    tB_act  = fb_b['position'] if fb_b else float('nan')
+    cur_a   = fb_a['current']  if fb_a else float('nan')
+    cur_b   = fb_b['current']  if fb_b else float('nan')
     return {'tA_cmd': tA_cmd, 'tB_cmd': tB_cmd,
-            'tA_act': tA_act, 'tB_act': tB_act}
+            'tA_act': tA_act, 'tB_act': tB_act,
+            'current_a': cur_a, 'current_b': cur_b}
 
 
 def run_capture_point(
@@ -1303,6 +1306,7 @@ def run_capture_point(
             fb['tA_cmd'], fb['tB_cmd'],
             fb['tA_act'], fb['tB_act'],
             video_x=video_x, video_y=video_y,
+            current_a=fb.get('current_a'), current_b=fb.get('current_b'),
         )
         return ok
 
@@ -1319,6 +1323,8 @@ def _write_grid_log(
     tA_act: float, tB_act: float,
     video_x: float | None = None,
     video_y: float | None = None,
+    current_a: float | None = None,
+    current_b: float | None = None,
     log_path: str = GRID_LOG_FILE,
 ) -> None:
     """
@@ -1329,6 +1335,7 @@ def _write_grid_log(
         point_id, target_x_mm, target_y_mm,
         cmd_thetaA_deg, cmd_thetaB_deg,
         act_thetaA_deg, act_thetaB_deg,
+        current_a, current_b,
         video_act_x_mm, video_act_y_mm,
         video_err_x_mm, video_err_y_mm, video_err_dist_mm
     """
@@ -1337,12 +1344,15 @@ def _write_grid_log(
         'point_id', 'target_x_mm', 'target_y_mm',
         'cmd_thetaA_deg', 'cmd_thetaB_deg',
         'act_thetaA_deg', 'act_thetaB_deg',
+        'current_a', 'current_b',
         'video_act_x_mm', 'video_act_y_mm',
         'video_err_x_mm', 'video_err_y_mm', 'video_err_dist_mm',
     ]
 
-    _vx = video_x if video_x is not None else float('nan')
-    _vy = video_y if video_y is not None else float('nan')
+    _vx  = video_x   if video_x   is not None else float('nan')
+    _vy  = video_y   if video_y   is not None else float('nan')
+    _cura = current_a if current_a is not None else float('nan')
+    _curb = current_b if current_b is not None else float('nan')
     if not (np.isnan(_vx) or np.isnan(_vy)):
         _ex   = _vx - target_x
         _ey   = _vy - target_y
@@ -1353,7 +1363,7 @@ def _write_grid_log(
     def _fmt(v): return '' if np.isnan(v) else f'{v:.4f}'
 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    write_header = not os.path.isfile(log_path)
+    write_header = not os.path.isfile(log_path) or os.path.getsize(log_path) == 0
     try:
         with open(log_path, 'a', newline='', encoding='utf-8') as _f:
             _w = _csv.DictWriter(_f, fieldnames=_FIELDNAMES)
@@ -1367,6 +1377,8 @@ def _write_grid_log(
                 'cmd_thetaB_deg':    f'{tB_cmd:.4f}',
                 'act_thetaA_deg':    f'{tA_act:.4f}',
                 'act_thetaB_deg':    f'{tB_act:.4f}',
+                'current_a':         _fmt(_cura),
+                'current_b':         _fmt(_curb),
                 'video_act_x_mm':    _fmt(_vx),
                 'video_act_y_mm':    _fmt(_vy),
                 'video_err_x_mm':    _fmt(_ex),
@@ -1529,6 +1541,7 @@ def run_capture_sweep(
                 fb['tA_cmd'], fb['tB_cmd'],
                 fb['tA_act'], fb['tB_act'],
                 video_x=video_x, video_y=video_y,
+                current_a=fb.get('current_a'), current_b=fb.get('current_b'),
             )
 
             # ── ตรวจ keyboard interrupt ───────────────────────────
