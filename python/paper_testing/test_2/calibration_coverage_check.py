@@ -61,6 +61,15 @@ OUT_VIDEO  = os.path.join(_VIDEO_DIR, "calibration_coverage_combined.mp4")
 OUT_PLOT   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "output", "plots", "calibration_coverage_plot.png")
 
+# ─ Stabilized crop (portrait 9:16) ─
+OUT_W            = 720       # output width  (px) — เปลี่ยนได้ตาม resolution
+OUT_H            = 1280      # output height (px) — 9:16
+CROP_CENTER_MM   = np.array([0.0, -100.0])  # จุดกึ่งกลาง crop ในระนาบ world (mm)
+                              #   (0, 0) = กึ่งกลาง id0-id1,  (0,-175) = ศูนย์กลางวงโคจร
+STAB_ALPHA       = 0.15      # EMA smoothing (0 = นิ่งสนิท, 1 = ไม่ smooth)
+CROP_ZOOM        = 3.0       # zoom-out factor: crop พื้นที่ใหญ่ขึ้น N เท่า แล้ว resize
+                              #   1.0 = ไม่ zoom out,  2.0 = เห็นกว้างขึ้น 2x,  3.0 = 3x
+
 # ─────────────────────────────────────────
 # 2. สีสำหรับ overlay (คงที่)
 # ─────────────────────────────────────────
@@ -144,6 +153,58 @@ def in_calib_area(pt_mm, grid_pts, margin=0.0):
     y_min = grid_pts[:, 1].min() - margin
     y_max = grid_pts[:, 1].max() + margin
     return (x_min <= pt_mm[0] <= x_max) and (y_min <= pt_mm[1] <= y_max)
+
+
+def _stabilize_crop(img, stab_mid, stab_angle, cc_orig, frame_w, frame_h):
+    """หมุน img ให้ id0→id1 แนวนอน แล้ว crop portrait OUT_W × OUT_H
+
+    - stab_mid   : midpoint px ที่ smooth แล้ว (EMA), หรือ None
+    - stab_angle : มุมหมุน (deg) ที่ smooth แล้ว, หรือ None
+    - cc_orig    : crop center ใน undistorted frame (px), หรือ None
+    """
+    if stab_mid is not None and cc_orig is not None:
+        # getRotationMatrix2D(center, angle, scale):
+        #   หมุน features ของ image ทวนเข็มนาฬิกา (display) ด้วย angle
+        #   → ใช้ stab_angle เพื่อ align id0→id1 ให้แนวนอน
+        M_rot = cv2.getRotationMatrix2D(
+            (float(stab_mid[0]), float(stab_mid[1])),
+            float(stab_angle), 1.0,
+        )
+        # แปลง crop center จาก original → rotated frame
+        cc_h     = np.array([float(cc_orig[0]), float(cc_orig[1]), 1.0])
+        cc_r     = M_rot @ cc_h
+        cx, cy   = float(cc_r[0]), float(cc_r[1])
+        rotated  = cv2.warpAffine(img, M_rot, (frame_w, frame_h),
+                                   flags=cv2.INTER_LINEAR,
+                                   borderMode=cv2.BORDER_CONSTANT,
+                                   borderValue=(0, 0, 0))
+    else:
+        # fallback: ไม่หมุน, crop กึ่งกลาง frame
+        cx, cy  = frame_w / 2.0, frame_h / 2.0
+        rotated = img
+
+    # crop_w/h เป็นพื้นที่ที่จะตัดจริง (ใหญ่กว่า OUT_W/H ตาม CROP_ZOOM)
+    crop_w = int(round(OUT_W * CROP_ZOOM))
+    crop_h = int(round(OUT_H * CROP_ZOOM))
+
+    x1 = int(round(cx)) - crop_w // 2
+    y1 = int(round(cy)) - crop_h // 2
+    x2 = x1 + crop_w
+    y2 = y1 + crop_h
+
+    pad_l = max(0, -x1);  pad_t = max(0, -y1)
+    pad_r = max(0, x2 - frame_w);  pad_b = max(0, y2 - frame_h)
+
+    if pad_l or pad_t or pad_r or pad_b:
+        rotated = cv2.copyMakeBorder(rotated, pad_t, pad_b, pad_l, pad_r,
+                                      cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        x1 += pad_l;  x2 += pad_l
+        y1 += pad_t;  y2 += pad_t
+
+    cropped = rotated[y1:y2, x1:x2]
+    if CROP_ZOOM != 1.0:
+        cropped = cv2.resize(cropped, (OUT_W, OUT_H), interpolation=cv2.INTER_AREA)
+    return cropped
 
 
 # ─────────────────────────────────────────
@@ -240,7 +301,9 @@ def trim_tracked(tracked):
 def write_annotated_segment(video_path, calib_file, grid_pts,
                              frame_start, frame_end,
                              label, bgr_color, writer):
-    """อ่านวิดีโอเฉพาะช่วง [frame_start, frame_end] แล้วเขียน annotated ลง writer"""
+    """อ่านวิดีโอเฉพาะช่วง [frame_start, frame_end]
+    annotate → align/rotate (id0-id1 แนวนอน) → crop portrait 9:16 → เขียนลง writer
+    """
     with np.load(calib_file) as data:
         mtx, dist = data["camera_matrix"], data["dist_coeffs"]
 
@@ -264,6 +327,11 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
     traj_mm_live = []
     written      = 0
 
+    # ── EMA stabilization state ──
+    stab_mid     = None   # midpoint px ที่ smooth แล้ว
+    stab_angle   = None   # มุมหมุน (deg) ที่ smooth แล้ว
+    last_cc_orig = None   # crop center ใน undistorted frame (px)
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -277,9 +345,29 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
         img  = cv2.undistort(frame, mtx, dist, None, new_mtx)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = detector.detectMarkers(gray)
-        centers = _marker_centers(corners, ids)
+        centers  = _marker_centers(corners, ids)
         px2mm, mm2px = _build_transform(centers)
 
+        # ── อัปเดต EMA stabilization เมื่อ detect id0, id1 ได้ ──
+        if 0 in centers and 1 in centers:
+            p0 = centers[0].astype(float)
+            p1 = centers[1].astype(float)
+            cur_mid   = (p0 + p1) / 2.0
+            cur_angle = np.degrees(np.arctan2(
+                p1[1] - p0[1], p1[0] - p0[0]
+            ))
+            if stab_mid is None:
+                stab_mid   = cur_mid.copy()
+                stab_angle = cur_angle
+            else:
+                stab_mid  = STAB_ALPHA * cur_mid + (1.0 - STAB_ALPHA) * stab_mid
+                da         = (cur_angle - stab_angle + 180.0) % 360.0 - 180.0
+                stab_angle = stab_angle + STAB_ALPHA * da
+
+        if mm2px is not None:
+            last_cc_orig = mm2px(CROP_CENTER_MM)
+
+        # ── วาด overlays บน undistorted frame (ก่อน crop) ──
         if mm2px is not None:
             # ideal circle
             ideal_px = np.array([mm2px(p) for p in ideal_mm], dtype=np.int32)
@@ -287,10 +375,10 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
                           True, CLR_IDEAL, IDEAL_THICKNESS, cv2.LINE_AA)
 
             # motor joints
-            for mid, pos_mm in REF_WORLD.items():
+            for mid_id, pos_mm in REF_WORLD.items():
                 px = mm2px(pos_mm).astype(int)
                 cv2.drawMarker(img, tuple(px), CLR_REF, cv2.MARKER_SQUARE, 14, 2)
-                cv2.putText(img, f"id{mid}", (px[0] + 8, px[1] - 6),
+                cv2.putText(img, f"id{mid_id}", (px[0] + 8, px[1] - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, CLR_REF, 1, cv2.LINE_AA)
 
             # calibration grid points
@@ -300,11 +388,9 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
                 clr = CLR_GRID_IN if d2c <= RADIUS_MM + 1e-6 else CLR_GRID_OUT
                 cv2.circle(img, tuple(gpx), GRID_RADIUS_PX, clr, -1, cv2.LINE_AA)
 
-            # track current position
-            if px2mm is not None and TARGET_ID in centers:
+            # track + draw trajectory
+            if TARGET_ID in centers:
                 traj_mm_live.append(px2mm(centers[TARGET_ID]))
-
-            # live trajectory
             if len(traj_mm_live) > 1:
                 tpx = np.array([mm2px(p) for p in traj_mm_live], dtype=np.int32)
                 cv2.polylines(img, [tpx.reshape(-1, 1, 2)],
@@ -313,12 +399,15 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
                 cur = mm2px(traj_mm_live[-1]).astype(int)
                 cv2.circle(img, tuple(cur), 6, bgr_color, -1, cv2.LINE_AA)
 
-        # label banner (top-left)
-        cv2.rectangle(img, (10, 10), (280, 52), (30, 30, 30), -1)
-        cv2.putText(img, label, (20, 40),
+        # ── Align (id0→id1 แนวนอน) + crop portrait 9:16 ──
+        frame_out = _stabilize_crop(img, stab_mid, stab_angle, last_cc_orig, w, h)
+
+        # ── วาด label banner บน output frame ──
+        cv2.rectangle(frame_out, (10, 10), (OUT_W - 10, 52), (30, 30, 30), -1)
+        cv2.putText(frame_out, label, (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, bgr_color, 2, cv2.LINE_AA)
 
-        writer.write(img)
+        writer.write(frame_out)
         written += 1
 
     cap.release()
@@ -432,7 +521,7 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(OUT_VIDEO), exist_ok=True) if os.path.dirname(OUT_VIDEO) else None
     fourcc  = cv2.VideoWriter_fourcc(*"mp4v")
     out_fps = (vid_fps or 30.0) / FRAME_STEP
-    writer  = cv2.VideoWriter(OUT_VIDEO, fourcc, out_fps, vid_size)
+    writer  = cv2.VideoWriter(OUT_VIDEO, fourcc, out_fps, (OUT_W, OUT_H))
 
     results_for_plot = []
     for (video_path, label, color), trimmed in zip(VIDEOS, all_trimmed):
