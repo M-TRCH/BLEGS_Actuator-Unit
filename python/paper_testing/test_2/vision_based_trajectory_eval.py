@@ -9,12 +9,12 @@ import matplotlib.pyplot as plt
 # ==========================================
 # (path, label, scatter_color)
 VIDEOS = [
-    (r"D:\THESIS\original.MOV",     "Original",            "dimgray"),
-    (r"D:\THESIS\model_mlp.MOV",    "MLP",                 "royalblue"),
-    (r"D:\THESIS\model_poly3.MOV",  "Poly-3",              "darkorange"),
-    (r"D:\THESIS\model_poly4.MOV",  "Poly-4",              "purple"),
-    (r"D:\THESIS\model_forest.MOV", "Random Forest",       "green"),
-    (r"D:\THESIS\model_svr.MOV",    "SVR",                 "crimson"),
+    (r"D:\THESIS\3kg\original.MOV",     "Original",            "dimgray"),
+    (r"D:\THESIS\3kg\model_mlp.MOV",    "MLP",                 "royalblue"),
+    (r"D:\THESIS\3kg\model_poly3.MOV",  "Poly-3",              "darkorange"),
+    (r"D:\THESIS\3kg\model_poly4.MOV",  "Poly-4",              "purple"),
+    (r"D:\THESIS\3kg\model_forest.MOV", "Random Forest",       "green"),
+    (r"D:\THESIS\3kg\model_svr.MOV",    "SVR",                 "crimson"),
 ]
 CALIB_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output", "params", "calibration_olympus25f1.2.npz")
 
