@@ -11,6 +11,9 @@ calibration_coverage_check.py  (v2 — multi-video)
 
 import os
 import csv
+import threading
+import queue as _queue
+import concurrent.futures
 
 import cv2
 import cv2.aruco as aruco
@@ -19,6 +22,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+
+# ─ GPU / CUDA detection ─
+try:
+    USE_CUDA = cv2.cuda.getCudaEnabledDeviceCount() > 0
+except (cv2.error, AttributeError):
+    USE_CUDA = False
 
 # ─────────────────────────────────────────
 # 1. CONFIG
@@ -38,7 +47,7 @@ GRID_CSV   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "output", "data", "workspace_grid.csv")
 
 TARGET_ID  = 4          # ArTag ที่ปลายเท้า (เคลื่อนที่)
-FRAME_STEP = 4          # ประมวลผลทุก N เฟรม
+FRAME_STEP = 1          # ประมวลผลทุก N เฟรม
 
 # การตัดส่วนนิ่ง
 MOTION_THRESHOLD_MM = 2.0   # displacement ต่ำกว่านี้ถือว่านิ่ง (mm)
@@ -63,7 +72,7 @@ OUT_PLOT   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # ─ Stabilized crop (portrait 9:16) ─
 OUT_W            = 720       # output width  (px) — เปลี่ยนได้ตาม resolution
-OUT_H            = 1280      # output height (px) — 9:16
+OUT_H            = 720       # output height (px) — 1:1
 CROP_CENTER_MM   = np.array([0.0, -100.0])  # จุดกึ่งกลาง crop ในระนาบ world (mm)
                               #   (0, 0) = กึ่งกลาง id0-id1,  (0,-175) = ศูนย์กลางวงโคจร
 STAB_ALPHA       = 0.15      # EMA smoothing (0 = นิ่งสนิท, 1 = ไม่ smooth)
@@ -155,6 +164,42 @@ def in_calib_area(pt_mm, grid_pts, margin=0.0):
     return (x_min <= pt_mm[0] <= x_max) and (y_min <= pt_mm[1] <= y_max)
 
 
+def _make_undistort_maps(calib_file, w, h):
+    """Precompute remap maps — เร็วกว่า cv2.undistort ~5×"""
+    with np.load(calib_file) as data:
+        mtx, dist = data["camera_matrix"], data["dist_coeffs"]
+    new_mtx, _ = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0)
+    map1, map2 = cv2.initUndistortRectifyMap(
+        mtx, dist, None, new_mtx, (w, h), cv2.CV_16SC2,
+    )
+    return map1, map2
+
+
+class _AsyncVideoWriter:
+    """เขียน VideoWriter ใน background thread — ลด I/O blocking"""
+
+    def __init__(self, path, fourcc, fps, size):
+        self._writer = cv2.VideoWriter(path, fourcc, fps, size)
+        self._q = _queue.Queue(maxsize=128)
+        self._t = threading.Thread(target=self._run, daemon=True)
+        self._t.start()
+
+    def _run(self):
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            self._writer.write(item)
+
+    def write(self, frame):
+        self._q.put(frame)
+
+    def release(self):
+        self._q.put(None)
+        self._t.join()
+        self._writer.release()
+
+
 def _stabilize_crop(img, stab_mid, stab_angle, cc_orig, frame_w, frame_h):
     """หมุน img ให้ id0→id1 แนวนอน แล้ว crop portrait OUT_W × OUT_H
 
@@ -174,10 +219,20 @@ def _stabilize_crop(img, stab_mid, stab_angle, cc_orig, frame_w, frame_h):
         cc_h     = np.array([float(cc_orig[0]), float(cc_orig[1]), 1.0])
         cc_r     = M_rot @ cc_h
         cx, cy   = float(cc_r[0]), float(cc_r[1])
-        rotated  = cv2.warpAffine(img, M_rot, (frame_w, frame_h),
-                                   flags=cv2.INTER_LINEAR,
-                                   borderMode=cv2.BORDER_CONSTANT,
-                                   borderValue=(0, 0, 0))
+        if USE_CUDA:
+            _g = cv2.cuda_GpuMat()
+            _g.upload(img)
+            rotated = cv2.cuda.warpAffine(
+                _g, M_rot, (frame_w, frame_h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0),
+            ).download()
+        else:
+            rotated = cv2.warpAffine(img, M_rot, (frame_w, frame_h),
+                                      flags=cv2.INTER_LINEAR,
+                                      borderMode=cv2.BORDER_CONSTANT,
+                                      borderValue=(0, 0, 0))
     else:
         # fallback: ไม่หมุน, crop กึ่งกลาง frame
         cx, cy  = frame_w / 2.0, frame_h / 2.0
@@ -216,9 +271,6 @@ def scan_video(video_path, calib_file):
     """
     print(f"  Scanning: {os.path.basename(video_path)}", flush=True)
 
-    with np.load(calib_file) as data:
-        mtx, dist = data["camera_matrix"], data["dist_coeffs"]
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise FileNotFoundError(f"Cannot open: {video_path}")
@@ -226,7 +278,7 @@ def scan_video(video_path, calib_file):
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    new_mtx, _ = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0)
+    map1, map2 = _make_undistort_maps(calib_file, w, h)
 
     detector = aruco.ArucoDetector(
         aruco.getPredefinedDictionary(aruco.DICT_6X6_250),
@@ -242,7 +294,7 @@ def scan_video(video_path, calib_file):
         fc += 1
         if fc % FRAME_STEP != 0:
             continue
-        img  = cv2.undistort(frame, mtx, dist, None, new_mtx)
+        img  = cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = detector.detectMarkers(gray)
         centers = _marker_centers(corners, ids)
@@ -304,13 +356,10 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
     """อ่านวิดีโอเฉพาะช่วง [frame_start, frame_end]
     annotate → align/rotate (id0-id1 แนวนอน) → crop portrait 9:16 → เขียนลง writer
     """
-    with np.load(calib_file) as data:
-        mtx, dist = data["camera_matrix"], data["dist_coeffs"]
-
     cap = cv2.VideoCapture(video_path)
     w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    new_mtx, _ = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 0)
+    map1, map2 = _make_undistort_maps(calib_file, w, h)
 
     detector = aruco.ArucoDetector(
         aruco.getPredefinedDictionary(aruco.DICT_6X6_250),
@@ -342,7 +391,7 @@ def write_annotated_segment(video_path, calib_file, grid_pts,
         if fc < frame_start or fc % FRAME_STEP != 0:
             continue
 
-        img  = cv2.undistort(frame, mtx, dist, None, new_mtx)
+        img  = cv2.remap(frame, map1, map2, cv2.INTER_LINEAR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = detector.detectMarkers(gray)
         centers  = _marker_centers(corners, ids)
@@ -501,15 +550,20 @@ if __name__ == "__main__":
     print(f"  X range: {grid_pts[:,0].min()} → {grid_pts[:,0].max()} mm")
     print(f"  Y range: {grid_pts[:,1].min()} → {grid_pts[:,1].max()} mm")
 
-    # ── Pass 1: scan + trim ──────────────────────────
-    print("\n=== Pass 1: scanning videos ===")
+    # ── Pass 1: scan + trim (parallel) ──────────────────────────
+    n_workers = min(len(VIDEOS), os.cpu_count() or 1)
+    print(f"\n=== Pass 1: scanning {len(VIDEOS)} videos ({n_workers} parallel workers) ===")
+    print(f"  GPU acceleration: {'CUDA enabled' if USE_CUDA else 'CPU only'}", flush=True)
     all_trimmed = []
     vid_fps  = None
     vid_size = None
 
-    for video_path, label, color in VIDEOS:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as ex:
+        futures = [ex.submit(scan_video, vp, CALIB_FILE) for vp, _, _ in VIDEOS]
+        scan_results = [f.result() for f in futures]
+
+    for (video_path, label, color), (tracked, fps, size) in zip(VIDEOS, scan_results):
         print(f"\n[{label}]")
-        tracked, fps, size = scan_video(video_path, CALIB_FILE)
         if vid_fps is None:
             vid_fps  = fps
             vid_size = size
@@ -518,10 +572,11 @@ if __name__ == "__main__":
 
     # ── Pass 2: เขียน annotated video ─────────────────
     print("\n=== Pass 2: writing annotated video ===")
-    os.makedirs(os.path.dirname(OUT_VIDEO), exist_ok=True) if os.path.dirname(OUT_VIDEO) else None
+    if os.path.dirname(OUT_VIDEO):
+        os.makedirs(os.path.dirname(OUT_VIDEO), exist_ok=True)
     fourcc  = cv2.VideoWriter_fourcc(*"mp4v")
     out_fps = (vid_fps or 30.0) / FRAME_STEP
-    writer  = cv2.VideoWriter(OUT_VIDEO, fourcc, out_fps, (OUT_W, OUT_H))
+    writer  = _AsyncVideoWriter(OUT_VIDEO, fourcc, out_fps, (OUT_W, OUT_H))
 
     results_for_plot = []
     for (video_path, label, color), trimmed in zip(VIDEOS, all_trimmed):
