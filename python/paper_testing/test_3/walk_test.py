@@ -83,6 +83,11 @@ INVERT_PITCH = True
 
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE
 
+# ------------------------- Test distances (editable) -----------------------
+# Change these values to adjust test distances for modes 7, 8, 9.
+MODE7_DISTANCE_MM = 2400.0
+MODE_TURN_DISTANCE_MM = 300.0
+
 ENABLE_LOGGING = True
 # Store logs under the test_3 output folder
 LOG_FILE_PATH = os.path.abspath(
@@ -90,6 +95,7 @@ LOG_FILE_PATH = os.path.abspath(
 LOG_RATE = 10
 
 SIMULATION_MODE = False
+
 DEBUG_GAIT = False
 
 # ============================================================================
@@ -1583,9 +1589,9 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
 def test_smooth_walk_600() -> bool:
     """Mode 7: Smooth walk +600mm with march transitions."""
     print("\n" + "=" * 70)
-    print("  MODE 7: Smooth Walk +600mm")
+    print(f"  MODE 7: Smooth Walk {MODE7_DISTANCE_MM:+.0f}mm")
     print("=" * 70)
-    init_logging(600)
+    init_logging(MODE7_DISTANCE_MM)
     try:
         print("\n  Step 1/4: Starting idle march...")
         if not start_idle_march():
@@ -1594,9 +1600,9 @@ def test_smooth_walk_600() -> bool:
         print("  Marching in place for 2 seconds...")
         time.sleep(2.0)
 
-        print("\n  Step 2/4: Walking forward 600mm...")
-        success = move_relative_y(+600.0, timeout_s=60.0,
-                                  transition_to_march=True)
+        print(f"\n  Step 2/4: Walking forward {MODE7_DISTANCE_MM:+.0f}mm...")
+        success = move_relative_y(+MODE7_DISTANCE_MM, timeout_s=60.0,
+                      transition_to_march=True)
         if not success:
             if idle_marching:
                 stop_idle_march()
@@ -1628,10 +1634,10 @@ def test_smooth_walk_600() -> bool:
 def _test_turn(direction: str, turn_bias: float) -> bool:
     """Shared helper for turn tests (modes 8 & 9)."""
     print("\n" + "=" * 70)
-    print(f"  TURN {direction}: march -> walk 300mm -> march -> stand")
+    print(f"  TURN {direction}: march -> walk {MODE_TURN_DISTANCE_MM:.0f}mm -> march -> stand")
     print(f"  Turn bias: {turn_bias:+.1f} mm")
     print("=" * 70)
-    init_logging(300)
+    init_logging(MODE_TURN_DISTANCE_MM)
     try:
         print("\n  Step 1/4: Starting idle march...")
         if not start_idle_march():
@@ -1640,9 +1646,9 @@ def _test_turn(direction: str, turn_bias: float) -> bool:
         print("  Marching in place for 2 seconds...")
         time.sleep(2.0)
 
-        print(f"\n  Step 2/4: Turning walk {direction} +300mm...")
+        print(f"\n  Step 2/4: Turning walk {direction} {MODE_TURN_DISTANCE_MM:+.0f}mm...")
         success = move_relative_y_with_turn(
-            +300.0, turn_bias, timeout_s=60.0, transition_to_march=True)
+            +MODE_TURN_DISTANCE_MM, turn_bias, timeout_s=60.0, transition_to_march=True)
         if not success:
             if idle_marching:
                 stop_idle_march()
@@ -1698,9 +1704,9 @@ def print_menu():
     print(f"  WALK TEST STANDALONE  [{('SIM' if SIMULATION_MODE else 'HW')}]  {march_status}")
     print(f"  IMU: {imu_status}")
     print("=" * 70)
-    print("  [7] Smooth walk +600mm (march -> walk -> march -> stand)")
-    print("  [8] Turn LEFT +300mm   (march -> turn -> march -> stand)")
-    print("  [9] Turn RIGHT +300mm  (march -> turn -> march -> stand)")
+    print(f"  [7] Smooth walk {MODE7_DISTANCE_MM:+.0f}mm (march -> walk -> march -> stand)")
+    print(f"  [8] Turn LEFT {MODE_TURN_DISTANCE_MM:+.0f}mm   (march -> turn -> march -> stand)")
+    print(f"  [9] Turn RIGHT {MODE_TURN_DISTANCE_MM:+.0f}mm  (march -> turn -> march -> stand)")
     print("  [Q] Quit")
     print("=" * 70)
 
