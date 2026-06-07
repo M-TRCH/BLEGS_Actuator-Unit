@@ -2,6 +2,7 @@ import os
 
 import cv2
 import cv2.aruco as aruco
+import numpy as np
 
 # 1. ระบุพาธไฟล์วิดีโอที่บันทึกมา (0, 1 หรือ 2 kg)
 video_path = r'D:\THESIS\walk_test\walk_0kg.MOV'
@@ -22,7 +23,17 @@ aruco_detector = aruco.ArucoDetector(dictionary, detector_params)
 # เก็บประวัติว่าวิดีโอนี้เคยเจอ ID อะไรบ้าง
 unique_ids_found = set()
 FRAME_STEP = 2  # ประมวลผลทุก 2 เฟรม เพื่อลดภาระตอนวิดีโอความละเอียดสูง
-
+output_video_path = os.path.join(
+    os.path.dirname(video_path),
+    f"{os.path.splitext(os.path.basename(video_path))[0]}_annotated.mov",
+)
+source_fps = cap.get(cv2.CAP_PROP_FPS)
+if not source_fps or source_fps <= 0:
+    source_fps = 60.0
+export_fps = source_fps / FRAME_STEP
+if export_fps <= 0:
+    export_fps = 30.0
+video_writer = None
 
 def resize_to_fit(frame, max_width, max_height):
     height, width = frame.shape[:2]
@@ -34,6 +45,34 @@ def resize_to_fit(frame, max_width, max_height):
     new_width = int(width * scale)
     new_height = int(height * scale)
     return cv2.resize(frame, (new_width, new_height))
+
+
+def _marker_center(corners, index):
+    pts = corners[index][0]
+    return (int(np.mean(pts[:, 0])), int(np.mean(pts[:, 1])))
+
+
+def _draw_extended_line(frame, pt1, pt2, color, thickness=2):
+    height, width = frame.shape[:2]
+    x1, y1 = float(pt1[0]), float(pt1[1])
+    x2, y2 = float(pt2[0]), float(pt2[1])
+
+    dx = x2 - x1
+    dy = y2 - y1
+    if dx == 0 and dy == 0:
+        return
+
+    length = max(width, height) * 2
+    norm = (dx * dx + dy * dy) ** 0.5
+    ux = dx / norm
+    uy = dy / norm
+
+    start = (int(round(x1 - ux * length)), int(round(y1 - uy * length)))
+    end = (int(round(x1 + ux * length)), int(round(y1 + uy * length)))
+
+    clipped, clipped_start, clipped_end = cv2.clipLine((0, 0, width, height), start, end)
+    if clipped:
+        cv2.line(frame, clipped_start, clipped_end, color, thickness)
 
 print("กำลังเริ่มตรวจสอบวิดีโอ... (กดปุ่ม 'q' บนคีย์บอร์ดเพื่อหยุด)")
 
@@ -90,11 +129,47 @@ while cap.isOpened():
     cv2.putText(frame, f"Visible IDs: {current_frame_ids}", (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
+    detected_centers = {}
+    if ids is not None:
+        for i, marker_id in enumerate(ids.flatten()):
+            pts = corners[i][0]
+            detected_centers[int(marker_id)] = (
+                int(np.mean(pts[:, 0])),
+                int(np.mean(pts[:, 1])),
+            )
+
+    # 1) ลากเส้นต่อเนื่องผ่านไอดี 2 และ 3
+    if 2 in detected_centers and 3 in detected_centers:
+        _draw_extended_line(frame, detected_centers[2], detected_centers[3], (255, 0, 255), 3)
+
+    # 2) ลากเส้นจุดต่อจุดระหว่างไอดี 0 และ 1
+    if 0 in detected_centers and 1 in detected_centers:
+        cv2.line(frame, detected_centers[0], detected_centers[1], (0, 255, 255), 3)
+
+        # 3) ลากเส้นตั้งฉากผ่านจุดกึ่งกลางของเส้นที่ 2
+        mid_x = int((detected_centers[0][0] + detected_centers[1][0]) / 2)
+        mid_y = int((detected_centers[0][1] + detected_centers[1][1]) / 2)
+
+        dx = detected_centers[1][0] - detected_centers[0][0]
+        dy = detected_centers[1][1] - detected_centers[0][1]
+        perp_pt1 = (mid_x - dy, mid_y + dx)
+        perp_pt2 = (mid_x + dy, mid_y - dx)
+        _draw_extended_line(frame, perp_pt1, perp_pt2, (0, 128, 255), 3)
+
     # 6. ย่อภาพเฉพาะตอนแสดงผล เพื่อรองรับวิดีโอแนวตั้ง 4K โดยไม่บิดภาพ
     if frame.shape[0] > frame.shape[1]:
         frame_resized = resize_to_fit(frame, 540, 960)
     else:
         frame_resized = resize_to_fit(frame, 960, 540)
+
+    if video_writer is None:
+        output_height, output_width = frame_resized.shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        video_writer = cv2.VideoWriter(output_video_path, fourcc, export_fps, (output_width, output_height))
+
+    if video_writer.isOpened():
+        video_writer.write(frame_resized)
+
     cv2.imshow('AprilTag Check', frame_resized)
 
     # กด 'q' เพื่อออก
@@ -102,8 +177,11 @@ while cap.isOpened():
         break
 
 cap.release()
+if video_writer is not None:
+    video_writer.release()
 cv2.destroyAllWindows()
 
 # สรุปผล
 print("\n--- สรุปผลการตรวจสอบ ---")
 print(f"ID ทั้งหมดที่สามารถมองเห็นได้ในวิดีโอนี้: {list(unique_ids_found)}")
+print(f"บันทึกวิดีโอผลลัพธ์ไปที่: {output_video_path}")
