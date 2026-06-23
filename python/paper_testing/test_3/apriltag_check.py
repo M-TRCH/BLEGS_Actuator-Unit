@@ -5,7 +5,7 @@ import cv2.aruco as aruco
 import numpy as np
 
 # 1. ระบุพาธไฟล์วิดีโอที่บันทึกมา (0, 1 หรือ 2 kg)
-video_path = r'D:\THESIS\walk_test\walk_0kg.MOV'
+video_path = r'D:\THESIS\walk_test\runway.MOV'
 cap = cv2.VideoCapture(video_path)
 
 if not os.path.exists(video_path):
@@ -137,24 +137,6 @@ while cap.isOpened():
                 int(np.mean(pts[:, 0])),
                 int(np.mean(pts[:, 1])),
             )
-
-    # 1) ลากเส้นต่อเนื่องผ่านไอดี 2 และ 3
-    if 2 in detected_centers and 3 in detected_centers:
-        _draw_extended_line(frame, detected_centers[2], detected_centers[3], (255, 0, 255), 3)
-
-    # 2) ลากเส้นจุดต่อจุดระหว่างไอดี 0 และ 1
-    if 0 in detected_centers and 1 in detected_centers:
-        cv2.line(frame, detected_centers[0], detected_centers[1], (0, 255, 255), 3)
-
-        # 3) ลากเส้นตั้งฉากผ่านจุดกึ่งกลางของเส้นที่ 2
-        mid_x = int((detected_centers[0][0] + detected_centers[1][0]) / 2)
-        mid_y = int((detected_centers[0][1] + detected_centers[1][1]) / 2)
-
-        dx = detected_centers[1][0] - detected_centers[0][0]
-        dy = detected_centers[1][1] - detected_centers[0][1]
-        perp_pt1 = (mid_x - dy, mid_y + dx)
-        perp_pt2 = (mid_x + dy, mid_y - dx)
-        _draw_extended_line(frame, perp_pt1, perp_pt2, (0, 128, 255), 3)
 
     # 6. ย่อภาพเฉพาะตอนแสดงผล เพื่อรองรับวิดีโอแนวตั้ง 4K โดยไม่บิดภาพ
     if frame.shape[0] > frame.shape[1]:
