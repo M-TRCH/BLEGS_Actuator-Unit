@@ -23,10 +23,12 @@ import time
 import threading
 import sys
 import os
+import json
 import serial
 import serial.tools.list_ports
 import struct
 from enum import IntEnum
+from itertools import combinations_with_replacement
 from typing import List, Tuple, Optional, Dict
 
 if sys.platform == 'win32':
@@ -50,8 +52,8 @@ MOTOR_INIT_ANGLE = -90.0
 DEFAULT_STANCE_HEIGHT = -220.0
 DEFAULT_STANCE_OFFSET_X = 0.0
 
-GAIT_LIFT_HEIGHT = 15.0
-GAIT_STEP_FORWARD = 25.0
+GAIT_LIFT_HEIGHT = 40.0     # old: 15.0
+GAIT_STEP_FORWARD = 35.0    # old: 25.0
 UPDATE_RATE = 50
 TRAJECTORY_STEPS = 30
 SMOOTH_TROT_STANCE_RATIO = 0.75
@@ -97,6 +99,11 @@ LOG_RATE = 10
 SIMULATION_MODE = False
 
 DEBUG_GAIT = False
+
+ML_COMPENSATION_ENABLED = False
+COMPENSATION_MODEL_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test_2', 'output', 'models'))
+COMPENSATION_MODEL_NAME = 'model_poly4'
 
 # ============================================================================
 # PROTOCOL CONSTANTS
@@ -1083,6 +1090,8 @@ march_step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
 log_file = None
 log_counter = 0
 _log_start_time = 0.0
+_compensation_model_cache: Optional[dict] = None
+_compensation_model_cache_name: Optional[str] = None
 
 # ============================================================================
 # GAIT HELPERS
@@ -1112,6 +1121,172 @@ def get_trajectory_for_velocity(v_body_y: float, leg_id: str,
     )
 
 # ============================================================================
+# ML COMPENSATION
+# ============================================================================
+
+def _build_poly_features(
+    theta_a_deg: float, theta_b_deg: float, degree: int,
+    curr_a: float = 0.0, curr_b: float = 0.0,
+    n_vars: int = 2,
+) -> np.ndarray:
+    vars_ = [theta_a_deg, theta_b_deg, curr_a, curr_b][:n_vars]
+    feats = []
+    for d in range(1, degree + 1):
+        for combo in combinations_with_replacement(range(n_vars), d):
+            feat = 1.0
+            for idx in combo:
+                feat *= vars_[idx]
+            feats.append(feat)
+    return np.array(feats)
+
+
+def _list_compensation_models() -> list[str]:
+    names: set[str] = set()
+    if os.path.isdir(COMPENSATION_MODEL_DIR):
+        for filename in os.listdir(COMPENSATION_MODEL_DIR):
+            if filename.endswith(('.pkl', '.json')):
+                names.add(os.path.splitext(filename)[0])
+    return sorted(names)
+
+
+def load_compensation_model(name: str = COMPENSATION_MODEL_NAME) -> dict | None:
+    if os.path.isabs(name) or (os.sep in name) or ('/' in name):
+        base = os.path.splitext(name)[0]
+    else:
+        base = os.path.join(COMPENSATION_MODEL_DIR, os.path.splitext(name)[0])
+
+    pkl_path = base + '.pkl'
+    json_path = base + '.json'
+
+    if os.path.isfile(pkl_path):
+        try:
+            import joblib
+            data = joblib.load(pkl_path)
+            data['type'] = 'pkl'
+            data['model_name'] = data.get('model_name', os.path.basename(pkl_path))
+            return data
+        except Exception as exc:
+            print(f"  ML model load failed ({pkl_path}): {exc}")
+
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as file_obj:
+                data = json.load(file_obj)
+            data['type'] = 'json'
+            data['model_name'] = data.get('model_name', os.path.basename(json_path))
+            return data
+        except Exception as exc:
+            print(f"  ML model load failed ({json_path}): {exc}")
+
+    print(f"  ML model not found: {os.path.basename(base)}")
+    return None
+
+
+def get_compensation_model(verbose: bool = False) -> dict | None:
+    global _compensation_model_cache, _compensation_model_cache_name
+    if _compensation_model_cache is not None and \
+            _compensation_model_cache_name == COMPENSATION_MODEL_NAME:
+        return _compensation_model_cache
+
+    model = load_compensation_model(COMPENSATION_MODEL_NAME)
+    if model is None:
+        _compensation_model_cache = None
+        _compensation_model_cache_name = None
+        return None
+
+    _compensation_model_cache = model
+    _compensation_model_cache_name = COMPENSATION_MODEL_NAME
+    if verbose:
+        print(f"  ML compensation ready: {model.get('model_name', COMPENSATION_MODEL_NAME)}")
+    return model
+
+
+def predict_kinematic_error(
+    theta_a_deg: float, theta_b_deg: float, model: dict,
+    curr_a: float | None = None, curr_b: float | None = None,
+) -> tuple[float, float]:
+    if curr_a is None or curr_b is None:
+        median = model.get('input_stats', {}).get('median', [])
+        if curr_a is None:
+            curr_a = float(median[2]) if len(median) > 2 else 0.0
+        if curr_b is None:
+            curr_b = float(median[3]) if len(median) > 3 else 0.0
+
+    if model.get('type') == 'pkl':
+        n_feat = getattr(model['model_x'], 'n_features_in_', 2)
+        features = [[theta_a_deg, theta_b_deg, curr_a, curr_b]] if n_feat >= 4 \
+            else [[theta_a_deg, theta_b_deg]]
+        err_x = float(model['model_x'].predict(features)[0])
+        err_y = float(model['model_y'].predict(features)[0])
+        return err_x, err_y
+
+    degree = model.get('polynomial_degree', 2)
+    feature_names = model.get('feature_names', [])
+    n_vars = 4 if any('currA' in name or 'currB' in name for name in feature_names) else 2
+    phi = _build_poly_features(theta_a_deg, theta_b_deg, degree, curr_a, curr_b, n_vars)
+    model_x = model['model_x']
+    model_y = model['model_y']
+    err_x = model_x['intercept'] + float(np.dot(model_x['coef'], phi))
+    err_y = model_y['intercept'] + float(np.dot(model_y['coef'], phi))
+    return err_x, err_y
+
+
+def get_ml_status() -> str:
+    if not ML_COMPENSATION_ENABLED:
+        return 'OFF'
+    model = get_compensation_model(verbose=False)
+    if model is None:
+        return f'ON (model missing: {COMPENSATION_MODEL_NAME})'
+    return f"ON ({model.get('model_name', COMPENSATION_MODEL_NAME)})"
+
+
+def toggle_ml_compensation() -> bool:
+    global ML_COMPENSATION_ENABLED
+    if not ML_COMPENSATION_ENABLED:
+        model = get_compensation_model(verbose=False)
+        if model is None:
+            print("  Cannot enable ML compensation: model unavailable")
+            names = _list_compensation_models()
+            if names:
+                print(f"  Available models: {', '.join(names)}")
+            else:
+                print(f"  No models found in: {COMPENSATION_MODEL_DIR}")
+            return False
+        ML_COMPENSATION_ENABLED = True
+        print(f"  ML compensation ENABLED [{model.get('model_name', COMPENSATION_MODEL_NAME)}]")
+        return True
+
+    ML_COMPENSATION_ENABLED = False
+    print("  ML compensation DISABLED")
+    return True
+
+
+def apply_ml_compensation(leg_id: str, x: float, y: float) -> tuple[float, float, bool]:
+    if not ML_COMPENSATION_ENABLED:
+        return x, y, False
+
+    model = get_compensation_model(verbose=False)
+    if model is None:
+        return x, y, False
+
+    p_a, p_b = get_motor_positions(leg_id)
+    nominal_angles = calculate_ik_no_ef(np.array([x, y]), p_a, p_b)
+    if np.isnan(nominal_angles).any():
+        return x, y, False
+
+    current_a = None
+    current_b = None
+    if not SIMULATION_MODE and leg_id in leg_motors:
+        motors = leg_motors[leg_id]
+        current_a = motors['A'].current_current
+        current_b = motors['B'].current_current
+
+    err_x, err_y = predict_kinematic_error(
+        np.rad2deg(nominal_angles[0]), np.rad2deg(nominal_angles[1]),
+        model, current_a, current_b)
+    return x - err_x, y - err_y, True
+
+# ============================================================================
 # LEG CONTROL
 # ============================================================================
 
@@ -1130,13 +1305,17 @@ def update_leg_position(leg_id: str, foot_position: tuple,
     x, y = foot_position
     y_corrected = y + balance_offset
     P_A, P_B = get_motor_positions(leg_id)
-    angles = calculate_ik_no_ef(np.array([x, y_corrected]), P_A, P_B)
+    cmd_x, cmd_y, compensated = apply_ml_compensation(leg_id, x, y_corrected)
+    angles = calculate_ik_no_ef(np.array([cmd_x, cmd_y]), P_A, P_B)
+    if np.isnan(angles).any() and compensated:
+        angles = calculate_ik_no_ef(np.array([x, y_corrected]), P_A, P_B)
+        cmd_x, cmd_y = x, y_corrected
     if np.isnan(angles).any():
         return False
     theta_A, theta_B = angles
     with viz_lock:
         leg_states[leg_id]['target_angles'] = [theta_A, theta_B]
-        leg_states[leg_id]['target_pos'] = [x, y_corrected]
+        leg_states[leg_id]['target_pos'] = [cmd_x, cmd_y]
     return send_leg_angles(leg_id, theta_A, theta_B)
 
 
@@ -1703,10 +1882,12 @@ def print_menu():
     print("\n" + "=" * 70)
     print(f"  WALK TEST STANDALONE  [{('SIM' if SIMULATION_MODE else 'HW')}]  {march_status}")
     print(f"  IMU: {imu_status}")
+    print(f"  ML : {get_ml_status()}")
     print("=" * 70)
     print(f"  [7] Smooth walk {MODE7_DISTANCE_MM:+.0f}mm (march -> walk -> march -> stand)")
     print(f"  [8] Turn LEFT {MODE_TURN_DISTANCE_MM:+.0f}mm   (march -> turn -> march -> stand)")
     print(f"  [9] Turn RIGHT {MODE_TURN_DISTANCE_MM:+.0f}mm  (march -> turn -> march -> stand)")
+    print("  [M] Toggle ML compensation")
     print("  [Q] Quit")
     print("=" * 70)
 
@@ -1729,6 +1910,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif key == b'9':
                 test_turn_right_300()
+            elif key.lower() == b'm':
+                toggle_ml_compensation()
             elif key.lower() == b'q':
                 print("\n  Goodbye!")
                 break
@@ -1742,6 +1925,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif cmd == '9':
                 test_turn_right_300()
+            elif cmd.lower() == 'm':
+                toggle_ml_compensation()
             elif cmd.lower() == 'q':
                 print("\n  Goodbye!")
                 break
@@ -1758,6 +1943,7 @@ def main():
     print("=" * 70)
     print("  BLEGS Walk Test - Standalone (Modes 7, 8, 9)")
     print("=" * 70)
+    print(f"  ML compensation: {get_ml_status()}")
 
     # --- IMU ---
     if IMU_ENABLED:
