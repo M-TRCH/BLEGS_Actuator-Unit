@@ -82,7 +82,7 @@ PITCH_K_D = 0.03
 MAX_HEIGHT_OFFSET = 20.0
 INVERT_ROLL = False
 INVERT_PITCH = True
-STATIC_ROLL_TRIM_MM = -10.0
+STATIC_ROLL_TRIM_MM = -7.0
 
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE
 
@@ -105,9 +105,9 @@ ML_COMPENSATION_ENABLED = False
 COMPENSATION_MODEL_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test_2', 'output', 'models'))
 COMPENSATION_MODEL_NAME = 'model_poly4'
-ML_COMPENSATION_GAIN = 0.25
+ML_COMPENSATION_GAIN = 0.10
 ML_COMPENSATION_ALPHA = 0.05
-ML_COMPENSATION_MAX_DELTA_MM = 0.4
+ML_COMPENSATION_MAX_DELTA_MM = 0.2
 ML_COMPENSATION_MAX_ABS_MM = 5.0
 
 # ============================================================================
