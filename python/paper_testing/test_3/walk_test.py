@@ -82,6 +82,7 @@ PITCH_K_D = 0.03
 MAX_HEIGHT_OFFSET = 20.0
 INVERT_ROLL = False
 INVERT_PITCH = True
+STATIC_ROLL_TRIM_MM = -10.0
 
 GAIT_CYCLE_TIME = TRAJECTORY_STEPS / UPDATE_RATE
 
@@ -104,6 +105,10 @@ ML_COMPENSATION_ENABLED = False
 COMPENSATION_MODEL_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'test_2', 'output', 'models'))
 COMPENSATION_MODEL_NAME = 'model_poly4'
+ML_COMPENSATION_GAIN = 0.25
+ML_COMPENSATION_ALPHA = 0.05
+ML_COMPENSATION_MAX_DELTA_MM = 0.4
+ML_COMPENSATION_MAX_ABS_MM = 5.0
 
 # ============================================================================
 # PROTOCOL CONSTANTS
@@ -1087,6 +1092,13 @@ idle_marching = False
 march_thread: Optional[threading.Thread] = None
 march_step_indices = {'FR': 0, 'FL': 0, 'RR': 0, 'RL': 0}
 
+ml_compensation_state = {
+    'FR': {'err_x': 0.0, 'err_y': 0.0, 'initialized': False},
+    'FL': {'err_x': 0.0, 'err_y': 0.0, 'initialized': False},
+    'RR': {'err_x': 0.0, 'err_y': 0.0, 'initialized': False},
+    'RL': {'err_x': 0.0, 'err_y': 0.0, 'initialized': False},
+}
+
 log_file = None
 log_counter = 0
 _log_start_time = 0.0
@@ -1240,6 +1252,51 @@ def get_ml_status() -> str:
     return f"ON ({model.get('model_name', COMPENSATION_MODEL_NAME)})"
 
 
+def reset_ml_compensation_state() -> None:
+    for leg_state in ml_compensation_state.values():
+        leg_state['err_x'] = 0.0
+        leg_state['err_y'] = 0.0
+        leg_state['initialized'] = False
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(max_value, value))
+
+
+def _filter_ml_compensation(leg_id: str, err_x: float,
+                            err_y: float) -> tuple[float, float]:
+    state = ml_compensation_state.setdefault(
+        leg_id, {'err_x': 0.0, 'err_y': 0.0, 'initialized': False})
+
+    raw_x = _clamp(err_x, -ML_COMPENSATION_MAX_ABS_MM, ML_COMPENSATION_MAX_ABS_MM)
+    raw_y = _clamp(err_y, -ML_COMPENSATION_MAX_ABS_MM, ML_COMPENSATION_MAX_ABS_MM)
+
+    if not state['initialized']:
+        state['err_x'] = raw_x
+        state['err_y'] = raw_y
+        state['initialized'] = True
+        return raw_x, raw_y
+
+    alpha = _clamp(ML_COMPENSATION_ALPHA, 0.0, 1.0)
+    filt_x = alpha * raw_x + (1.0 - alpha) * state['err_x']
+    filt_y = alpha * raw_y + (1.0 - alpha) * state['err_y']
+
+    delta_x = _clamp(filt_x - state['err_x'],
+                     -ML_COMPENSATION_MAX_DELTA_MM,
+                     ML_COMPENSATION_MAX_DELTA_MM)
+    delta_y = _clamp(filt_y - state['err_y'],
+                     -ML_COMPENSATION_MAX_DELTA_MM,
+                     ML_COMPENSATION_MAX_DELTA_MM)
+
+    state['err_x'] = _clamp(state['err_x'] + delta_x,
+                            -ML_COMPENSATION_MAX_ABS_MM,
+                            ML_COMPENSATION_MAX_ABS_MM)
+    state['err_y'] = _clamp(state['err_y'] + delta_y,
+                            -ML_COMPENSATION_MAX_ABS_MM,
+                            ML_COMPENSATION_MAX_ABS_MM)
+    return state['err_x'], state['err_y']
+
+
 def toggle_ml_compensation() -> bool:
     global ML_COMPENSATION_ENABLED
     if not ML_COMPENSATION_ENABLED:
@@ -1252,11 +1309,13 @@ def toggle_ml_compensation() -> bool:
             else:
                 print(f"  No models found in: {COMPENSATION_MODEL_DIR}")
             return False
+        reset_ml_compensation_state()
         ML_COMPENSATION_ENABLED = True
         print(f"  ML compensation ENABLED [{model.get('model_name', COMPENSATION_MODEL_NAME)}]")
         return True
 
     ML_COMPENSATION_ENABLED = False
+    reset_ml_compensation_state()
     print("  ML compensation DISABLED")
     return True
 
@@ -1284,6 +1343,10 @@ def apply_ml_compensation(leg_id: str, x: float, y: float) -> tuple[float, float
     err_x, err_y = predict_kinematic_error(
         np.rad2deg(nominal_angles[0]), np.rad2deg(nominal_angles[1]),
         model, current_a, current_b)
+    gain = _clamp(ML_COMPENSATION_GAIN, 0.0, 1.0)
+    err_x *= gain
+    err_y *= gain
+    err_x, err_y = _filter_ml_compensation(leg_id, err_x, err_y)
     return x - err_x, y - err_y, True
 
 # ============================================================================
@@ -1337,10 +1400,33 @@ def stop_all_legs():
     pass  # Motors hold position via PID
 
 
+def get_static_roll_offsets() -> dict:
+    if not ML_COMPENSATION_ENABLED:
+        return {leg_id: 0.0 for leg_id in ('FR', 'FL', 'RR', 'RL')}
+    trim = STATIC_ROLL_TRIM_MM
+    return {
+        'FL': +trim,
+        'RL': +trim,
+        'FR': -trim,
+        'RR': -trim,
+    }
+
+
+def combine_balance_offsets(dynamic_offsets: dict = None) -> dict:
+    static_offsets = get_static_roll_offsets()
+    if dynamic_offsets is None:
+        return static_offsets
+    return {
+        leg_id: static_offsets[leg_id] + dynamic_offsets.get(leg_id, 0.0)
+        for leg_id in ('FR', 'FL', 'RR', 'RL')
+    }
+
+
 def move_to_stand_position() -> bool:
     stand_pos = (DEFAULT_STANCE_OFFSET_X, DEFAULT_STANCE_HEIGHT)
+    static_offsets = get_static_roll_offsets()
     for leg_id in ('FR', 'FL', 'RR', 'RL'):
-        if not update_leg_position(leg_id, stand_pos):
+        if not update_leg_position(leg_id, stand_pos, static_offsets[leg_id]):
             return False
     return True
 
@@ -1438,11 +1524,12 @@ def _march_loop():
     try:
         while idle_marching:
             t0 = time.time()
-            bal = None
+            bal = get_static_roll_offsets()
             if BALANCE_ENABLED and balance_controller is not None:
                 if imu_reader and imu_reader.is_receiving_data():
                     o = imu_reader.get_orientation()
-                    bal = balance_controller.compute(o['roll'], o['pitch'], t0)
+                    bal = combine_balance_offsets(
+                        balance_controller.compute(o['roll'], o['pitch'], t0))
             update_all_legs_gait(march_traj, march_step_indices, bal)
             for leg_id in march_step_indices:
                 march_step_indices[leg_id] = (
@@ -1576,10 +1663,12 @@ def move_relative_y(target_distance_mm: float, timeout_s: float = NAV_TIMEOUT,
             if BALANCE_ENABLED and balance_controller is not None:
                 if imu_reader and imu_reader.is_receiving_data():
                     o = imu_reader.get_orientation()
-                    bal = balance_controller.compute(
-                        o['roll'], o['pitch'], t_now)
+                    bal = combine_balance_offsets(balance_controller.compute(
+                        o['roll'], o['pitch'], t_now))
                 else:
-                    bal = {k: 0.0 for k in ('FR', 'FL', 'RR', 'RL')}
+                    bal = combine_balance_offsets()
+            else:
+                bal = combine_balance_offsets()
 
             update_all_legs_gait(trajectories, step_indices, bal)
 
@@ -1715,10 +1804,12 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
             if BALANCE_ENABLED and balance_controller is not None:
                 if imu_reader and imu_reader.is_receiving_data():
                     o = imu_reader.get_orientation()
-                    bal = balance_controller.compute(
-                        o['roll'], o['pitch'], t_now)
+                    bal = combine_balance_offsets(balance_controller.compute(
+                        o['roll'], o['pitch'], t_now))
                 else:
-                    bal = {k: 0.0 for k in ('FR', 'FL', 'RR', 'RL')}
+                    bal = combine_balance_offsets()
+            else:
+                bal = combine_balance_offsets()
 
             update_all_legs_gait(trajectories, step_indices, bal)
 
