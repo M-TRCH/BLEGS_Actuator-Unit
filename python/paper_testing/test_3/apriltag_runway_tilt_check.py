@@ -6,7 +6,7 @@ import cv2.aruco as aruco
 import numpy as np
 
 
-DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk_3kg.MOV"
+DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk_ml.MOV"
 ARUCO_DICT = aruco.DICT_6X6_250
 TRACKED_TAG_IDS = set(range(12))
 ROBOT_TAG_IDS = set(range(4))
@@ -435,7 +435,7 @@ def build_world_to_birdeye_homography():
     homography = np.array(
         [
             [BIRDSEYE_SCALE_PX_PER_CM, 0.0, BIRDSEYE_MARGIN_PX - (min_x * BIRDSEYE_SCALE_PX_PER_CM)],
-            [0.0, BIRDSEYE_SCALE_PX_PER_CM, BIRDSEYE_MARGIN_PX - (min_y * BIRDSEYE_SCALE_PX_PER_CM)],
+            [0.0, -BIRDSEYE_SCALE_PX_PER_CM, BIRDSEYE_MARGIN_PX + (max_y * BIRDSEYE_SCALE_PX_PER_CM)],
             [0.0, 0.0, 1.0],
         ],
         dtype=np.float32,
@@ -531,6 +531,18 @@ def build_birdeye_view(frame, image_to_world_homography, pose, trajectory_world_
         2,
     )
     return birdseye_frame
+
+
+def resize_birdeye_to_match_main(main_frame, birdseye_frame):
+    main_height, main_width = main_frame.shape[:2]
+    birdseye_height, birdseye_width = birdseye_frame.shape[:2]
+    if birdseye_height <= 0 or birdseye_width <= 0:
+        return birdseye_frame
+
+    scale = min(main_height / birdseye_height, main_width / birdseye_width)
+    target_width = max(1, int(round(birdseye_width * scale)))
+    target_height = max(1, int(round(birdseye_height * scale)))
+    return cv2.resize(birdseye_frame, (target_width, target_height))
 
 
 def compose_views(main_frame, birdseye_frame):
@@ -799,6 +811,7 @@ def main():
                 2,
             )
 
+        birdseye_frame = resize_birdeye_to_match_main(frame, birdseye_frame)
         combined_frame = compose_views(frame, birdseye_frame)
 
         if frame.shape[0] > frame.shape[1]:
