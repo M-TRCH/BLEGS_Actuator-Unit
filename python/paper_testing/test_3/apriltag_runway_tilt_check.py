@@ -9,17 +9,42 @@ import numpy as np
 DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk_3kg.MOV"
 ARUCO_DICT = aruco.DICT_6X6_250
 TRACKED_TAG_IDS = set(range(12))
+ROBOT_TAG_IDS = set(range(4))
 RUNWAY_LEFT_IDS = [4, 6, 8, 10]
 RUNWAY_RIGHT_IDS = [5, 7, 9, 11]
 RUNWAY_ROW_PAIRS = [(4, 5), (6, 7), (8, 9), (10, 11)]
 RUNWAY_IDS = set(RUNWAY_LEFT_IDS + RUNWAY_RIGHT_IDS)
 RUNWAY_ROW_INDEX = {4: 0, 5: 0, 6: 1, 7: 1, 8: 2, 9: 2, 10: 3, 11: 3}
+RUNWAY_WORLD_POINTS_CM = {
+    4: (0.0, 0.0),
+    5: (80.0, 0.0),
+    6: (0.0, 40.0),
+    7: (80.0, 40.0),
+    8: (0.0, 80.0),
+    9: (80.0, 80.0),
+    10: (0.0, 120.0),
+    11: (80.0, 120.0),
+}
+ROBOT_TAG_LOCAL_POINTS_CM = {
+    0: (-10.0, -21.5),
+    1: (10.0, -21.5),
+    2: (-10.0, 21.5),
+    3: (10.0, 21.5),
+}
 CALIBRATION_FRAME_COUNT = 100
 DUPLICATE_ID6_MODE_CHOICES = ("right-as-7", "auto", "off")
+POSE_SMOOTHING_ALPHA = 0.25
+POSE_ARROW_LENGTH_CM = 18.0
+BIRDSEYE_SCALE_PX_PER_CM = 6.0
+BIRDSEYE_MARGIN_PX = 40
 MARKER_COLOR = (0, 255, 255)
 TEXT_COLOR = (255, 255, 255)
 CENTER_COLOR = (0, 200, 0)
 GRID_COLOR = (255, 80, 80)
+POSE_COLOR = (0, 165, 255)
+BIRDSEYE_BG_COLOR = (245, 245, 245)
+BIRDSEYE_GRID_COLOR = (180, 180, 180)
+BIRDSEYE_TRAJECTORY_COLOR = (50, 50, 255)
 
 
 def parse_args():
@@ -149,6 +174,10 @@ def build_marker_positions(detections):
     }
 
 
+def robot_detections_from_all(detections):
+    return [(marker_id, marker_corners) for marker_id, marker_corners in detections if marker_id in ROBOT_TAG_IDS]
+
+
 def runway_positions_from_all(positions):
     return {marker_id: positions[marker_id] for marker_id in RUNWAY_IDS if marker_id in positions}
 
@@ -241,6 +270,302 @@ def estimate_points_for_drawing(reference_points):
     return draw_points
 
 
+def build_runway_homography(runway_points):
+    image_points = []
+    world_points = []
+    for marker_id, world_point in RUNWAY_WORLD_POINTS_CM.items():
+        if marker_id not in runway_points:
+            continue
+
+        image_points.append(runway_points[marker_id])
+        world_points.append(world_point)
+
+    if len(image_points) < 4:
+        return None
+
+    homography, _ = cv2.findHomography(
+        np.array(image_points, dtype=np.float32),
+        np.array(world_points, dtype=np.float32),
+        method=0,
+    )
+    return homography
+
+
+def transform_point(point, homography):
+    transformed = cv2.perspectiveTransform(
+        np.array([[[point[0], point[1]]]], dtype=np.float32),
+        homography,
+    )
+    return (float(transformed[0, 0, 0]), float(transformed[0, 0, 1]))
+
+
+def marker_forward_world_vector(marker_corners, homography):
+    points = marker_corners[0]
+    center = marker_center(marker_corners)
+    top_midpoint = ((points[0][0] + points[1][0]) * 0.5, (points[0][1] + points[1][1]) * 0.5)
+    world_center = transform_point(center, homography)
+    world_top = transform_point(top_midpoint, homography)
+    forward_vector = np.array([world_top[0] - world_center[0], world_top[1] - world_center[1]], dtype=np.float64)
+    norm = float(np.linalg.norm(forward_vector))
+    if norm <= 1e-6:
+        return None
+
+    return forward_vector / norm
+
+
+def rotation_matrix_from_forward(forward_vector):
+    forward = np.array(forward_vector, dtype=np.float64)
+    right = np.array([forward[1], -forward[0]], dtype=np.float64)
+    return np.column_stack((right, forward))
+
+
+def heading_from_rotation(rotation_matrix):
+    forward = rotation_matrix @ np.array([0.0, 1.0], dtype=np.float64)
+    return float(np.degrees(np.arctan2(forward[1], forward[0])))
+
+
+def estimate_pose_from_correspondences(robot_world_points):
+    if len(robot_world_points) < 2:
+        return None
+
+    visible_ids = sorted(robot_world_points.keys())
+    local_points = np.array([ROBOT_TAG_LOCAL_POINTS_CM[marker_id] for marker_id in visible_ids], dtype=np.float64)
+    world_points = np.array([robot_world_points[marker_id] for marker_id in visible_ids], dtype=np.float64)
+
+    local_centroid = np.mean(local_points, axis=0)
+    world_centroid = np.mean(world_points, axis=0)
+    local_centered = local_points - local_centroid
+    world_centered = world_points - world_centroid
+
+    covariance = local_centered.T @ world_centered
+    left_u, _, right_vt = np.linalg.svd(covariance)
+    rotation = right_vt.T @ left_u.T
+    if np.linalg.det(rotation) < 0:
+        right_vt[-1, :] *= -1.0
+        rotation = right_vt.T @ left_u.T
+
+    translation = world_centroid - (rotation @ local_centroid)
+    return {
+        "center_world": (float(translation[0]), float(translation[1])),
+        "heading_deg": heading_from_rotation(rotation),
+        "visible_ids": visible_ids,
+        "source": f"{len(visible_ids)}-tag rigid fit",
+        "is_held": False,
+    }
+
+
+def estimate_pose_from_single_tag(marker_id, marker_corners, homography):
+    if marker_id not in ROBOT_TAG_LOCAL_POINTS_CM:
+        return None
+
+    forward_vector = marker_forward_world_vector(marker_corners, homography)
+    if forward_vector is None:
+        return None
+
+    world_center = np.array(transform_point(marker_center(marker_corners), homography), dtype=np.float64)
+    rotation = rotation_matrix_from_forward(forward_vector)
+    local_tag = np.array(ROBOT_TAG_LOCAL_POINTS_CM[marker_id], dtype=np.float64)
+    robot_center = world_center - (rotation @ local_tag)
+    return {
+        "center_world": (float(robot_center[0]), float(robot_center[1])),
+        "heading_deg": heading_from_rotation(rotation),
+        "visible_ids": [marker_id],
+        "source": "1-tag orientation fallback",
+        "is_held": False,
+    }
+
+
+def estimate_robot_pose(robot_detections, homography):
+    if homography is None or not robot_detections:
+        return None
+
+    robot_world_points = {}
+    for marker_id, marker_corners in robot_detections:
+        robot_world_points[marker_id] = transform_point(marker_center(marker_corners), homography)
+
+    rigid_pose = estimate_pose_from_correspondences(robot_world_points)
+    if rigid_pose is not None:
+        return rigid_pose
+
+    marker_id, marker_corners = robot_detections[0]
+    return estimate_pose_from_single_tag(marker_id, marker_corners, homography)
+
+
+def normalize_angle_deg(angle_deg):
+    return ((angle_deg + 180.0) % 360.0) - 180.0
+
+
+def blend_angles_deg(previous_angle_deg, current_angle_deg, alpha):
+    angle_delta = normalize_angle_deg(current_angle_deg - previous_angle_deg)
+    return normalize_angle_deg(previous_angle_deg + (alpha * angle_delta))
+
+
+def smooth_pose(previous_pose, current_pose, alpha):
+    if previous_pose is None:
+        return dict(current_pose)
+
+    previous_center = previous_pose["center_world"]
+    current_center = current_pose["center_world"]
+    smoothed_center = (
+        ((1.0 - alpha) * previous_center[0]) + (alpha * current_center[0]),
+        ((1.0 - alpha) * previous_center[1]) + (alpha * current_center[1]),
+    )
+    smoothed_heading = blend_angles_deg(previous_pose["heading_deg"], current_pose["heading_deg"], alpha)
+    smoothed_pose = dict(current_pose)
+    smoothed_pose["center_world"] = smoothed_center
+    smoothed_pose["heading_deg"] = smoothed_heading
+    return smoothed_pose
+
+
+def world_point_to_image(point, inverse_homography):
+    return transform_point(point, inverse_homography)
+
+
+def runway_world_bounds_cm():
+    world_points = list(RUNWAY_WORLD_POINTS_CM.values())
+    x_values = [point[0] for point in world_points]
+    y_values = [point[1] for point in world_points]
+    return min(x_values), max(x_values), min(y_values), max(y_values)
+
+
+def build_world_to_birdeye_homography():
+    min_x, max_x, min_y, max_y = runway_world_bounds_cm()
+    width_px = int(round(((max_x - min_x) * BIRDSEYE_SCALE_PX_PER_CM) + (2 * BIRDSEYE_MARGIN_PX)))
+    height_px = int(round(((max_y - min_y) * BIRDSEYE_SCALE_PX_PER_CM) + (2 * BIRDSEYE_MARGIN_PX)))
+    homography = np.array(
+        [
+            [BIRDSEYE_SCALE_PX_PER_CM, 0.0, BIRDSEYE_MARGIN_PX - (min_x * BIRDSEYE_SCALE_PX_PER_CM)],
+            [0.0, BIRDSEYE_SCALE_PX_PER_CM, BIRDSEYE_MARGIN_PX - (min_y * BIRDSEYE_SCALE_PX_PER_CM)],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    return homography, (width_px, height_px)
+
+
+def world_point_to_birdeye(point, world_to_birdeye_homography):
+    return transform_point(point, world_to_birdeye_homography)
+
+
+def draw_birdeye_grid(frame, world_to_birdeye_homography):
+    for ordered_ids in (RUNWAY_LEFT_IDS, RUNWAY_RIGHT_IDS):
+        for index in range(len(ordered_ids) - 1):
+            start_world = RUNWAY_WORLD_POINTS_CM[ordered_ids[index]]
+            end_world = RUNWAY_WORLD_POINTS_CM[ordered_ids[index + 1]]
+            start = tuple(int(round(value)) for value in world_point_to_birdeye(start_world, world_to_birdeye_homography))
+            end = tuple(int(round(value)) for value in world_point_to_birdeye(end_world, world_to_birdeye_homography))
+            cv2.line(frame, start, end, BIRDSEYE_GRID_COLOR, 2)
+
+    for left_id, right_id in RUNWAY_ROW_PAIRS:
+        start_world = RUNWAY_WORLD_POINTS_CM[left_id]
+        end_world = RUNWAY_WORLD_POINTS_CM[right_id]
+        start = tuple(int(round(value)) for value in world_point_to_birdeye(start_world, world_to_birdeye_homography))
+        end = tuple(int(round(value)) for value in world_point_to_birdeye(end_world, world_to_birdeye_homography))
+        cv2.line(frame, start, end, BIRDSEYE_GRID_COLOR, 2)
+
+    for marker_id, world_point in RUNWAY_WORLD_POINTS_CM.items():
+        center = tuple(int(round(value)) for value in world_point_to_birdeye(world_point, world_to_birdeye_homography))
+        cv2.circle(frame, center, 5, GRID_COLOR, -1)
+        cv2.putText(
+            frame,
+            f"ID:{marker_id}",
+            (center[0] + 8, center[1] - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            GRID_COLOR,
+            1,
+        )
+
+
+def draw_birdeye_robot_pose(frame, pose, trajectory_world_points, world_to_birdeye_homography):
+    if trajectory_world_points:
+        trajectory_pixels = [
+            tuple(int(round(value)) for value in world_point_to_birdeye(point, world_to_birdeye_homography))
+            for point in trajectory_world_points
+        ]
+        if len(trajectory_pixels) >= 2:
+            cv2.polylines(frame, [np.array(trajectory_pixels, dtype=np.int32)], False, BIRDSEYE_TRAJECTORY_COLOR, 2)
+
+    if pose is None:
+        return
+
+    center_world = pose["center_world"]
+    heading_rad = np.radians(pose["heading_deg"])
+    forward_world = (
+        center_world[0] + (POSE_ARROW_LENGTH_CM * np.cos(heading_rad)),
+        center_world[1] + (POSE_ARROW_LENGTH_CM * np.sin(heading_rad)),
+    )
+    start = tuple(int(round(value)) for value in world_point_to_birdeye(center_world, world_to_birdeye_homography))
+    end = tuple(int(round(value)) for value in world_point_to_birdeye(forward_world, world_to_birdeye_homography))
+    cv2.circle(frame, start, 6, POSE_COLOR, -1)
+    cv2.arrowedLine(frame, start, end, POSE_COLOR, 3, tipLength=0.25)
+
+
+def build_birdeye_view(frame, image_to_world_homography, pose, trajectory_world_points, world_to_birdeye_homography, birdseye_size):
+    width_px, height_px = birdseye_size
+    birdseye_frame = np.full((height_px, width_px, 3), BIRDSEYE_BG_COLOR, dtype=np.uint8)
+    if image_to_world_homography is None:
+        cv2.putText(
+            birdseye_frame,
+            "Bird's-eye unavailable until runway calibration locks",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            TEXT_COLOR,
+            2,
+        )
+        return birdseye_frame
+
+    image_to_birdeye_homography = world_to_birdeye_homography @ image_to_world_homography
+    warped_frame = cv2.warpPerspective(frame, image_to_birdeye_homography, (width_px, height_px))
+    birdseye_frame = cv2.addWeighted(warped_frame, 0.82, birdseye_frame, 0.18, 0.0)
+    draw_birdeye_grid(birdseye_frame, world_to_birdeye_homography)
+    draw_birdeye_robot_pose(birdseye_frame, pose, trajectory_world_points, world_to_birdeye_homography)
+    cv2.putText(
+        birdseye_frame,
+        "Bird's-eye runway plane",
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.75,
+        TEXT_COLOR,
+        2,
+    )
+    return birdseye_frame
+
+
+def compose_views(main_frame, birdseye_frame):
+    target_height = max(main_frame.shape[0], birdseye_frame.shape[0])
+
+    def pad_to_height(frame, height):
+        if frame.shape[0] == height:
+            return frame
+        pad_bottom = height - frame.shape[0]
+        return cv2.copyMakeBorder(frame, 0, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+    left = pad_to_height(main_frame, target_height)
+    right = pad_to_height(birdseye_frame, target_height)
+    return np.hstack((left, right))
+
+
+def draw_robot_pose(frame, pose, inverse_homography):
+    if pose is None or inverse_homography is None:
+        return
+
+    center_world = pose["center_world"]
+    heading_rad = np.radians(pose["heading_deg"])
+    forward_world = (
+        center_world[0] + (POSE_ARROW_LENGTH_CM * np.cos(heading_rad)),
+        center_world[1] + (POSE_ARROW_LENGTH_CM * np.sin(heading_rad)),
+    )
+
+    center_image = world_point_to_image(center_world, inverse_homography)
+    forward_image = world_point_to_image(forward_world, inverse_homography)
+    start_point = (int(round(center_image[0])), int(round(center_image[1])))
+    end_point = (int(round(forward_image[0])), int(round(forward_image[1])))
+    cv2.circle(frame, start_point, 6, POSE_COLOR, -1)
+    cv2.arrowedLine(frame, start_point, end_point, POSE_COLOR, 3, tipLength=0.25)
+
+
 def draw_runway_grid(frame, runway_points, is_fixed):
     if not runway_points:
         return
@@ -278,7 +603,7 @@ def draw_marker_positions(frame, positions, synthetic_ids):
         )
 
 
-def format_status_lines(positions, processed_frames, fixed_runway_points, duplicate_fix_applied, duplicate_id6_mode):
+def format_status_lines(positions, processed_frames, fixed_runway_points, duplicate_fix_applied, duplicate_id6_mode, robot_pose):
     visible_ids = sorted(positions.keys())
     missing_ids = sorted(TRACKED_TAG_IDS.difference(positions.keys()))
     status_lines = [
@@ -294,6 +619,15 @@ def format_status_lines(positions, processed_frames, fixed_runway_points, duplic
 
     if duplicate_fix_applied:
         status_lines.append("Applied duplicate ID 6 remap to synthetic ID 7")
+
+    if robot_pose is None:
+        status_lines.append("Robot pose: unavailable")
+    else:
+        center_x, center_y = robot_pose["center_world"]
+        status_lines.append(
+            f"Robot pose: x={center_x:.1f} cm y={center_y:.1f} cm yaw={robot_pose['heading_deg']:.1f} deg"
+        )
+        status_lines.append(f"Robot source: {robot_pose['source']}")
 
     return status_lines
 
@@ -351,6 +685,11 @@ def main():
     point_sums = {}
     point_counts = {}
     fixed_runway_points = None
+    runway_homography = None
+    inverse_runway_homography = None
+    smoothed_robot_pose = None
+    trajectory_world_points = []
+    world_to_birdeye_homography, birdseye_size = build_world_to_birdeye_homography()
 
     print("เริ่มตรวจจับตำแหน่ง AR tag ID 0-11...")
 
@@ -373,6 +712,7 @@ def main():
         )
         tracked_positions = build_marker_positions(tracked_detections)
         runway_positions = runway_positions_from_all(tracked_positions)
+        robot_detections = robot_detections_from_all(tracked_detections)
 
         if fixed_runway_points is None:
             if runway_positions:
@@ -382,9 +722,31 @@ def main():
             draw_runway_points = estimate_points_for_drawing(averaged_runway_points)
             if processed_frames >= CALIBRATION_FRAME_COUNT:
                 fixed_runway_points = dict(draw_runway_points)
+                runway_homography = build_runway_homography(fixed_runway_points)
+                if runway_homography is not None:
+                    inverse_runway_homography = np.linalg.inv(runway_homography)
                 print(f"ตรึงกริดรันเวย์หลังเฉลี่ยครบ {CALIBRATION_FRAME_COUNT} เฟรมที่ประมวลผล")
         else:
             draw_runway_points = fixed_runway_points
+            if runway_homography is None:
+                runway_homography = build_runway_homography(fixed_runway_points)
+                if runway_homography is not None:
+                    inverse_runway_homography = np.linalg.inv(runway_homography)
+
+        current_robot_pose = estimate_robot_pose(robot_detections, runway_homography)
+        if current_robot_pose is None and smoothed_robot_pose is not None:
+            current_robot_pose = {
+                "center_world": smoothed_robot_pose["center_world"],
+                "heading_deg": smoothed_robot_pose["heading_deg"],
+                "visible_ids": [],
+                "source": "hold-last-pose",
+                "is_held": True,
+            }
+
+        if current_robot_pose is not None:
+            smoothed_robot_pose = smooth_pose(smoothed_robot_pose, current_robot_pose, POSE_SMOOTHING_ALPHA)
+        else:
+            smoothed_robot_pose = None
 
         draw_corners, draw_ids = build_draw_marker_inputs(tracked_detections)
         if draw_ids is not None:
@@ -392,6 +754,19 @@ def main():
 
         draw_runway_grid(frame, draw_runway_points, fixed_runway_points is not None)
         draw_marker_positions(frame, tracked_positions, synthetic_ids)
+        draw_robot_pose(frame, smoothed_robot_pose, inverse_runway_homography)
+
+        if smoothed_robot_pose is not None:
+            trajectory_world_points.append(smoothed_robot_pose["center_world"])
+
+        birdseye_frame = build_birdeye_view(
+            frame,
+            runway_homography,
+            smoothed_robot_pose,
+            trajectory_world_points,
+            world_to_birdeye_homography,
+            birdseye_size,
+        )
 
         for line_index, text in enumerate(
             format_status_lines(
@@ -400,6 +775,7 @@ def main():
                 fixed_runway_points,
                 duplicate_fix_applied,
                 args.duplicate_id6_mode,
+                smoothed_robot_pose,
             )
         ):
             cv2.putText(
@@ -412,10 +788,23 @@ def main():
                 2,
             )
 
+        if runway_homography is None:
+            cv2.putText(
+                birdseye_frame,
+                f"Calibration progress: {processed_frames}/{CALIBRATION_FRAME_COUNT}",
+                (20, 65),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                TEXT_COLOR,
+                2,
+            )
+
+        combined_frame = compose_views(frame, birdseye_frame)
+
         if frame.shape[0] > frame.shape[1]:
-            frame_resized = resize_to_fit(frame, 540, 960)
+            frame_resized = resize_to_fit(combined_frame, 1200, 960)
         else:
-            frame_resized = resize_to_fit(frame, args.max_width, args.max_height)
+            frame_resized = resize_to_fit(combined_frame, args.max_width * 2, args.max_height)
 
         if video_writer is None:
             video_writer = create_video_writer(output_video_path, frame_resized.shape, export_fps)
