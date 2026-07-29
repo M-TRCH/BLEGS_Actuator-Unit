@@ -6,7 +6,7 @@ import cv2.aruco as aruco
 import numpy as np
 
 
-DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk_ml.MOV"
+DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk.MOV"
 ARUCO_DICT = aruco.DICT_6X6_250
 TRACKED_TAG_IDS = set(range(12))
 ROBOT_TAG_IDS = set(range(4))
