@@ -1,5 +1,5 @@
 """
-Standalone Walk Test - Modes 7, 8, 9 Only
+Standalone Walk Test - Modes 7, 8, 9, R
 Author: M-TRCH
 Date: June 5, 2026
 
@@ -7,6 +7,9 @@ Standalone version of relative_position_control.py trimmed to:
     [7] Smooth walk +600mm with march transitions
     [8] Turn LEFT while walking +300mm (march -> turn -> march)
     [9] Turn RIGHT while walking +300mm (march -> turn -> march)
+    [R] Keyboard RC drive (hold W/S/A/D, march-in-place idle) with live
+        gait tuning: lift / step cap / cadence / stance height / turn bias
+        / stance ratio, [P] prints the tuned values for persisting
 
 All external module dependencies are inlined.  No imports from the
 navigation/, control/, or lib/ packages are required.
@@ -66,13 +69,26 @@ NAV_TIMEOUT = 60.0
 VELOCITY_CALIBRATION = 3.04
 
 IMU_PORT = 'COM22'
-IMU_ENABLED = True
+IMU_ENABLED = False  # No IMU installed on real hardware - yaw control disabled
 YAW_K_P = 0.8
 YAW_K_D = 0.01
 YAW_MAX_CORRECTION = 15.0
 
 TURN_V_MAX = 40.0
 TURN_BIAS = 7.5
+
+# ------------------------- Keyboard RC mode ([R]) ---------------------------
+RC_V_DEFAULT = 40.0        # mm/s initial commanded speed for W/S (<= NAV_V_MAX)
+RC_V_MIN = 10.0            # mm/s lower clamp for [-] speed adjust
+RC_V_STEP = 5.0            # mm/s change per [+]/[-] press (upper clamp NAV_V_MAX)
+RC_KEY_HOLD_S = 0.6        # deadman: key "held" if last event within this window
+RC_ACCEL = 150.0           # mm/s^2 slew rate for v_body_y (0->40 in ~0.27s)
+RC_YAW_BIAS = 10.0         # mm differential-step target while A/D held ([I]/[K] tunes live)
+RC_YAW_SLEW = 25.0         # mm/s slew rate for yaw bias
+RC_IDLE_V_THRESHOLD = 5.0  # mm/s: |v| below this with no keys -> march in place
+RC_EXIT_TIMEOUT_S = 2.0    # max decel wait after [Q] before forcing stand
+RC_MARCH_LIFT_MULT = 2.0   # lift multiplier while marching (v=0), blends to 1.0x at speed
+RC_LIFT_BLEND_V = 20.0     # mm/s: |v| at which lift finishes blending march -> walk
 
 BALANCE_ENABLED = False
 ROLL_K_P = 0.8
@@ -1114,6 +1130,67 @@ def update_gait_from_velocity(v_body_y: float) -> tuple:
     return step_length, (v_body_y < 0)
 
 
+def _slew_toward(current: float, target: float, max_delta: float) -> float:
+    if target > current:
+        return min(current + max_delta, target)
+    return max(current - max_delta, target)
+
+
+def build_rc_trajectories(v_body_y: float, yaw_bias: float, lift_height: float,
+                          num_steps: int, stance_ratio: float,
+                          stance_height: float, max_step: float) -> dict:
+    """Regenerate all four leg trajectories from live RC gait parameters.
+
+    Same semantics as get_trajectory_for_velocity, but every gait parameter
+    is an argument and step length has no 5 mm floor, so v=0 degenerates to
+    a march in place.
+    """
+    cycle_time = num_steps / UPDATE_RATE
+    base_step = min(abs(v_body_y) * cycle_time, max_step)
+    reverse = (v_body_y >= 0)  # matches get_trajectory_for_velocity convention
+    trajectories = {}
+    for leg_id in ('FR', 'FL', 'RR', 'RL'):
+        step_diff = yaw_bias if leg_id in ('FL', 'RL') else -yaw_bias
+        step = max(0.0, min(base_step + step_diff, max_step * 1.5))
+        trajectories[leg_id] = generate_bezier_trajectory(
+            num_steps=num_steps,
+            lift_height=lift_height,
+            step_forward=step,
+            mirror_x=leg_id in ('FR', 'RR'),
+            stance_ratio=stance_ratio,
+            home_x=DEFAULT_STANCE_OFFSET_X,
+            home_y=stance_height,
+            reverse=reverse,
+        )
+    return trajectories
+
+
+def _rc_set_steps(gait: dict, step_indices: dict, new_steps: int) -> None:
+    new_steps = max(16, min(int(new_steps), 50))
+    old_steps = gait['steps']
+    if new_steps == old_steps:
+        return
+    # Rescale indices so each leg keeps its gait phase across the cadence change
+    for leg_id in step_indices:
+        step_indices[leg_id] = int(round(
+            step_indices[leg_id] * new_steps / old_steps)) % new_steps
+    gait['steps'] = new_steps
+    print(f"\n  Cadence: {UPDATE_RATE / new_steps:.2f} Hz "
+          f"({new_steps} pts/cycle, {new_steps / UPDATE_RATE:.2f} s/cycle)")
+
+
+def _rc_print_params(gait: dict, v_cmd: float) -> None:
+    print("\n  --- current RC gait parameters (paste into constants) ---")
+    print(f"  GAIT_LIFT_HEIGHT = {gait['lift']:.1f}")
+    print(f"  GAIT_STEP_FORWARD = {gait['max_step']:.1f}")
+    print(f"  TRAJECTORY_STEPS = {gait['steps']}")
+    print(f"  SMOOTH_TROT_STANCE_RATIO = {gait['ratio']:.2f}")
+    print(f"  DEFAULT_STANCE_HEIGHT = {gait['height']:.1f}")
+    print(f"  RC_YAW_BIAS = {gait['yaw']:.1f}")
+    print(f"  RC_V_DEFAULT = {v_cmd:.1f}")
+    print("  ---------------------------------------------------------")
+
+
 def get_trajectory_for_velocity(v_body_y: float, leg_id: str,
                                 yaw_correction: float = 0.0) -> list:
     step_length, reverse = update_gait_from_velocity(v_body_y)
@@ -1853,6 +1930,280 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
             close_logging()
 
 # ============================================================================
+# KEYBOARD RC DRIVE  (mode R)
+# ============================================================================
+
+def rc_drive_mode() -> bool:
+    """Realtime keyboard drive with live gait tuning; march in place when idle."""
+    global state_estimator, idle_marching, march_thread
+    global march_step_indices, balance_controller, control_paused
+
+    if sys.platform != 'win32':
+        print("\n  RC drive mode requires Windows (msvcrt keyboard input)")
+        return False
+
+    # Live-tunable gait parameters (reset to these defaults with [0])
+    gait = {
+        'lift': GAIT_LIFT_HEIGHT,           # [T]/[G] swing foot lift (mm)
+        'max_step': GAIT_STEP_FORWARD,      # [R]/[F] step length cap (mm)
+        'steps': TRAJECTORY_STEPS,          # [Y]/[H] points per cycle (cadence)
+        'height': DEFAULT_STANCE_HEIGHT,    # [U]/[J] stance height (mm, neg down)
+        'yaw': RC_YAW_BIAS,                 # [I]/[K] turn bias while A/D held
+        'ratio': SMOOTH_TROT_STANCE_RATIO,  # [N]/[M] stance phase ratio
+    }
+
+    print("\n" + "=" * 70)
+    print(f"  RC DRIVE MODE  [{('SIM' if SIMULATION_MODE else 'HW')}]")
+    print("  Hold [W]/[S] fwd/back | [A]/[D] turn while walking")
+    print("  [+]/[-] speed | [SPACE] pause | [Q] exit | [E] EMERGENCY STOP")
+    print("  Tune: [T/G] lift | [R/F] step cap | [Y/H] cadence | [U/J] height")
+    print("        [I/K] turn bias | [N/M] stance ratio | [P] print | [0] reset")
+    print(f"  Idle = march in place | speed = {RC_V_DEFAULT:.0f} mm/s")
+    print("=" * 70)
+
+    transitioning = idle_marching
+    if transitioning:
+        idle_marching = False
+        if march_thread and march_thread.is_alive():
+            march_thread.join(timeout=1.0)
+
+    if state_estimator is None:
+        state_estimator = TimeBasedEstimator(imu_reader=imu_reader)
+    if BALANCE_ENABLED and balance_controller is None:
+        balance_controller = BalanceController()
+
+    state_estimator.start()
+
+    if BALANCE_ENABLED and balance_controller is not None:
+        balance_controller.reset()
+        balance_controller.set_target(0.0, 0.0)
+
+    log_was_open = (log_file is not None)
+    init_logging(0.0)
+
+    if transitioning:
+        step_indices = march_step_indices.copy()
+    else:
+        step_indices = {}
+        for leg_id in ('FR', 'FL', 'RR', 'RL'):
+            step_indices[leg_id] = int(
+                get_gait_phase_offset(leg_id, 'trot') * TRAJECTORY_STEPS)
+
+    key_last = {b'w': 0.0, b's': 0.0, b'a': 0.0, b'd': 0.0}
+    v_smooth = 0.0
+    yaw_bias = 0.0
+    rc_v_cmd = RC_V_DEFAULT
+    prev_heading_hold = False
+    exiting = False
+    exit_deadline = 0.0
+    dt_nom = 1.0 / UPDATE_RATE
+
+    control_paused = False
+    start_time = time.time()
+    last_status_time = start_time
+
+    try:
+        while True:
+            t_now = time.time()
+
+            drained = 0
+            while msvcrt.kbhit() and drained < 64:
+                key = msvcrt.getch()
+                drained += 1
+                if key in (b'\xe0', b'\x00'):
+                    msvcrt.getch()  # Consume second byte of extended keys
+                    continue
+                k = key.lower()
+                if k in key_last:
+                    key_last[k] = t_now
+                elif k in (b'+', b'='):
+                    rc_v_cmd = min(rc_v_cmd + RC_V_STEP, NAV_V_MAX)
+                    print(f"\n  Speed: {rc_v_cmd:.0f} mm/s")
+                elif k in (b'-', b'_'):
+                    rc_v_cmd = max(rc_v_cmd - RC_V_STEP, RC_V_MIN)
+                    print(f"\n  Speed: {rc_v_cmd:.0f} mm/s")
+                elif k == b' ':
+                    control_paused = not control_paused
+                    print("\n  PAUSED" if control_paused else "\n  RESUMED")
+                elif k == b'e':
+                    print("\n  EMERGENCY STOP!")
+                    emergency_stop_all()
+                    return False
+                elif k == b'q' and not exiting:
+                    exiting = True
+                    exit_deadline = t_now + RC_EXIT_TIMEOUT_S
+                    control_paused = False
+                    print("\n  Exiting RC - decelerating to stand...")
+                elif k == b't':
+                    gait['lift'] = min(gait['lift'] + 5.0, 60.0)
+                    print(f"\n  Lift: {gait['lift']:.0f} mm")
+                elif k == b'g':
+                    gait['lift'] = max(gait['lift'] - 5.0, 10.0)
+                    print(f"\n  Lift: {gait['lift']:.0f} mm")
+                elif k == b'r':
+                    gait['max_step'] = min(gait['max_step'] + 5.0, 50.0)
+                    print(f"\n  Step cap: {gait['max_step']:.0f} mm")
+                elif k == b'f':
+                    gait['max_step'] = max(gait['max_step'] - 5.0, 15.0)
+                    print(f"\n  Step cap: {gait['max_step']:.0f} mm")
+                elif k == b'y':
+                    _rc_set_steps(gait, step_indices, gait['steps'] - 2)
+                elif k == b'h':
+                    _rc_set_steps(gait, step_indices, gait['steps'] + 2)
+                elif k == b'u':
+                    gait['height'] = max(gait['height'] - 5.0, -235.0)
+                    print(f"\n  Stance height: {gait['height']:.0f} mm")
+                elif k == b'j':
+                    gait['height'] = min(gait['height'] + 5.0, -180.0)
+                    print(f"\n  Stance height: {gait['height']:.0f} mm")
+                elif k == b'i':
+                    gait['yaw'] = min(gait['yaw'] + 2.5, 15.0)
+                    print(f"\n  Turn bias: {gait['yaw']:.1f} mm")
+                elif k == b'k':
+                    gait['yaw'] = max(gait['yaw'] - 2.5, 2.5)
+                    print(f"\n  Turn bias: {gait['yaw']:.1f} mm")
+                elif k == b'n':
+                    gait['ratio'] = max(round(gait['ratio'] - 0.05, 2), 0.60)
+                    print(f"\n  Stance ratio: {gait['ratio']:.2f}")
+                elif k == b'm':
+                    gait['ratio'] = min(round(gait['ratio'] + 0.05, 2), 0.80)
+                    print(f"\n  Stance ratio: {gait['ratio']:.2f}")
+                elif k == b'p':
+                    _rc_print_params(gait, rc_v_cmd)
+                elif k == b'0':
+                    _rc_set_steps(gait, step_indices, TRAJECTORY_STEPS)
+                    gait.update(lift=GAIT_LIFT_HEIGHT,
+                                max_step=GAIT_STEP_FORWARD,
+                                height=DEFAULT_STANCE_HEIGHT,
+                                yaw=RC_YAW_BIAS,
+                                ratio=SMOOTH_TROT_STANCE_RATIO)
+                    rc_v_cmd = RC_V_DEFAULT
+                    print("\n  Gait parameters reset to defaults")
+
+            if control_paused:
+                time.sleep(0.05)
+                continue
+
+            w_held = (t_now - key_last[b'w']) < RC_KEY_HOLD_S
+            s_held = (t_now - key_last[b's']) < RC_KEY_HOLD_S
+            a_held = (t_now - key_last[b'a']) < RC_KEY_HOLD_S
+            d_held = (t_now - key_last[b'd']) < RC_KEY_HOLD_S
+            if exiting:
+                w_held = s_held = a_held = d_held = False
+            move_req = (w_held != s_held)
+            turn_req = (a_held != d_held)
+
+            v_limit = min(rc_v_cmd, TURN_V_MAX) if turn_req else rc_v_cmd
+            if move_req:
+                v_target = v_limit if w_held else -v_limit
+            else:
+                v_target = 0.0
+            v_smooth = _slew_toward(v_smooth, v_target, RC_ACCEL * dt_nom)
+
+            walking = move_req or abs(v_smooth) > RC_IDLE_V_THRESHOLD
+            if not walking:
+                v_smooth = 0.0
+
+            if walking and turn_req:
+                yaw_target = gait['yaw'] if d_held else -gait['yaw']
+            else:
+                yaw_target = 0.0
+            yaw_bias = _slew_toward(yaw_bias, yaw_target, RC_YAW_SLEW * dt_nom)
+            if not walking:
+                yaw_bias = 0.0
+
+            heading_hold = (walking and not turn_req and
+                            yaw_controller is not None and
+                            state_estimator.has_imu())
+            yaw_pd = 0.0
+            if heading_hold:
+                if not prev_heading_hold:
+                    yaw_controller.reset()
+                    yaw_controller.set_target(state_estimator.get_yaw())
+                yaw_pd = yaw_controller.compute(
+                    state_estimator.get_yaw(), t_now)
+            prev_heading_hold = heading_hold
+            yaw_corr = yaw_bias + yaw_pd
+
+            # Blend lift from march height (x RC_MARCH_LIFT_MULT at v=0)
+            # down to 1.0x as speed rises - avoids the march->walk lift jump
+            blend = min(abs(v_smooth), RC_LIFT_BLEND_V) / RC_LIFT_BLEND_V
+            lift_eff = gait['lift'] * (
+                RC_MARCH_LIFT_MULT - (RC_MARCH_LIFT_MULT - 1.0) * blend)
+
+            trajectories = build_rc_trajectories(
+                v_smooth, yaw_corr, lift_eff, gait['steps'],
+                gait['ratio'], gait['height'], gait['max_step'])
+
+            bal = None
+            if BALANCE_ENABLED and balance_controller is not None:
+                if imu_reader and imu_reader.is_receiving_data():
+                    o = imu_reader.get_orientation()
+                    bal = combine_balance_offsets(balance_controller.compute(
+                        o['roll'], o['pitch'], t_now))
+                else:
+                    bal = combine_balance_offsets()
+            else:
+                bal = combine_balance_offsets()
+
+            update_all_legs_gait(trajectories, step_indices, bal)
+
+            for leg_id in step_indices:
+                step_indices[leg_id] = (
+                    step_indices[leg_id] + 1) % gait['steps']
+
+            state_estimator.update(v_smooth * VELOCITY_CALIBRATION, t_now)
+            log_control_step("RC")
+
+            if t_now - last_status_time >= 0.5:
+                mode_str = "WALK " if walking else "MARCH"
+                keys = "+".join(n for n, held in (
+                    ('W', w_held), ('S', s_held),
+                    ('A', a_held), ('D', d_held)) if held) or "--"
+                base_step = min(abs(v_smooth) * gait['steps'] / UPDATE_RATE,
+                                gait['max_step'])
+                print(f"  RC {mode_str} | v={v_smooth:+.1f}/{rc_v_cmd:.0f} mm/s"
+                      f" | step={base_step:.0f}/{gait['max_step']:.0f}"
+                      f" | lift={lift_eff:.0f}"
+                      f" | cad={UPDATE_RATE / gait['steps']:.2f}Hz"
+                      f" | h={gait['height']:.0f}"
+                      f" | turn={yaw_bias:+.1f} | sr={gait['ratio']:.2f}"
+                      f" | keys={keys} | t={t_now - start_time:.0f}s")
+                last_status_time = t_now
+
+            if exiting and (not walking or t_now >= exit_deadline):
+                break
+
+            loop_dur = time.time() - t_now
+            sleep_t = (1.0 / UPDATE_RATE) - loop_dur
+            if sleep_t > 0:
+                time.sleep(sleep_t)
+
+        # Hand phase back to the march system in its native resolution
+        for leg_id in march_step_indices:
+            march_step_indices[leg_id] = int(round(
+                step_indices[leg_id] * TRAJECTORY_STEPS
+                / gait['steps'])) % TRAJECTORY_STEPS
+        time.sleep(0.2)
+        stand_pos = (DEFAULT_STANCE_OFFSET_X, gait['height'])
+        static_offsets = get_static_roll_offsets()
+        for leg_id in ('FR', 'FL', 'RR', 'RL'):
+            update_leg_position(leg_id, stand_pos, static_offsets[leg_id])
+        print(f"\n  RC mode ended. Odometry: "
+              f"{state_estimator.get_position():+.1f} mm"
+              f"  Time={state_estimator.get_elapsed_time():.1f}s")
+        _rc_print_params(gait, rc_v_cmd)
+        return True
+
+    except KeyboardInterrupt:
+        print("\n  Interrupted by user")
+        return False
+    finally:
+        stop_all_legs()
+        if not log_was_open:
+            close_logging()
+
+# ============================================================================
 # TEST FUNCTIONS  (modes 7, 8, 9)
 # ============================================================================
 
@@ -1978,6 +2329,7 @@ def print_menu():
     print(f"  [7] Smooth walk {MODE7_DISTANCE_MM:+.0f}mm (march -> walk -> march -> stand)")
     print(f"  [8] Turn LEFT {MODE_TURN_DISTANCE_MM:+.0f}mm   (march -> turn -> march -> stand)")
     print(f"  [9] Turn RIGHT {MODE_TURN_DISTANCE_MM:+.0f}mm  (march -> turn -> march -> stand)")
+    print("  [R] RC drive (hold W/S/A/D + live gait tuning, Q exit)")
     print("  [M] Toggle ML compensation")
     print("  [Q] Quit")
     print("=" * 70)
@@ -2001,6 +2353,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif key == b'9':
                 test_turn_right_300()
+            elif key.lower() == b'r':
+                rc_drive_mode()
             elif key.lower() == b'm':
                 toggle_ml_compensation()
             elif key.lower() == b'q':
@@ -2016,6 +2370,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif cmd == '9':
                 test_turn_right_300()
+            elif cmd.lower() == 'r':
+                rc_drive_mode()
             elif cmd.lower() == 'm':
                 toggle_ml_compensation()
             elif cmd.lower() == 'q':
@@ -2032,7 +2388,7 @@ def main():
     global SIMULATION_MODE, imu_reader, yaw_controller
 
     print("=" * 70)
-    print("  BLEGS Walk Test - Standalone (Modes 7, 8, 9)")
+    print("  BLEGS Walk Test - Standalone (Modes 7, 8, 9, R)")
     print("=" * 70)
     print(f"  ML compensation: {get_ml_status()}")
 
