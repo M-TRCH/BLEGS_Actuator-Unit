@@ -1219,8 +1219,12 @@ def _rc_read_drive_keys():
     msvcrt reports key *events*, and Windows auto-repeats only the most recently
     pressed key — so a chorded hold (W+A) looks like W was released.  Asking
     Win32 for the actual key state fixes that and makes release instantaneous.
-    Returns all-False while the console is not the foreground window, so keys
-    typed into another app cannot drive the robot.
+
+    The focus gate (ignore keys unless the console is the foreground window) is
+    only applied under a classic conhost console.  Under ConPTY — Windows
+    Terminal, the VS Code integrated terminal — GetConsoleWindow() returns a
+    HIDDEN helper window that is never the foreground window, so gating on it
+    there would report every key as released forever.
     """
     global _rc_win32
     if _rc_win32 is False:
@@ -1229,8 +1233,11 @@ def _rc_read_drive_keys():
         try:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
+            user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
             user32.GetAsyncKeyState.restype = ctypes.c_short
             user32.GetForegroundWindow.restype = ctypes.c_void_p
+            user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+            user32.IsWindowVisible.restype = ctypes.c_int
             kernel32.GetConsoleWindow.restype = ctypes.c_void_p
             _rc_win32 = (user32, kernel32)
         except Exception:
@@ -1239,8 +1246,9 @@ def _rc_read_drive_keys():
     user32, kernel32 = _rc_win32
     try:
         console = kernel32.GetConsoleWindow()
-        if console and user32.GetForegroundWindow() != console:
-            return {k: False for k in _RC_VK}
+        if console and user32.IsWindowVisible(console):
+            if user32.GetForegroundWindow() != console:
+                return {k: False for k in _RC_VK}
         return {k: bool(user32.GetAsyncKeyState(vk) & 0x8000)
                 for k, vk in _RC_VK.items()}
     except Exception:
@@ -2076,6 +2084,9 @@ def rc_drive_mode() -> bool:
     held = {k: False for k in key_last}       # fallback path state
     held_since = {k: 0.0 for k in key_last}   # fallback path: last direct evidence
     keystate_mode = None                      # True once the Win32 path is in use
+    force_fallback = False                    # set if the Win32 path proves blind
+    last_drive_char_t = 0.0                   # last w/s/a/d character from msvcrt
+    blind_since = 0.0
     rc_flat_offsets = {leg: 0.0 for leg in ('FR', 'FL', 'RR', 'RL')}
     v_smooth = 0.0
     turn_cmd = 0.0        # signed turn strength (ratio of step length)
@@ -2105,6 +2116,7 @@ def rc_drive_mode() -> bool:
                 k = key.lower()
                 if k in key_last:
                     key_last[k] = t_now
+                    last_drive_char_t = t_now
                 elif k in (b'+', b'='):
                     rc_v_cmd = min(rc_v_cmd + RC_V_STEP, NAV_V_MAX)
                     print(f"\n  Speed: {rc_v_cmd:.0f} mm/s")
@@ -2178,16 +2190,33 @@ def rc_drive_mode() -> bool:
             # --- Drive keys: true key state when Win32 is available, else the
             # auto-repeat deadman.  The Win32 path is what makes chorded holds
             # (W+A = drive forward while turning) work at all.
-            key_state = _rc_read_drive_keys()
+            key_state = None if force_fallback else _rc_read_drive_keys()
             if key_state is not None:
                 if keystate_mode is None:
                     keystate_mode = True
+                    print("  Drive keys: Win32 key state (W+A chords supported)")
+                # Watchdog: the console keeps delivering w/s/a/d characters, so a
+                # key IS being held; if the state path still sees nothing it is
+                # blind (wrong console handle, blocked API) - fall back to events.
+                if any(key_state.values()):
+                    blind_since = 0.0
+                elif t_now - last_drive_char_t < 0.4:
+                    if blind_since == 0.0:
+                        blind_since = t_now
+                    elif t_now - blind_since > 0.7:
+                        force_fallback = True
+                        key_state = None
+                        print("\n  Win32 key state is not seeing held keys -"
+                              " switching to the auto-repeat fallback")
+                else:
+                    blind_since = 0.0
+            if key_state is not None:
                 held = key_state
             else:
                 if keystate_mode is None:
                     keystate_mode = False
-                    print("  (Win32 key state unavailable - using auto-repeat "
-                          "deadman; chorded W+A may be unreliable)")
+                    print("  Drive keys: auto-repeat fallback"
+                          " (chorded W+A may be unreliable)")
                 # Windows repeats only the newest key, so while ANY drive key is
                 # still repeating we cannot see the others being released: assume
                 # they are still down, bounded by RC_STICKY_MAX_S.
