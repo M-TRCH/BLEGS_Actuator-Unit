@@ -7,9 +7,8 @@ Standalone version of relative_position_control.py trimmed to:
     [7] Smooth walk +600mm with march transitions
     [8] Turn LEFT while walking +300mm (march -> turn -> march)
     [9] Turn RIGHT while walking +300mm (march -> turn -> march)
-    [R] Keyboard RC drive: hold W/S to drive, A/D to steer while driving,
-        Q/E to pivot in place; march-in-place when idle.  EMERGENCY STOP is
-        [X] and exit is [ESC] (Q/E are pivot keys).  Live gait tuning for
+    [R] Keyboard RC drive: hold W/S to drive and A/D to steer; A/D on their
+        own pivot in place; march-in-place when idle.  Live gait tuning for
         lift / step cap / cadence / stance height / turn strength / stance
         ratio, [P] prints the tuned values for persisting.  Drive keys are
         read as real key state (Win32), so W+A held together steers while
@@ -1219,10 +1218,8 @@ def build_rc_trajectories(v_body_y: float, turn_mm: float, lift_height: float,
     return trajectories
 
 
-# Virtual-key codes for the drive keys (VK of a letter == its ASCII uppercase).
-# Q/E pivot in place, so EMERGENCY STOP lives on [X] and exit on [ESC].
-_RC_VK = {b'w': 0x57, b's': 0x53, b'a': 0x41, b'd': 0x44,
-          b'q': 0x51, b'e': 0x45}
+# Virtual-key codes for the drive keys (VK of a letter == its ASCII uppercase)
+_RC_VK = {b'w': 0x57, b's': 0x53, b'a': 0x41, b'd': 0x44}
 _rc_win32 = None  # (user32, kernel32) once probed, or False if unavailable
 
 
@@ -2058,13 +2055,11 @@ def rc_drive_mode() -> bool:
 
     print("\n" + "=" * 70)
     print(f"  RC DRIVE MODE  [{('SIM' if SIMULATION_MODE else 'HW')}]")
-    print("  Hold [W]/[S] drive | [A]/[D] turn while driving | [Q]/[E] pivot in place")
-    print("  [X] EMERGENCY STOP | [ESC] exit | [SPACE] pause | [+]/[-] speed")
+    print("  Hold [W]/[S] drive | [A]/[D] steer while driving, pivot on their own")
+    print("  [E] EMERGENCY STOP | [Q] exit | [SPACE] pause | [+]/[-] speed")
     print("  Tune: [T/G] lift | [R/F] step cap | [Y/H] cadence | [U/J] height")
     print("        [I/K] turn strength | [N/M] stance ratio | [P] print | [0] reset")
     print(f"  Idle = march in place | speed = {RC_V_DEFAULT:.0f} mm/s")
-    print("  NOTE: [E] now pivots RIGHT - emergency stop moved to [X],"
-          " exit to [ESC]")
     print("=" * 70)
 
     transitioning = idle_marching
@@ -2145,11 +2140,11 @@ def rc_drive_mode() -> bool:
                 elif k == b' ':
                     control_paused = not control_paused
                     print("\n  PAUSED" if control_paused else "\n  RESUMED")
-                elif k == b'x':
+                elif k in (b'e', b'x'):
                     print("\n  EMERGENCY STOP!")
                     emergency_stop_all()
                     return False
-                elif k == b'\x1b' and not exiting:
+                elif k in (b'q', b'\x1b') and not exiting:
                     exiting = True
                     exit_deadline = t_now + RC_EXIT_TIMEOUT_S
                     control_paused = False
@@ -2253,14 +2248,14 @@ def rc_drive_mode() -> bool:
                         held[k] = False
 
             if exiting:
-                w_held = s_held = a_held = d_held = pq_held = pe_held = False
+                w_held = s_held = a_held = d_held = False
             else:
                 w_held, s_held = held[b'w'], held[b's']
                 a_held, d_held = held[b'a'], held[b'd']
-                pq_held, pe_held = held[b'q'], held[b'e']
             move_req = (w_held != s_held)
             turn_req = (a_held != d_held)
-            pivot_req = (pq_held != pe_held) and not move_req
+            # A/D steer while driving; on their own they pivot in place
+            pivot_req = turn_req and not move_req
 
             v_limit = min(rc_v_cmd, TURN_V_MAX) if turn_req else rc_v_cmd
             if move_req:
@@ -2269,13 +2264,10 @@ def rc_drive_mode() -> bool:
                 v_target = 0.0
             v_smooth = _slew_toward(v_smooth, v_target, RC_ACCEL * dt_nom)
 
-            # A/D steer while driving; Q/E spin in place when not driving
-            if move_req and turn_req:
+            if turn_req:
                 turn_target = gait['turn_k'] if d_held else -gait['turn_k']
-                if RC_INVERT_TURN_ON_REVERSE and v_smooth < 0:
+                if move_req and RC_INVERT_TURN_ON_REVERSE and v_smooth < 0:
                     turn_target = -turn_target
-            elif pivot_req:
-                turn_target = gait['turn_k'] if pe_held else -gait['turn_k']
             else:
                 turn_target = 0.0
             turn_cmd = _slew_toward(turn_cmd, turn_target, RC_TURN_SLEW * dt_nom)
@@ -2360,8 +2352,7 @@ def rc_drive_mode() -> bool:
                             else "WALK " if walking else "MARCH")
                 keys = "+".join(n for n, is_down in (
                     ('W', w_held), ('S', s_held),
-                    ('A', a_held), ('D', d_held),
-                    ('Q', pq_held), ('E', pe_held)) if is_down) or "--"
+                    ('A', a_held), ('D', d_held)) if is_down) or "--"
                 radius = rc_turn_radius(left_step, right_step)
                 r_str = "inf" if radius == float('inf') else f"{radius:.0f}mm"
                 print(f"  RC {mode_str} | v={v_smooth:+.1f}/{rc_v_cmd:.0f} mm/s"
