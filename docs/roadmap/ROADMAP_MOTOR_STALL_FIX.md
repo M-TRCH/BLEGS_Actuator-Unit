@@ -39,22 +39,22 @@
 
 | # | ปัญหา | ไฟล์ที่เกี่ยวข้อง | ความรุนแรง | สถานะ |
 |---|-------|------------------|------------|--------|
-| 1 | Integral Windup ไม่สมบูรณ์ | `include/pid_controller.h` | 🔴 สูง | ✅ แก้แล้ว |
-| 2 | ไม่มี Velocity Feedforward | `src/main.cpp`, `lib/scurve_profile/` | 🔴 สูง | ⚠️ ยังไม่ได้แก้ |
-| 3 | Derivative Kick | `include/pid_controller.h` | 🟡 กลาง | ⚠️ ยังไม่ได้แก้ |
-| 4 | Multi-turn Wrap Detection | `src/encoder.cpp` | 🟡 กลาง | ⚠️ ต้องตรวจสอบ |
-| 5 | ไม่มี Current Limiting | `src/main.cpp`, `src/motor_control.cpp` | 🟡 กลาง | ⚠️ ยังไม่ได้แก้ |
+| 1 | Integral Windup ไม่สมบูรณ์ | `firmware/include/pid_controller.h` | 🔴 สูง | ✅ แก้แล้ว |
+| 2 | ไม่มี Velocity Feedforward | `firmware/src/main.cpp`, `firmware/lib/scurve_profile/` | 🔴 สูง | ⚠️ ยังไม่ได้แก้ |
+| 3 | Derivative Kick | `firmware/include/pid_controller.h` | 🟡 กลาง | ⚠️ ยังไม่ได้แก้ |
+| 4 | Multi-turn Wrap Detection | `firmware/src/encoder.cpp` | 🟡 กลาง | ⚠️ ต้องตรวจสอบ |
+| 5 | ไม่มี Current Limiting | `firmware/src/main.cpp`, `firmware/src/motor_control.cpp` | 🟡 กลาง | ⚠️ ยังไม่ได้แก้ |
 
 ---
 
 ## 🔴 ปัญหาที่ 1: Integral Windup ไม่สมบูรณ์
 
 > **✅ สถานะ (8 ก.พ. 2026): แก้ไขแล้ว**  
-> โค้ดปัจจุบันใน `include/pid_controller.h` ได้ implement back-calculation anti-windup เรียบร้อยแล้ว  
+> โค้ดปัจจุบันใน `firmware/include/pid_controller.h` ได้ implement back-calculation anti-windup เรียบร้อยแล้ว  
 > การวิเคราะห์ด้านล่างยังคงมีประโยชน์สำหรับการทำความเข้าใจการทำงาน
 
 ### 📍 ตำแหน่งโค้ด
-**ไฟล์:** `include/pid_controller.h` บรรทัด 36-95
+**ไฟล์:** `firmware/include/pid_controller.h` บรรทัด 36-95
 
 ### 🔍 การวิเคราะห์ (ข้อมูลเดิม - อาจไม่ตรงกับโค้ดปัจจุบัน)
 
@@ -170,7 +170,7 @@ if (fabs(output) < output_limit * 0.95f) {
 ## 🔴 ปัญหาที่ 2: ไม่มี Velocity Feedforward
 
 ### 📍 ตำแหน่งโค้ด
-**ไฟล์:** `src/main.cpp` บรรทัด 413-420, `lib/scurve_profile/scurve_profile.cpp`
+**ไฟล์:** `firmware/src/main.cpp` บรรทัด 413-420, `firmware/lib/scurve_profile/scurve_profile.cpp`
 
 ### 🔍 การวิเคราะห์
 
@@ -199,7 +199,7 @@ vq_cmd = PID_output + Kv * velocity_reference + Ka * acceleration_reference
 
 **ขั้นตอนที่ 1: เพิ่มฟังก์ชัน getVelocity() ใน ScurveProfile**
 
-**ไฟล์:** `lib/scurve_profile/scurve_profile.h`
+**ไฟล์:** `firmware/lib/scurve_profile/scurve_profile.h`
 ```cpp
 class ScurveProfile 
 {
@@ -210,7 +210,7 @@ public:
 };
 ```
 
-**ไฟล์:** `lib/scurve_profile/scurve_profile.cpp`
+**ไฟล์:** `firmware/lib/scurve_profile/scurve_profile.cpp`
 ```cpp
 float ScurveProfile::getVelocity(float t) 
 {
@@ -290,7 +290,7 @@ if (control_mode == POSITION_CONTROL_WITH_SCURVE)
 ## 🟡 ปัญหาที่ 3: Derivative Kick
 
 ### 📍 ตำแหน่งโค้ด
-**ไฟล์:** `include/pid_controller.h` บรรทัด 51
+**ไฟล์:** `firmware/include/pid_controller.h` บรรทัด 51
 
 ### 🔍 การวิเคราะห์
 
@@ -351,7 +351,7 @@ derivative_filtered = alpha * derivative_raw + (1 - alpha) * derivative_filtered
 ## 🟡 ปัญหาที่ 4: Multi-turn Wrap Detection ล้มเหลวที่ความเร็วสูง
 
 ### 📍 ตำแหน่งโค้ด
-**ไฟล์:** `src/encoder.cpp` บรรทัด 50-58
+**ไฟล์:** `firmware/src/encoder.cpp` บรรทัด 50-58
 
 ### 🔍 การวิเคราะห์
 
@@ -472,7 +472,7 @@ void updateMultiTurnTracking()
 ## 🟡 ปัญหาที่ 5: ไม่มี Current Limiting
 
 ### 📍 ตำแหน่งโค้ด
-**ไฟล์:** `src/main.cpp`, `include/motor_conf.h`
+**ไฟล์:** `firmware/src/main.cpp`, `firmware/include/motor_conf.h`
 
 ### 🔍 การวิเคราะห์
 

@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-BLEGS quadruped robot — two tiers in one repo:
+**BLEGS** (Bio-inspired LEGged System) — the whole quadruped-robot project in one repo, three tiers. This repo was renamed from `BLEGS_Actuator-Unit` when the paper moved in; never create a new repo under the old name or GitHub's redirect breaks.
 
-- **Firmware** (`src/`, `include/`, `lib/`, `platformio.ini`): one STM32G431CB board = one "Actuator Unit" driving one BLDC motor with an AS5047P encoder. The robot has 8 units (legs FL/FR/RL/RR × motors A/B). Voltage-mode sinusoidal commutation (inverse-Park + SVPWM, no current loop); position PID (currently P-only, Kp=0.08) nominally 5 kHz.
-- **Host** (`python/`): Windows-first Python that talks to each unit over its own USB COM port and runs gait generation, kinematics, vision ground truth, and paper analysis. No ROS, no package structure — control scripts are standalone monoliths by design.
+- **Firmware** (`firmware/` — `src/ include/ lib/ test/`; `platformio.ini` stays at the root with dir overrides, so `pio run` from the root is unchanged): one STM32G431CB board = one "Actuator Unit" driving one BLDC motor with an AS5047P encoder. The robot has 8 units (legs FL/FR/RL/RR × motors A/B). Voltage-mode sinusoidal commutation (inverse-Park + SVPWM, no current loop); position PID (currently P-only, Kp=0.08) nominally 5 kHz.
+- **Host** (`python/`): Windows-first Python that talks to each unit over its own USB COM port and runs gait generation, kinematics, vision ground truth, and paper analysis. No ROS, no package structure — control scripts are standalone monoliths by design. **Do not move `python/`**: several scripts compute paths relative to the repo root (`relative_position_control.py`, the simulation scripts).
+- **Paper** (`paper/`): the TCI Tier 1 manuscript (The Journal of KMUTNB), imported with full history from the former `BLEGS_Paper-TCI1` repo (now archived). Manuscript conventions, journal rules, and the pandoc build live in `paper/CLAUDE.md` — read it before touching the manuscript. There is deliberately no code copy under `paper/`.
 - `docs/` is bilingual Thai/English; roadmaps are living status docs in Thai; `docs/theory/` is Thai LaTeX (XeLaTeX + TH Sarabun New).
 
 ## Commands
@@ -32,7 +33,7 @@ python python/control/test_quadruped_control.py       # oldest demo; doubles as 
 
 ## Architecture
 
-**Wire protocol** — three hand-maintained copies: `include/protocol.h`+`src/protocol.cpp` (firmware), `python/control/test_quadruped_control.py`, and inlined again in `walk_test.py`. `docs/technical/PROTOCOL.md` is stale on load-bearing points (wrong example bytes, omits gear ratio, documents removed ASCII mode) — trust code over the doc.
+**Wire protocol** — three hand-maintained copies: `firmware/include/protocol.h`+`firmware/src/protocol.cpp` (firmware), `python/control/test_quadruped_control.py`, and inlined again in `walk_test.py`. `docs/technical/PROTOCOL.md` is stale on load-bearing points (wrong example bytes, omits gear ratio, documents removed ASCII mode) — trust code over the doc.
 
 - Framing `FE EE | type | len | payload≤32 | CRC16-LE`; CRC-16/MODBUS (poly 0xA001, init 0xFFFF) over type+len+payload only.
 - One COM port per motor, 921600 8N1, no on-wire addressing; motor_id (1–8, stored in EEPROM) appears only in feedback. Discovery = open every COM port and PING. Leg map: FL={A:1,B:2}, FR={3,4}, RL={5,6}, RR={7,8}.
@@ -67,11 +68,11 @@ python python/control/test_quadruped_control.py       # oldest demo; doubles as 
 
 ## Hardware & safety facts (verified against source)
 
-- **EMERGENCY STOP IS CURRENTLY NON-FUNCTIONAL END-TO-END.** `src/main.cpp` has the `PKT_CMD_EMERGENCY_STOP` cases commented out (the packet hits `default:` → ERR_UNKNOWN_COMMAND and the motor keeps holding at full torque); `include/protocol.h` specifies magic bytes DE AD BE EF + double confirmation; every Python `emergency_stop_all()` sends a single empty payload. Three-way contradiction. Pressing [E] only aborts the host loop — treat killing motor power as the only real e-stop.
+- **EMERGENCY STOP IS CURRENTLY NON-FUNCTIONAL END-TO-END.** `firmware/src/main.cpp` has the `PKT_CMD_EMERGENCY_STOP` cases commented out (the packet hits `default:` → ERR_UNKNOWN_COMMAND and the motor keeps holding at full torque); `firmware/include/protocol.h` specifies magic bytes DE AD BE EF + double confirmation; every Python `emergency_stop_all()` sends a single empty payload. Three-way contradiction. Pressing [E] only aborts the host loop — treat killing motor power as the only real e-stop.
 - No overcurrent/thermal protection in the firmware power path (`SVPWM controller - NO SAFETY CHECKS`); current sense is telemetry-only; the only guard is the ±12 V PID output clamp on a 24 V bus.
 - Every boot physically sweeps the motor (open-loop commutation-offset search) before the start gate; after start the unit servos to −90° joint (−720 motor-shaft deg). Motors must physically start near −90°, and every script parks them there on exit.
 - **No IMU is installed on the real robot** (confirmed 2026-07). `IMU_ENABLED=False` in walk_test.py is permanent policy — yaw heading-hold and balance paths are inert but kept guarded; do not re-enable or build IMU-dependent features for hardware runs. relative_position_control.py still says True (stale).
-- Provisioning a new unit: set `active=true` on exactly one `saveMotorDataToEEPROM(...)` line in `src/main.cpp` setup(), flash once (it saves then deliberately halts in `while(1)`), revert to false, reflash. At runtime the EEPROM (magic 0xBEEF1234), not that table, is authoritative for motor_id/offsets.
-- Known unfixed firmware bugs: (1) a single non-0xFE byte at the RX buffer head wedges packet reception until power-cycle — nothing drains non-header bytes since the ASCII else-branch was commented out; (2) `findRotorOffset` in `src/motor_control.cpp` line 113 uses the `CCW` macro (always true) where the `ccw` parameter was intended, so the CW pass computes its threshold against the wrong constant.
-- Pin ground truth is `include/system.h` (serial USART1 PA9/PA10, encoder CS PB12, current sense PA2/PA3, PWM PB0/PB1/PB13, start button PA1, NeoPixel PC13). The wiring-diagram section of `docs/guides/HARDWARE_SETUP.md` contradicts both the firmware and the doc's own pinout table (it would put the LED on a motor PWM pin and USB-serial on ADC pins) — never wire from that diagram.
+- Provisioning a new unit: set `active=true` on exactly one `saveMotorDataToEEPROM(...)` line in `firmware/src/main.cpp` setup(), flash once (it saves then deliberately halts in `while(1)`), revert to false, reflash. At runtime the EEPROM (magic 0xBEEF1234), not that table, is authoritative for motor_id/offsets.
+- Known unfixed firmware bugs: (1) a single non-0xFE byte at the RX buffer head wedges packet reception until power-cycle — nothing drains non-header bytes since the ASCII else-branch was commented out; (2) `findRotorOffset` in `firmware/src/motor_control.cpp` line 113 uses the `CCW` macro (always true) where the `ccw` parameter was intended, so the CW pass computes its threshold against the wrong constant.
+- Pin ground truth is `firmware/include/system.h` (serial USART1 PA9/PA10, encoder CS PB12, current sense PA2/PA3, PWM PB0/PB1/PB13, start button PA1, NeoPixel PC13). The wiring-diagram section of `docs/guides/HARDWARE_SETUP.md` contradicts both the firmware and the doc's own pinout table (it would put the LED on a motor PWM pin and USB-serial on ADC pins) — never wire from that diagram.
 - USB-serial: adapters must support 921600 (FTDI recommended); set Windows USB latency timer to 1 ms to avoid CRC errors.
