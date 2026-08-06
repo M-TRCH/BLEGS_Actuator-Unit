@@ -32,16 +32,20 @@ RUNWAY_WORLD_POINTS_CM = {
     10: (0.0, 120.0),
     11: (80.0, 120.0),
 }
+# Tape-measured centre-to-centre spacing of the back tags: 19.9 cm across the
+# body, 46.6 cm along it (the earlier 20 x 43 values were off by 8% lengthwise).
 ROBOT_TAG_LOCAL_POINTS_CM = {
-    0: (-10.0, -21.5),
-    1: (10.0, -21.5),
-    2: (-10.0, 21.5),
-    3: (10.0, 21.5),
+    0: (-9.95, -23.3),
+    1: (9.95, -23.3),
+    2: (-9.95, 23.3),
+    3: (9.95, 23.3),
 }
 CALIBRATION_FRAME_COUNT = 100
-# Known distances between the robot back tags, used to re-measure the runway
-# mapping from inside the data itself (see measure_robot_tag_scale).
-ROBOT_TAG_PAIRS_CM = (((0, 1), 20.0), ((2, 3), 20.0), ((0, 2), 43.0), ((1, 3), 43.0))
+# Tag pairs used to re-measure the runway mapping from inside the data itself
+# (see measure_robot_tag_scale); the true lengths come from the layout above so
+# the two cannot drift apart.
+ROBOT_TAG_PAIRS = (((0, 1), "across"), ((2, 3), "across"),
+                   ((0, 2), "along"), ((1, 3), "along"))
 # Area actually covered by the runway markers; poses outside it are extrapolated.
 RUNWAY_GRID_X_RANGE_CM = (0.0, 80.0)
 RUNWAY_GRID_Y_RANGE_CM = (0.0, 120.0)
@@ -727,14 +731,22 @@ def calibrate_runway_homography(video_path, frame_step, duplicate_id6_mode):
     return dict(fixed_points), build_runway_homography(fixed_points), processed_frames
 
 
+def robot_tag_true_distance_cm(first_id, second_id):
+    first = ROBOT_TAG_LOCAL_POINTS_CM[first_id]
+    second = ROBOT_TAG_LOCAL_POINTS_CM[second_id]
+    return float(np.hypot(first[0] - second[0], first[1] - second[1]))
+
+
 def measure_robot_tag_scale(positions, homography):
     """Re-measure the known robot tag rectangle through the runway homography.
 
-    The four back tags form a rigid 20 x 43 cm rectangle, so projecting them and
-    measuring the sides checks the mapping without any extra equipment.  A scale
-    away from 1.0 means either the tags sit above the ground plane the runway
-    markers define (parallax), or ROBOT_TAG_LOCAL_POINTS_CM does not match the
-    physical layout - measure the real tag spacing to tell the two apart.
+    The four back tags are a rigid rectangle of known size, so projecting them
+    and measuring the sides checks the mapping without any extra equipment.
+    With the tag spacing measured correctly, a scale above 1.0 is parallax: the
+    tags sit above the ground plane that the runway markers define, so the
+    homography places them further away than they really are.  Distances
+    between two robot poses are inflated by the same factor, which is why the
+    factor is reported alongside the deviation summary.
     """
     if homography is None:
         return None
@@ -746,7 +758,7 @@ def measure_robot_tag_scale(positions, homography):
     }
 
     scales = {}
-    for (first_id, second_id), true_cm in ROBOT_TAG_PAIRS_CM:
+    for (first_id, second_id), axis in ROBOT_TAG_PAIRS:
         if first_id not in world or second_id not in world:
             continue
 
@@ -754,12 +766,14 @@ def measure_robot_tag_scale(positions, homography):
             world[first_id][0] - world[second_id][0],
             world[first_id][1] - world[second_id][1],
         ))
-        scales.setdefault(true_cm, []).append(measured_cm / true_cm)
+        scales.setdefault(axis, []).append(
+            measured_cm / robot_tag_true_distance_cm(first_id, second_id)
+        )
 
     if not scales:
         return None
 
-    return {true_cm: float(np.mean(values)) for true_cm, values in scales.items()}
+    return {axis: float(np.mean(values)) for axis, values in scales.items()}
 
 
 def pose_is_inside_grid(center_world):
@@ -818,20 +832,31 @@ def summarise_tag_scale(scale_samples):
     if not scale_samples:
         return
 
+    axis_labels = {"across": "ด้านกว้าง", "along": "ด้านยาว"}
     print("\nตรวจสอบสเกลจากกรอบป้ายบนหุ่น (ค่าที่ถูกต้องคือ 1.000):")
-    worst_error = 0.0
-    for true_cm in sorted(scale_samples):
-        values = np.array(scale_samples[true_cm], dtype=np.float64)
-        axis_label = "ด้านกว้าง" if true_cm < 30.0 else "ด้านยาว"
-        print(f"  {axis_label} ({true_cm:.0f} cm): {values.mean():.3f} "
-              f"(sd {values.std():.3f}, n={len(values)})")
-        worst_error = max(worst_error, abs(float(values.mean()) - 1.0))
+    means = []
+    for axis in ("across", "along"):
+        if axis not in scale_samples:
+            continue
 
-    if worst_error > 0.05:
-        print(f"  คำเตือน: สเกลคลาดเคลื่อนถึง {100.0 * worst_error:.0f}% "
-              "ระยะทุกค่าที่วัดได้จึงผิดไปตามสัดส่วนนี้")
-        print("  สาเหตุที่เป็นไปได้: ป้ายบนหุ่นอยู่สูงจากระนาบพื้นที่ใช้สอบเทียบ (พารัลแลกซ์)")
-        print("  หรือค่า ROBOT_TAG_LOCAL_POINTS_CM ไม่ตรงกับระยะป้ายจริง — วัดระยะป้ายจริงเพื่อแยกสองกรณี")
+        values = np.array(scale_samples[axis], dtype=np.float64)
+        true_cm = robot_tag_true_distance_cm(*next(
+            pair for pair, pair_axis in ROBOT_TAG_PAIRS if pair_axis == axis
+        ))
+        print(f"  {axis_labels[axis]} ({true_cm:.1f} cm): {values.mean():.3f} "
+              f"(sd {values.std():.3f}, n={len(values)})")
+        means.append(float(values.mean()))
+
+    if not means:
+        return
+
+    scale_factor = float(np.mean(means))
+    if abs(scale_factor - 1.0) > 0.05:
+        print(f"  สเกลเฉลี่ย {scale_factor:.3f}: ระยะทุกค่าที่วัดได้สูงกว่าความจริง "
+              f"ประมาณ {100.0 * (scale_factor - 1.0):.0f}%")
+        print("  สาเหตุคือป้ายบนหุ่นอยู่สูงจากระนาบพื้นที่ใช้สอบเทียบ (พารัลแลกซ์)")
+        print(f"  ระยะและการเบี่ยงเบนข้างต้นหารด้วย {scale_factor:.3f} เพื่อแก้ค่า "
+              "ส่วนมุมไม่ต้องแก้ (การขยายแบบนี้ไม่เปลี่ยนมุม)")
 
 
 def create_video_writer(output_video_path, frame_shape, export_fps):
@@ -951,6 +976,11 @@ def main():
         draw_marker_positions(frame, tracked_positions, synthetic_ids)
         draw_robot_pose(frame, smoothed_robot_pose, inverse_runway_homography)
 
+        frame_scale = measure_robot_tag_scale(tracked_positions, runway_homography)
+        if frame_scale:
+            for axis, scale_value in frame_scale.items():
+                scale_samples.setdefault(axis, []).append(scale_value)
+
         if smoothed_robot_pose is not None:
             trajectory_world_points.append(smoothed_robot_pose["center_world"])
             center_world = smoothed_robot_pose["center_world"]
@@ -964,12 +994,10 @@ def main():
                 "source": smoothed_robot_pose["source"],
                 "is_held": int(bool(smoothed_robot_pose.get("is_held", False))),
                 "inside_grid": int(pose_is_inside_grid(center_world)),
+                # parallax magnification for this frame; divide distances by it
+                "scale_est": round(float(np.mean(list(frame_scale.values()))), 4)
+                if frame_scale else "",
             })
-
-        frame_scale = measure_robot_tag_scale(tracked_positions, runway_homography)
-        if frame_scale:
-            for true_cm, scale_value in frame_scale.items():
-                scale_samples.setdefault(true_cm, []).append(scale_value)
 
         birdseye_frame = build_birdeye_view(
             frame,
