@@ -1,91 +1,42 @@
-# การพัฒนาต้นแบบหุ่นยนต์สี่ขารูปแบบสององศาอิสระภายใต้แรงบิดต่อน้ำหนักที่เหมาะสม
+# Paper — การพัฒนาต้นแบบหุ่นยนต์สี่ขารูปแบบสององศาอิสระภายใต้แรงบิดต่อน้ำหนักที่เหมาะสม
 
-## คำอธิบายโปรเจค
+ต้นฉบับบทความวิจัยสำหรับ **The Journal of KMUTNB** (วารสารวิชาการพระจอมเกล้าพระนครเหนือ, TCI Tier 1)
+ส่วนนี้เป็นชั้น "เปเปอร์" ของ monorepo BLEGS — โค้ดที่ผลิตข้อมูลทั้งหมดอยู่ใน [`../python/`](../python/)
+และเฟิร์มแวร์อยู่ใน [`../firmware/`](../firmware/) จึงไม่มีสำเนาโค้ดในโฟลเดอร์นี้อีกต่อไป
 
-Repository นี้รวบรวมเอกสารและข้อมูลสำหรับบทความวิจัยระดับวารสาร TCI Tier 1
-(KMUTNB International Journal of Applied Science and Technology)
+## งานวิจัยโดยย่อ
 
-งานวิจัยนี้มีวัตถุประสงค์เพื่อพัฒนาต้นแบบหุ่นยนต์สี่ขา BLEGS (Bio-inspired LEGged System)
-โดยแต่ละขามีองศาอิสระสองแกน ใช้กลไก **Separated Five-Bar Linkage** ขับเคลื่อนด้วย
-มอเตอร์ BLDC พร้อม FOC Control และ Absolute Encoder (AS5047P 14-bit)
+หุ่นยนต์สี่ขา BLEGS (Bio-inspired LEGged System) ขาละสององศาอิสระด้วยกลไก Separated Five-Bar Linkage
+ขับด้วยมอเตอร์ BLDC (FOC/SVPWM) + เอนโคดเดอร์สัมบูรณ์ AS5047P อัตราทด 8:1 — ใช้แนวทางเชิงข้อมูล
+(วัดตำแหน่งจริงด้วย ArUco vision) สร้างแบบจำลองชดเชยความคลาดเคลื่อนเชิงกล เพื่อให้ได้ความแม่นยำสูง
+โดยไม่ต้องเพิ่มเซนเซอร์หรือชิ้นส่วนกลไก
 
-### ปัญหาที่มา
+การทดลอง 3 ชุด: (1) แรงบิดต่อน้ำหนัก (2) ความแม่นยำปลายขา + แบบจำลองชดเชย ML
+(3) การเดินทั้งตัว — เทียบเปิด/ปิดการชดเชย และหาขีดจำกัดบนพื้นผิวจริง
 
-หุ่นยนต์สี่ขาในปัจจุบันมักมีข้อจำกัดด้านค่าแรงบิดต่อน้ำหนัก (Torque-to-Weight Ratio)
-การเลือกมอเตอร์ขนาดใหญ่เพื่อเพิ่มแรงบิดส่งผลให้สัดส่วนแรงบิดต่อน้ำหนักลดลง
-ขณะที่การลดน้ำหนักโครงสร้างทำให้ความแม่นยำเชิงตำแหน่งลดลงจากข้อผิดพลาดเชิงกล
-เช่น ระยะคลอนจากระบบส่งกำลังและจุดต่อต่าง ๆ
-
-### แนวทางแก้ปัญหา
-
-ใช้แนวทางเชิงข้อมูล (Data-Driven) ในการเพิ่มความแม่นยำ:
-
-- วัดตำแหน่งจากเซนเซอร์วัดมุมภายในมอเตอร์ (Absolute Encoder)
-- ประเมินตำแหน่งเชิงภาพ (Vision-based Position Estimation) ด้วย ArUco Marker
-- สร้างแบบจำลองสำหรับชดเชยค่าความคลาดเคลื่อน (Corrected Position)
-
-### ผลลัพธ์ที่คาดหวัง
-
-- ต้นแบบหุ่นยนต์สี่ขาที่มีแรงบิดต่อน้ำหนักเหมาะสม
-- ความแม่นยำเชิงตำแหน่งสูงขึ้น
-- ลดการพึ่งพาเซนเซอร์ที่ซับซ้อน ลดจำนวนชิ้นส่วนกลไก
-- เพิ่มความทนทานต่อสภาพแวดล้อมจากการใช้งานจริง
-
-## สเปคหุ่นยนต์
-
-| รายการ              | ค่า                                      |
-|---------------------|------------------------------------------|
-| MCU                 | STM32G431CBU6 (170 MHz ARM Cortex-M4)    |
-| มอเตอร์            | BLDC พร้อม FOC/SVPWM                     |
-| เอนโคดเดอร์        | AS5047P (14-bit Absolute)                 |
-| อัตราทด             | 8:1                                      |
-| ลิงก์ L_AC, L_BD   | 105 mm                                   |
-| ลิงก์ L_CE, L_DE   | 145 mm                                   |
-| ระยะห่างมอเตอร์    | 85 mm                                    |
-| ขนาดตัวถัง          | 490 x 260 x 92.5 mm                     |
-| โปรโตคอลสื่อสาร    | Binary Protocol v1.2 / UART 921,600 baud |
-
-## โครงสร้าง Repository
+## โครงสร้าง
 
 ```
-BLEGS_Paper-TCI1/
-├── 01_Manuscript/              # ต้นฉบับบทความ (LaTeX / Word)
-├── 02_Figures/                 # รูปภาพสำหรับตีพิมพ์
-├── 03_Data/                    # ชุดข้อมูลการทดลอง
-│   ├── real/                   #   Log จากมอเตอร์จริง (Encoder)
-│   └── vision/                 #   Log จาก Vision (ArUco Marker)
-├── 04_Code/                    # สคริปต์วิเคราะห์ (Python)
-│   ├── analysis/               #   วิเคราะห์ข้อมูลและสร้างกราฟ
-│   ├── vision/                 #   ตรวจจับ ArUco / วัดตำแหน่งปลายขา
-│   └── trajectory_analysis.py  #   เปรียบเทียบ trajectory Encoder vs Vision
-├── 05_References/              # เอกสารอ้างอิง / BibTeX
-├── README.md
-└── PAPER_ROADMAP.md
+paper/
+├── manuscript/
+│   ├── drafts/            ต้นฉบับ (Markdown) 00_frontmatter → 06_references
+│   └── submission/        ไฟล์ .docx ที่ส่งจริง + SUBMISSION_CHECKLIST.md
+├── figures/  src/ export/  ต้นฉบับรูปที่แก้ได้ / .jpg สำหรับส่ง (วารสารบังคับ)
+├── tables/   src/ export/  ตารางก็ต้องส่งเป็น .jpg เช่นกัน
+├── data/     real/ vision/ ข้อมูลที่ใช้สร้างรูปและตาราง
+├── references/            ไฟล์อ้างอิง / .bib / PDF ที่อ้างถึง
+├── journal/               ข้อกำหนดวารสาร เทมเพลต และ reference.docx ของ pandoc
+└── build.ps1              แปลง drafts → manuscript.docx
 ```
 
-## ข้อกำหนดซอฟต์แวร์
+## วิธีทำงาน
 
-| หมวด             | ไลบรารี                   | เวอร์ชัน  |
-|------------------|---------------------------|-----------|
-| ภาษา             | Python                    | >= 3.9    |
-| การวิเคราะห์     | NumPy, Pandas, SciPy      | ล่าสุด    |
-| การแสดงผล        | Matplotlib                | >= 3.5    |
-| Vision           | OpenCV (cv2)              | >= 4.5    |
-| ArUco            | opencv-contrib-python     | >= 4.5    |
-| เอกสาร           | LaTeX (TeX Live / MiKTeX) | 2023+     |
+1. เขียน/แก้ต้นฉบับใน `manuscript/drafts/` (ธรรมเนียมการเขียนดู [`CLAUDE.md`](CLAUDE.md))
+2. รูปและตาราง: ไฟล์ต้นฉบับไว้ `*/src/` — ส่งออก .jpg ไว้ `*/export/`
+3. แปลงเป็น .docx: `powershell -File paper/build.ps1` (ต้องมี pandoc และ `journal/templates/reference.docx` — ดู [`journal/README.md`](journal/README.md))
+4. เก็บงานขั้นสุดท้ายใน Word ตาม [`manuscript/submission/SUBMISSION_CHECKLIST.md`](manuscript/submission/SUBMISSION_CHECKLIST.md) แล้วส่งผ่าน ThaiJO
 
-ติดตั้ง dependencies:
+## สถานะและแผน
 
-```bash
-pip install numpy pandas scipy matplotlib opencv-contrib-python pyserial
-```
-
-## แหล่งโค้ดอ้างอิง
-
-โค้ดควบคุมมอเตอร์และสคริปต์ Python ทั้งหมดอยู่ที่:
-https://github.com/M-TRCH/BLEGS_Actuator-Unit/tree/migrate-python-files
-
-## สิทธิ์การใช้งาน
-
-โปรเจคนี้เป็นส่วนหนึ่งของงานวิจัยเชิงวิชาการที่อยู่ระหว่างดำเนินการ
-กรุณาติดต่อผู้วิจัยก่อนนำไปใช้
+ดู [`action-plan.md`](action-plan.md) — สรุป: บทที่ 2 (วิธีการ) เขียนครบแล้ว 26 สมการ,
+บทอื่นยังไม่เริ่ม, การทดลอง 2.3.3 ออกแบบแล้วรอทดสอบจริง

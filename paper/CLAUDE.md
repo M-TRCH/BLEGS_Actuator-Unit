@@ -1,67 +1,51 @@
-# CLAUDE.md
+# CLAUDE.md — paper/
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Paper-layer guidance. Repo-wide architecture, build commands, and robot facts live in the **root [`CLAUDE.md`](../CLAUDE.md)** — read that first. This file only covers what is specific to the manuscript.
 
 ## What this is
 
-The manuscript repository for a **TCI Tier 1 journal paper** (KMUTNB International Journal of Applied Science and Technology) about the BLEGS quadruped: a four-legged robot with 2-DOF separated five-bar legs, BLDC actuators, and a data-driven model that compensates the legs' non-linear mechanical error.
+The manuscript for a TCI Tier 1 journal paper (The Journal of KMUTNB) about the BLEGS quadruped and its data-driven leg-error compensation. Everything here is writing and submission material; the code that produced the data is `../python/paper_testing/` (test_2 = single-leg + ML models, test_3 = whole-robot walking) — **there is no code copy under paper/ by design**, so never "fix" analysis scripts here.
 
-This repo holds **writing and analysis only**. The robot firmware and control code live in a separate repo, `../BLEGS_Actuator-Unit` (branch `migrate-python-files`), which has its own CLAUDE.md — read it for anything about the robot itself.
+## Writing conventions (match the existing text exactly)
 
-## Layout
+The manuscript is Thai academic prose; English in parentheses on first use of a technical term. Patterns used consistently in `manuscript/drafts/02_methods.md`:
 
-- `01_Manuscript/drafts/` — the manuscript, one Markdown file per chapter. **Only `02_methods.md` has content**; introduction, results and discussion are empty files.
-- `01_Manuscript/FORMAT_GUIDE.md` — the journal's formatting rules (TH Sarabun New, 2 columns, 8–10 A4 pages, IEEE references). Consult before making layout decisions; it is a summary of the journal's official template.
-- `04_Code/Test_2-3/` — **copies** of two scripts from the code repo. They have already diverged from their sources; treat the code repo as canonical and re-copy rather than editing here.
-- `02_Figures/`, `03_Data/`, `05_References/` — empty placeholders.
+- Paragraphs open with `&emsp;`.
+- Headings use decimal numbering (`### 2.3.1`, `#### 2.3.3.1` where a 4th level was unavoidable).
+- Display equations are `$$...$$`, introduced by `ตามสมการที่ (N)`; variables defined after in a `โดยที่:` bullet list.
+- **Equation numbers are sequential and maintained by hand** — inserting one renumbers every later one plus its cross-references. Grep `สมการที่ (` and fix all. Currently 26 equations, all in 02_methods.md.
+- Figure/table placeholders: `<mark>[แทรก รูปที่ N: caption]</mark>`; undecided values: `<mark>[รอกำหนด...]</mark>`. **pandoc silently drops `<mark>` (raw HTML) in docx output** — `build.ps1` warns about remaining ones.
+- Captions must not use the word "แสดง" (journal rule).
 
-Experiment media (videos, ~500 MB each) live outside the repo on `D:\THESIS\...` and are not tracked.
+**Chapter 2 is methods**: it defines procedures and metrics but must not report measured values or conclusions. Defer numbers with "รายงานในบทผลการทดลอง" / "นำเสนอในบทถัดไป" as §2.2.1 and §2.3.2 already do. Equipment specs (marker sizes, camera resolution) are fine in methods; results are not.
 
-## Writing conventions (follow the existing text)
+## Journal rules that shape the work
 
-The manuscript is **Thai academic prose**; English appears in parentheses on first use of a technical term. Match these patterns exactly — they are consistent throughout `02_methods.md`:
+Full set: `journal/FORMAT_GUIDE.md` and the official docs in `journal/instructions/`. The ones that bite:
 
-- Paragraphs open with `&emsp;` for the indent.
-- Headings use decimal numbering, max 3 levels per the format guide (`### 2.3.1`, then `#### 2.3.3.1` where a fourth level was unavoidable).
-- Display equations are `$$...$$` on their own line, introduced by `ตามสมการที่ (N)`.
-- **Equation numbers are sequential and maintained by hand.** Inserting an equation renumbers every later one plus its cross-references — grep `สมการที่ (` and fix all of them. There are currently 26.
-- Variables are defined after the equation as a `โดยที่:` bullet list.
-- Figures are placeholders: `<mark>[แทรก รูปที่ N: caption]</mark>`. Figure and table captions must not use the word "แสดง" (journal rule).
-- Values still to be decided are marked with `<mark>[รอกำหนด...]</mark>`.
+- **≤ 9 A4 pages total**, two columns, TH Sarabun New. Chapter 2 alone is long — check page count before writing chapters 1/3/4 at full length.
+- **Every figure AND table must also be submitted as a separate .jpg** → `figures/export/`, `tables/export/`.
+- Abstract ≤ 250 words, stand-alone, no citations; keywords must not repeat title words; conclusion 1–2 paragraphs, must not restate the abstract.
+- References: IEEE, English only, Thai sources get `(in Thai)`; every entry cited in text.
+- Double-blind review by 3 external reviewers — an anonymized copy may be needed.
 
-**Chapter 2 is methods.** It states what was done and how quantities are defined. It must not report measured values or draw conclusions — where a number comes out of the work, defer it with "รายงานในบทผลการทดลอง" or "นำเสนอในบทถัดไป", as §2.2.1 and §2.3.2 already do. Equipment specifications (marker sizes, camera resolution) are not results and belong in methods.
+## Build pipeline
 
-## The three experiments
+`build.ps1` = pandoc over `manuscript/drafts/00_*.md … 06_*.md` with `journal/templates/reference.docx`. What pandoc cannot do (finish in Word): equation numbers flush right, per-section column layout, caption placement. reference.docx rules — incl. the Thai-font trap (`w:cs`/`w:szCs`) — are in `journal/README.md`.
 
-- **§2.1 Torque-to-weight** — force gauge on the leg tip at stall, 5 repeats.
-- **§2.2 Foot-position accuracy and ML compensation** — ArUco ground truth over a workspace grid at four payloads, five models (MLP/RF/SVR/POLY3/POLY4) predicting the position error from (θ_A, θ_B, I_A, I_B), then a circle-trajectory replay with compensation on/off. Corresponds to `python/paper_testing/test_2/` in the code repo.
-- **§2.3 Whole-robot walking** — §2.3.1 sets up the vision measurement, §2.3.2 compares compensation on/off × payload 0/3 kg on a straight open-loop walk, §2.3.3 (designed, **not yet run**) characterises terrain capability under teleoperation with speed and cost of transport. Corresponds to `python/paper_testing/test_3/`.
+## Measurement facts for §2.3 (verified from the four walk videos)
 
-## Measurement facts for §2.3 (verified from the videos)
+- Runway frame: X = 0–80 cm across (centreline 40), Y = 0–120 cm along; heading 90° = along +Y. Analysis: `../python/paper_testing/test_3/apriltag_runway_tilt_check.py` (writes `<video>_pose.csv`; videos on `D:\THESIS\walk_test\`).
+- Robot back tags: **19.9 × 46.6 cm** tape-measured (`ROBOT_TAG_LOCAL_POINTS_CM`).
+- **Parallax**: runway markers lie on the floor, robot tags ride ~31 cm above it → homography magnifies distances by m ≈ 1.21–1.22 (consistent across all four videos; camera ≈ 1.8 m). Divide distances by m; angles unaffected. §2.3.1 eq. (16)–(17). Raising runway markers to tag height removes the effect for future recordings.
+- Robot walks ~2 m but the grid covers 120 cm → about half of each track is extrapolated (tag-rectangle self-check shows the mapping holds; report the proportion).
+- §2.3.2 has **one recorded run per condition**; §2.1/§2.2.5 used 5 repeats.
 
-- Runway world frame: **X = 0–80 cm across, Y = 0–120 cm along**, origin at marker ID 4; centreline is X = 40. Heading 90° means the body points along +Y.
-- Robot back tags measure **19.9 cm across × 46.6 cm along** (tape measured). The tracking code assumed 20 × 43 until this was corrected — check `ROBOT_TAG_LOCAL_POINTS_CM` if numbers look off.
-- **The runway markers sit on the floor but the robot tags ride ~31 cm above it**, so the ground-plane homography magnifies every measured distance by m ≈ 1.21–1.22 (consistent across all four videos to within 0.006; implies a camera height near 1.8 m). Distances must be divided by m; angles need no correction. §2.3.1 equations (16)–(17) document this. Raising the runway markers to tag height would remove the effect for future recordings.
-- The robot walks about 2 m but the marker grid covers only 120 cm, so **roughly half of each track is extrapolated** beyond the calibrated area. The tag-rectangle self-check shows the mapping stays consistent there, but the proportion should be reported.
-- §2.3.2 has **one recorded run per condition**, not the 5 repeats used in §2.1 and §2.2.5.
+## Known text-vs-code gaps still to resolve (details + file:line in `action-plan.md`)
 
-## Running the analysis
-
-The vision scripts need OpenCV, which the Python on PATH does not have. Use the conda interpreter:
-
-```bash
-"$USERPROFILE/miniconda3/python.exe" apriltag_runway_tilt_check.py --video "D:/THESIS/walk_test/walk.MOV" --frame-step 3 --no-display --no-video
-```
-
-Run it from the **code repo** (`../BLEGS_Actuator-Unit/python/paper_testing/test_3/`), not from the stale copy in `04_Code/`. It writes `<video>_pose.csv` next to the video and prints the deviation summary plus the parallax scale check. Full-resolution 4K detection takes a couple of minutes per clip; `--no-video` skips re-encoding the annotated output.
-
-## Known gaps between the manuscript and the code that produced the data
-
-Each of these was verified against the actual files and still needs a decision. They matter because they change numbers that would be published.
-
-- **§2.2.5 circle radius**: the text specifies r = 35 mm, but `vision_based_trajectory_eval.py` and `calibration_coverage_check.py` both use 30 mm, and they disagree with each other on the centre (−170 vs −175 mm). Radial error is computed against these constants, so a 5 mm error dominates the ~1 mm effect being reported.
-- **§2.2.3 sample count**: the text says a 180-point grid and 720 samples; `workspace_grid.csv` holds 152 points and `grid_log.csv` 608 rows.
-- **§2.2.1 lens distortion**: `single_leg_xy_control.py` loads `calibration_olympus25mm.npz`, which does not exist — the file `camera_calibration.py` produces is `output/params/calibration_olympus25f1.2.npz`. The loader fails silently, so the capture ran without undistortion, contrary to the text.
-- **§2.2.4 validation**: the text describes training on static data and evaluating on dynamic motion, but `train_compensation_model.py` fits and predicts on the same set, so `training_summary.txt` reports in-sample error. Those figures must not be presented as model accuracy, and picking a model from them favours the most overfit one.
-- **§2.1 moment arm**: r = 0.105 m is described as the distance from the joint axis to the leg tip, but 105 mm is the motor crank length (L_AC); the tip is further out (L_CE = 145 mm beyond the elbow). This feeds the headline torque-to-weight figure.
-- The physical runway has a **misprinted duplicate ID-6 tag** standing in for ID 7; the tracker works around it with `--duplicate-id6-mode`. Either reprint before collecting final data or disclose it.
+1. §2.2.5 circle: text r=35 mm, analysis scripts use 30 mm and disagree on centre (−170 vs −175).
+2. §2.2.3 counts: text 180 points/720 samples; files hold 152/608.
+3. §2.2.1 undistortion: capture ran without it (stale calibration filename), contrary to the text.
+4. §2.2.4 validation: `training_summary.txt` is in-sample; do NOT present it as model accuracy.
+5. §2.1 moment arm: r=0.105 m described as axis→foot, but 105 mm is the crank length.
+6. Physical runway has a duplicate ID-6 tag standing in for ID 7 (`--duplicate-id6-mode`).
