@@ -355,10 +355,10 @@ Test #5: vq = -13.0V
 - `docs/technical/PROTOCOL.md` - Communication protocol specification
 
 ### Implementation Files
-- `src/main.cpp` - Main control loop
-- `src/motor_control.cpp` - Motor control functions
-- `src/svpwm.cpp` - Space vector PWM implementation
-- `include/motor_conf.h` - Motor configuration parameters
+- `firmware/src/main.cpp` - Main control loop
+- `firmware/src/motor_control.cpp` - Motor control functions
+- `firmware/src/svpwm.cpp` - Space vector PWM implementation
+- `firmware/include/motor_conf.h` - Motor configuration parameters
 
 ---
 
