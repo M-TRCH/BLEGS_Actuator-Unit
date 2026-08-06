@@ -1,5 +1,5 @@
 """
-Standalone Walk Test - Modes 7, 8, 9 Only
+Standalone Walk Test - Modes 7, 8, 9, R
 Author: M-TRCH
 Date: June 5, 2026
 
@@ -7,6 +7,12 @@ Standalone version of relative_position_control.py trimmed to:
     [7] Smooth walk +600mm with march transitions
     [8] Turn LEFT while walking +300mm (march -> turn -> march)
     [9] Turn RIGHT while walking +300mm (march -> turn -> march)
+    [R] Keyboard RC drive: hold W/S to drive and A/D to steer; A/D on their
+        own pivot in place; march-in-place when idle.  Live gait tuning for
+        lift / step cap / cadence / stance height / turn strength / stance
+        ratio, [P] prints the tuned values for persisting.  Drive keys are
+        read as real key state (Win32), so W+A held together steers while
+        walking.
 
 All external module dependencies are inlined.  No imports from the
 navigation/, control/, or lib/ packages are required.
@@ -33,6 +39,7 @@ from typing import List, Tuple, Optional, Dict
 
 if sys.platform == 'win32':
     import msvcrt
+    import ctypes
 
 # ============================================================================
 # ROBOT / GAIT CONFIGURATION
@@ -66,13 +73,44 @@ NAV_TIMEOUT = 60.0
 VELOCITY_CALIBRATION = 3.04
 
 IMU_PORT = 'COM22'
-IMU_ENABLED = True
+IMU_ENABLED = False  # No IMU installed on real hardware - yaw control disabled
 YAW_K_P = 0.8
 YAW_K_D = 0.01
 YAW_MAX_CORRECTION = 15.0
 
 TURN_V_MAX = 40.0
 TURN_BIAS = 7.5
+
+# ------------------------- Keyboard RC mode ([R]) ---------------------------
+# Gait defaults for mode R ONLY.  Modes 7/8/9 keep the GAIT_* values above, so
+# the paper runs - and VELOCITY_CALIBRATION, which is tied to that geometry -
+# stay comparable.  Tuned on hardware 2026-08-03; [P] prints an updated block.
+RC_LIFT_HEIGHT = 60.0        # [T]/[G] swing foot lift (mm)
+RC_STEP_FORWARD = 25.0       # [R]/[F] step length cap (mm)
+RC_TRAJECTORY_STEPS = 28     # [Y]/[H] points per cycle -> 1.79 Hz
+RC_STANCE_RATIO = 0.75       # [N]/[M] stance phase ratio
+RC_STANCE_HEIGHT = -220.0    # [U]/[J] stance height (mm, negative = down)
+
+RC_V_DEFAULT = 40.0        # mm/s initial commanded speed for W/S (<= NAV_V_MAX)
+RC_V_MIN = 10.0            # mm/s lower clamp for [-] speed adjust
+RC_V_STEP = 5.0            # mm/s change per [+]/[-] press (upper clamp NAV_V_MAX)
+RC_KEY_HOLD_S = 0.6        # deadman window, FALLBACK path only (see _rc_read_drive_keys)
+RC_STICKY_MAX_S = 3.0      # fallback: drop an inferred-held key after this long
+RC_ACCEL = 150.0           # mm/s^2 slew rate for v_body_y (0->40 in ~0.27s)
+RC_IDLE_V_THRESHOLD = 5.0  # mm/s: |v| below this with no keys -> march in place
+RC_EXIT_TIMEOUT_S = 2.0    # max decel wait after [Q] before forcing stand
+RC_MARCH_LIFT_MULT = 2.0   # lift multiplier while marching (v=0), blends to 1.0x at speed
+RC_LIFT_BLEND_V = 20.0     # mm/s: |v| at which lift finishes blending march -> walk
+RC_APPLY_STATIC_TRIM = False  # RC ignores STATIC_ROLL_TRIM_MM (no tilt offset)
+
+# Turning: differential step as a RATIO of step length, so the turn radius is
+# roughly speed-independent.  R ~= (BODY_WIDTH/2) * (S_out + S_in)/(S_out - S_in)
+RC_TURN_K = 0.5            # [I]/[K] turn strength (fraction of step length)
+RC_TURN_K_MAX = 1.5        # k > 1.0 drives the inner legs backwards (tighter arc)
+RC_TURN_SLEW = 1.5         # turn-k units per second
+RC_TURN_BASE_MIN = 12.0    # mm floor on the step length used to scale the turn
+RC_STEP_OUTER_MULT = 1.5   # per-leg step ceiling as a multiple of the step cap
+RC_INVERT_TURN_ON_REVERSE = False  # True: [A] always yaws the nose left, even reversing
 
 BALANCE_ENABLED = False
 ROLL_K_P = 0.8
@@ -1114,6 +1152,146 @@ def update_gait_from_velocity(v_body_y: float) -> tuple:
     return step_length, (v_body_y < 0)
 
 
+def _slew_toward(current: float, target: float, max_delta: float) -> float:
+    if target > current:
+        return min(current + max_delta, target)
+    return max(current - max_delta, target)
+
+
+def rc_base_step(v_body_y: float, num_steps: int, max_step: float) -> float:
+    """Step length (mm) a straight walk at this velocity would use."""
+    return min(abs(v_body_y) * num_steps / UPDATE_RATE, max_step)
+
+
+def rc_side_steps(base_step: float, turn_mm: float, max_step: float) -> tuple:
+    """Signed per-side step lengths for a differential turn: (left, right).
+
+    Positive turn_mm lengthens the left legs => turns RIGHT (same convention as
+    yaw_correction elsewhere).  Steps may go NEGATIVE: that side walks backwards
+    while the other walks forwards, which is what makes tight arcs possible.
+    generate_bezier_trajectory handles a negative step_forward natively because
+    its start/end x are symmetric about home_x.
+    """
+    cap = max_step * RC_STEP_OUTER_MULT
+    left = max(-cap, min(base_step + turn_mm, cap))
+    right = max(-cap, min(base_step - turn_mm, cap))
+    return left, right
+
+
+def rc_turn_radius(left_step: float, right_step: float) -> float:
+    """Estimated turn radius (mm) from the per-side step lengths.
+
+    Differential-steer geometry over one gait cycle; BODY_WIDTH is the nominal
+    left-right foot track.  Returns inf when walking straight.
+    """
+    diff = left_step - right_step
+    if abs(diff) < 0.1:
+        return float('inf')
+    return abs((BODY_WIDTH / 2.0) * (left_step + right_step) / diff)
+
+
+def build_rc_trajectories(v_body_y: float, turn_mm: float, lift_height: float,
+                          num_steps: int, stance_ratio: float,
+                          stance_height: float, max_step: float) -> dict:
+    """Regenerate all four leg trajectories from live RC gait parameters.
+
+    Same semantics as get_trajectory_for_velocity, but every gait parameter is
+    an argument, there is no 5 mm step floor (so v=0 degenerates to a march in
+    place), and the inner side may step backwards for a tighter turn.
+    """
+    base_step = rc_base_step(v_body_y, num_steps, max_step)
+    left_step, right_step = rc_side_steps(base_step, turn_mm, max_step)
+    reverse = (v_body_y >= 0)  # matches get_trajectory_for_velocity convention
+    trajectories = {}
+    for leg_id in ('FR', 'FL', 'RR', 'RL'):
+        step = left_step if leg_id in ('FL', 'RL') else right_step
+        trajectories[leg_id] = generate_bezier_trajectory(
+            num_steps=num_steps,
+            lift_height=lift_height,
+            step_forward=step,
+            mirror_x=leg_id in ('FR', 'RR'),
+            stance_ratio=stance_ratio,
+            home_x=DEFAULT_STANCE_OFFSET_X,
+            home_y=stance_height,
+            reverse=reverse,
+        )
+    return trajectories
+
+
+# Virtual-key codes for the drive keys (VK of a letter == its ASCII uppercase)
+_RC_VK = {b'w': 0x57, b's': 0x53, b'a': 0x41, b'd': 0x44}
+_rc_win32 = None  # (user32, kernel32) once probed, or False if unavailable
+
+
+def _rc_read_drive_keys():
+    """Live up/down state of W/S/A/D, or None if the Win32 path is unavailable.
+
+    msvcrt reports key *events*, and Windows auto-repeats only the most recently
+    pressed key — so a chorded hold (W+A) looks like W was released.  Asking
+    Win32 for the actual key state fixes that and makes release instantaneous.
+
+    The focus gate (ignore keys unless the console is the foreground window) is
+    only applied under a classic conhost console.  Under ConPTY — Windows
+    Terminal, the VS Code integrated terminal — GetConsoleWindow() returns a
+    HIDDEN helper window that is never the foreground window, so gating on it
+    there would report every key as released forever.
+    """
+    global _rc_win32
+    if _rc_win32 is False:
+        return None
+    if _rc_win32 is None:
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+            user32.GetAsyncKeyState.restype = ctypes.c_short
+            user32.GetForegroundWindow.restype = ctypes.c_void_p
+            user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+            user32.IsWindowVisible.restype = ctypes.c_int
+            kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+            _rc_win32 = (user32, kernel32)
+        except Exception:
+            _rc_win32 = False
+            return None
+    user32, kernel32 = _rc_win32
+    try:
+        console = kernel32.GetConsoleWindow()
+        if console and user32.IsWindowVisible(console):
+            if user32.GetForegroundWindow() != console:
+                return {k: False for k in _RC_VK}
+        return {k: bool(user32.GetAsyncKeyState(vk) & 0x8000)
+                for k, vk in _RC_VK.items()}
+    except Exception:
+        _rc_win32 = False
+        return None
+
+
+def _rc_set_steps(gait: dict, step_indices: dict, new_steps: int) -> None:
+    new_steps = max(16, min(int(new_steps), 50))
+    old_steps = gait['steps']
+    if new_steps == old_steps:
+        return
+    # Rescale indices so each leg keeps its gait phase across the cadence change
+    for leg_id in step_indices:
+        step_indices[leg_id] = int(round(
+            step_indices[leg_id] * new_steps / old_steps)) % new_steps
+    gait['steps'] = new_steps
+    print(f"\n  Cadence: {UPDATE_RATE / new_steps:.2f} Hz "
+          f"({new_steps} pts/cycle, {new_steps / UPDATE_RATE:.2f} s/cycle)")
+
+
+def _rc_print_params(gait: dict, v_cmd: float) -> None:
+    print("\n  --- current RC gait parameters (paste into constants) ---")
+    print(f"  RC_LIFT_HEIGHT = {gait['lift']:.1f}")
+    print(f"  RC_STEP_FORWARD = {gait['max_step']:.1f}")
+    print(f"  RC_TRAJECTORY_STEPS = {gait['steps']}")
+    print(f"  RC_STANCE_RATIO = {gait['ratio']:.2f}")
+    print(f"  RC_STANCE_HEIGHT = {gait['height']:.1f}")
+    print(f"  RC_TURN_K = {gait['turn_k']:.1f}")
+    print(f"  RC_V_DEFAULT = {v_cmd:.1f}")
+    print("  ---------------------------------------------------------")
+
+
 def get_trajectory_for_velocity(v_body_y: float, leg_id: str,
                                 yaw_correction: float = 0.0) -> list:
     step_length, reverse = update_gait_from_velocity(v_body_y)
@@ -1853,6 +2031,375 @@ def move_relative_y_with_turn(target_distance_mm: float, turn_bias: float,
             close_logging()
 
 # ============================================================================
+# KEYBOARD RC DRIVE  (mode R)
+# ============================================================================
+
+def rc_drive_mode() -> bool:
+    """Realtime keyboard drive with live gait tuning; march in place when idle."""
+    global state_estimator, idle_marching, march_thread
+    global march_step_indices, balance_controller, control_paused
+
+    if sys.platform != 'win32':
+        print("\n  RC drive mode requires Windows (msvcrt keyboard input)")
+        return False
+
+    # Live-tunable gait parameters (reset to these defaults with [0])
+    gait = {
+        'lift': RC_LIFT_HEIGHT,          # [T]/[G] swing foot lift (mm)
+        'max_step': RC_STEP_FORWARD,     # [R]/[F] step length cap (mm)
+        'steps': RC_TRAJECTORY_STEPS,    # [Y]/[H] points per cycle (cadence)
+        'height': RC_STANCE_HEIGHT,      # [U]/[J] stance height (mm, neg down)
+        'turn_k': RC_TURN_K,             # [I]/[K] turn strength (step ratio)
+        'ratio': RC_STANCE_RATIO,        # [N]/[M] stance phase ratio
+    }
+
+    print("\n" + "=" * 70)
+    print(f"  RC DRIVE MODE  [{('SIM' if SIMULATION_MODE else 'HW')}]")
+    print("  Hold [W]/[S] drive | [A]/[D] steer while driving, pivot on their own")
+    print("  [E] EMERGENCY STOP | [Q] exit | [SPACE] pause | [+]/[-] speed")
+    print("  Tune: [T/G] lift | [R/F] step cap | [Y/H] cadence | [U/J] height")
+    print("        [I/K] turn strength | [N/M] stance ratio | [P] print | [0] reset")
+    print(f"  Idle = march in place | speed = {RC_V_DEFAULT:.0f} mm/s")
+    print("=" * 70)
+
+    transitioning = idle_marching
+    if transitioning:
+        idle_marching = False
+        if march_thread and march_thread.is_alive():
+            march_thread.join(timeout=1.0)
+
+    if state_estimator is None:
+        state_estimator = TimeBasedEstimator(imu_reader=imu_reader)
+    if BALANCE_ENABLED and balance_controller is None:
+        balance_controller = BalanceController()
+
+    state_estimator.start()
+
+    if BALANCE_ENABLED and balance_controller is not None:
+        balance_controller.reset()
+        balance_controller.set_target(0.0, 0.0)
+
+    log_was_open = (log_file is not None)
+    init_logging(0.0)
+
+    if transitioning:
+        # The march thread runs at TRAJECTORY_STEPS; rescale into the RC cadence
+        step_indices = {
+            leg_id: int(round(idx * gait['steps'] / TRAJECTORY_STEPS))
+                    % gait['steps']
+            for leg_id, idx in march_step_indices.items()}
+    else:
+        step_indices = {
+            leg_id: int(get_gait_phase_offset(leg_id, 'trot') * gait['steps'])
+            for leg_id in ('FR', 'FL', 'RR', 'RL')}
+
+    key_last = {k: 0.0 for k in _RC_VK}
+    held = {k: False for k in key_last}       # fallback path state
+    held_since = {k: 0.0 for k in key_last}   # fallback path: last direct evidence
+    keystate_mode = None                      # True once the Win32 path is in use
+    force_fallback = False                    # set if the Win32 path proves blind
+    last_drive_char_t = 0.0                   # last w/s/a/d character from msvcrt
+    blind_since = 0.0
+    rc_flat_offsets = {leg: 0.0 for leg in ('FR', 'FL', 'RR', 'RL')}
+    v_smooth = 0.0
+    pivot_active = False  # a pivot (not an arc turn) owns the current turn_cmd
+    turn_cmd = 0.0        # signed turn strength (ratio of step length)
+    turn_mm = 0.0         # turn_cmd converted to a differential step (mm)
+    left_step = right_step = 0.0
+    rc_v_cmd = RC_V_DEFAULT
+    prev_heading_hold = False
+    exiting = False
+    exit_deadline = 0.0
+    dt_nom = 1.0 / UPDATE_RATE
+
+    control_paused = False
+    start_time = time.time()
+    last_status_time = start_time
+
+    try:
+        while True:
+            t_now = time.time()
+
+            drained = 0
+            while msvcrt.kbhit() and drained < 64:
+                key = msvcrt.getch()
+                drained += 1
+                if key in (b'\xe0', b'\x00'):
+                    msvcrt.getch()  # Consume second byte of extended keys
+                    continue
+                k = key.lower()
+                if k in key_last:
+                    key_last[k] = t_now
+                    last_drive_char_t = t_now
+                elif k in (b'+', b'='):
+                    rc_v_cmd = min(rc_v_cmd + RC_V_STEP, NAV_V_MAX)
+                    print(f"\n  Speed: {rc_v_cmd:.0f} mm/s")
+                elif k in (b'-', b'_'):
+                    rc_v_cmd = max(rc_v_cmd - RC_V_STEP, RC_V_MIN)
+                    print(f"\n  Speed: {rc_v_cmd:.0f} mm/s")
+                elif k == b' ':
+                    control_paused = not control_paused
+                    print("\n  PAUSED" if control_paused else "\n  RESUMED")
+                elif k in (b'e', b'x'):
+                    print("\n  EMERGENCY STOP!")
+                    emergency_stop_all()
+                    return False
+                elif k in (b'q', b'\x1b') and not exiting:
+                    exiting = True
+                    exit_deadline = t_now + RC_EXIT_TIMEOUT_S
+                    control_paused = False
+                    print("\n  Exiting RC - decelerating to stand...")
+                elif k == b't':
+                    gait['lift'] = min(gait['lift'] + 5.0, 60.0)
+                    print(f"\n  Lift: {gait['lift']:.0f} mm")
+                elif k == b'g':
+                    gait['lift'] = max(gait['lift'] - 5.0, 10.0)
+                    print(f"\n  Lift: {gait['lift']:.0f} mm")
+                elif k == b'r':
+                    gait['max_step'] = min(gait['max_step'] + 5.0, 50.0)
+                    print(f"\n  Step cap: {gait['max_step']:.0f} mm")
+                elif k == b'f':
+                    gait['max_step'] = max(gait['max_step'] - 5.0, 15.0)
+                    print(f"\n  Step cap: {gait['max_step']:.0f} mm")
+                elif k == b'y':
+                    _rc_set_steps(gait, step_indices, gait['steps'] - 2)
+                elif k == b'h':
+                    _rc_set_steps(gait, step_indices, gait['steps'] + 2)
+                elif k == b'u':
+                    gait['height'] = max(gait['height'] - 5.0, -235.0)
+                    print(f"\n  Stance height: {gait['height']:.0f} mm")
+                elif k == b'j':
+                    gait['height'] = min(gait['height'] + 5.0, -180.0)
+                    print(f"\n  Stance height: {gait['height']:.0f} mm")
+                elif k == b'i':
+                    gait['turn_k'] = min(round(gait['turn_k'] + 0.1, 2),
+                                         RC_TURN_K_MAX)
+                    print(f"\n  Turn strength: k={gait['turn_k']:.1f}"
+                          f"{'  (inner legs step backwards)' if gait['turn_k'] > 1.0 else ''}")
+                elif k == b'k':
+                    gait['turn_k'] = max(round(gait['turn_k'] - 0.1, 2), 0.1)
+                    print(f"\n  Turn strength: k={gait['turn_k']:.1f}")
+                elif k == b'n':
+                    gait['ratio'] = max(round(gait['ratio'] - 0.05, 2), 0.60)
+                    print(f"\n  Stance ratio: {gait['ratio']:.2f}")
+                elif k == b'm':
+                    gait['ratio'] = min(round(gait['ratio'] + 0.05, 2), 0.80)
+                    print(f"\n  Stance ratio: {gait['ratio']:.2f}")
+                elif k == b'p':
+                    _rc_print_params(gait, rc_v_cmd)
+                elif k == b'0':
+                    _rc_set_steps(gait, step_indices, RC_TRAJECTORY_STEPS)
+                    gait.update(lift=RC_LIFT_HEIGHT,
+                                max_step=RC_STEP_FORWARD,
+                                height=RC_STANCE_HEIGHT,
+                                turn_k=RC_TURN_K,
+                                ratio=RC_STANCE_RATIO)
+                    rc_v_cmd = RC_V_DEFAULT
+                    print("\n  Gait parameters reset to defaults")
+
+            if control_paused:
+                time.sleep(0.05)
+                continue
+
+            # --- Drive keys: true key state when Win32 is available, else the
+            # auto-repeat deadman.  The Win32 path is what makes chorded holds
+            # (W+A = drive forward while turning) work at all.
+            key_state = None if force_fallback else _rc_read_drive_keys()
+            if key_state is not None:
+                if keystate_mode is None:
+                    keystate_mode = True
+                    print("  Drive keys: Win32 key state (W+A chords supported)")
+                # Watchdog: the console keeps delivering w/s/a/d characters, so a
+                # key IS being held; if the state path still sees nothing it is
+                # blind (wrong console handle, blocked API) - fall back to events.
+                if any(key_state.values()):
+                    blind_since = 0.0
+                elif t_now - last_drive_char_t < 0.4:
+                    if blind_since == 0.0:
+                        blind_since = t_now
+                    elif t_now - blind_since > 0.7:
+                        force_fallback = True
+                        key_state = None
+                        print("\n  Win32 key state is not seeing held keys -"
+                              " switching to the auto-repeat fallback")
+                else:
+                    blind_since = 0.0
+            if key_state is not None:
+                # Normalise: never let a short dict break the control loop
+                held = {k: bool(key_state.get(k, False)) for k in key_last}
+            else:
+                if keystate_mode is None:
+                    keystate_mode = False
+                    print("  Drive keys: auto-repeat fallback"
+                          " (chorded W+A may be unreliable)")
+                # Windows repeats only the newest key, so while ANY drive key is
+                # still repeating we cannot see the others being released: assume
+                # they are still down, bounded by RC_STICKY_MAX_S.
+                fresh = {k: (t_now - key_last[k]) < RC_KEY_HOLD_S
+                         for k in key_last}
+                any_fresh = any(fresh.values())
+                for k in key_last:
+                    if fresh[k]:
+                        held[k] = True
+                        held_since[k] = t_now
+                    elif not any_fresh:
+                        held[k] = False
+                    elif t_now - held_since[k] > RC_STICKY_MAX_S:
+                        held[k] = False
+
+            if exiting:
+                w_held = s_held = a_held = d_held = False
+            else:
+                w_held, s_held = held[b'w'], held[b's']
+                a_held, d_held = held[b'a'], held[b'd']
+            move_req = (w_held != s_held)
+            turn_req = (a_held != d_held)
+            # A/D steer while driving; on their own they pivot in place
+            pivot_req = turn_req and not move_req
+
+            v_limit = min(rc_v_cmd, TURN_V_MAX) if turn_req else rc_v_cmd
+            if move_req:
+                v_target = v_limit if w_held else -v_limit
+            else:
+                v_target = 0.0
+            v_smooth = _slew_toward(v_smooth, v_target, RC_ACCEL * dt_nom)
+
+            if turn_req:
+                turn_target = gait['turn_k'] if d_held else -gait['turn_k']
+                if move_req and RC_INVERT_TURN_ON_REVERSE and v_smooth < 0:
+                    turn_target = -turn_target
+            else:
+                turn_target = 0.0
+            turn_cmd = _slew_toward(turn_cmd, turn_target, RC_TURN_SLEW * dt_nom)
+
+            walking = (move_req or pivot_req
+                       or abs(v_smooth) > RC_IDLE_V_THRESHOLD
+                       or abs(turn_cmd) > 0.05)
+            if not walking:
+                v_smooth = 0.0
+                turn_cmd = 0.0
+            # Pivot: the sides step equal and opposite, so the body spins about
+            # its centre (radius 0).  Latched, so that a turn left over from an
+            # arc does not spin the robot as the drive keys are released.
+            if pivot_req:
+                pivot_active = True
+            elif move_req or abs(turn_cmd) <= 0.05:
+                pivot_active = False
+            pivoting = (pivot_active and walking and not move_req
+                        and abs(v_smooth) <= RC_IDLE_V_THRESHOLD)
+
+            # Turn strength is a ratio of step length, so the radius stays
+            # about the same at any speed; the floor keeps authority when slow.
+            base_step = rc_base_step(v_smooth, gait['steps'], gait['max_step'])
+            if pivoting:
+                turn_mm = turn_cmd * gait['max_step']
+            else:
+                turn_mm = turn_cmd * max(base_step, RC_TURN_BASE_MIN)
+
+            heading_hold = (walking and not turn_req and not pivoting and
+                            yaw_controller is not None and
+                            state_estimator.has_imu())
+            yaw_pd = 0.0
+            if heading_hold:
+                if not prev_heading_hold:
+                    yaw_controller.reset()
+                    yaw_controller.set_target(state_estimator.get_yaw())
+                yaw_pd = yaw_controller.compute(
+                    state_estimator.get_yaw(), t_now)
+            prev_heading_hold = heading_hold
+            turn_total = turn_mm + yaw_pd
+            left_step, right_step = rc_side_steps(
+                base_step, turn_total, gait['max_step'])
+
+            # Blend lift from march height (x RC_MARCH_LIFT_MULT when the feet
+            # are not travelling) down to 1.0x as they do - avoids the abrupt
+            # lift change at the march boundary.  A pivot counts as motion even
+            # though the body velocity is zero.
+            cycle_s = gait['steps'] / UPDATE_RATE
+            motion = max(abs(v_smooth), abs(turn_mm) / cycle_s)
+            blend = min(motion, RC_LIFT_BLEND_V) / RC_LIFT_BLEND_V
+            lift_eff = gait['lift'] * (
+                RC_MARCH_LIFT_MULT - (RC_MARCH_LIFT_MULT - 1.0) * blend)
+
+            trajectories = build_rc_trajectories(
+                v_smooth, turn_total, lift_eff, gait['steps'],
+                gait['ratio'], gait['height'], gait['max_step'])
+
+            # RC deliberately runs with no tilt offset: STATIC_ROLL_TRIM_MM is a
+            # mode-7/8/9 trim that rides on the [M] ML flag, and the dynamic
+            # balance path needs an IMU the robot does not have.
+            if not RC_APPLY_STATIC_TRIM:
+                bal = rc_flat_offsets
+            elif (BALANCE_ENABLED and balance_controller is not None
+                    and imu_reader and imu_reader.is_receiving_data()):
+                o = imu_reader.get_orientation()
+                bal = combine_balance_offsets(balance_controller.compute(
+                    o['roll'], o['pitch'], t_now))
+            else:
+                bal = combine_balance_offsets()
+
+            update_all_legs_gait(trajectories, step_indices, bal)
+
+            for leg_id in step_indices:
+                step_indices[leg_id] = (
+                    step_indices[leg_id] + 1) % gait['steps']
+
+            state_estimator.update(v_smooth * VELOCITY_CALIBRATION, t_now)
+            log_control_step("RC")
+
+            if t_now - last_status_time >= 0.5:
+                mode_str = ("PIVOT" if pivoting
+                            else "WALK " if walking else "MARCH")
+                keys = "+".join(n for n, is_down in (
+                    ('W', w_held), ('S', s_held),
+                    ('A', a_held), ('D', d_held)) if is_down) or "--"
+                radius = rc_turn_radius(left_step, right_step)
+                r_str = "inf" if radius == float('inf') else f"{radius:.0f}mm"
+                print(f"  RC {mode_str} | v={v_smooth:+.1f}/{rc_v_cmd:.0f} mm/s"
+                      f" | step L/R={left_step:+.0f}/{right_step:+.0f}"
+                      f" (cap {gait['max_step']:.0f})"
+                      f" | lift={lift_eff:.0f}"
+                      f" | cad={UPDATE_RATE / gait['steps']:.2f}Hz"
+                      f" | h={gait['height']:.0f}"
+                      f" | k={turn_cmd:+.2f} R={r_str}"
+                      f" | sr={gait['ratio']:.2f}"
+                      f" | keys={keys} | t={t_now - start_time:.0f}s")
+                last_status_time = t_now
+
+            if exiting and (not walking or t_now >= exit_deadline):
+                break
+
+            loop_dur = time.time() - t_now
+            sleep_t = (1.0 / UPDATE_RATE) - loop_dur
+            if sleep_t > 0:
+                time.sleep(sleep_t)
+
+        # Hand phase back to the march system in its native resolution
+        for leg_id in march_step_indices:
+            march_step_indices[leg_id] = int(round(
+                step_indices[leg_id] * TRAJECTORY_STEPS
+                / gait['steps'])) % TRAJECTORY_STEPS
+        time.sleep(0.2)
+        stand_pos = (DEFAULT_STANCE_OFFSET_X, gait['height'])
+        stand_offsets = (get_static_roll_offsets() if RC_APPLY_STATIC_TRIM
+                         else rc_flat_offsets)
+        for leg_id in ('FR', 'FL', 'RR', 'RL'):
+            update_leg_position(leg_id, stand_pos, stand_offsets[leg_id])
+        print(f"\n  RC mode ended. Odometry: "
+              f"{state_estimator.get_position():+.1f} mm"
+              f"  Time={state_estimator.get_elapsed_time():.1f}s")
+        _rc_print_params(gait, rc_v_cmd)
+        return True
+
+    except KeyboardInterrupt:
+        print("\n  Interrupted by user")
+        return False
+    finally:
+        stop_all_legs()
+        if not log_was_open:
+            close_logging()
+
+# ============================================================================
 # TEST FUNCTIONS  (modes 7, 8, 9)
 # ============================================================================
 
@@ -1978,6 +2525,7 @@ def print_menu():
     print(f"  [7] Smooth walk {MODE7_DISTANCE_MM:+.0f}mm (march -> walk -> march -> stand)")
     print(f"  [8] Turn LEFT {MODE_TURN_DISTANCE_MM:+.0f}mm   (march -> turn -> march -> stand)")
     print(f"  [9] Turn RIGHT {MODE_TURN_DISTANCE_MM:+.0f}mm  (march -> turn -> march -> stand)")
+    print("  [R] RC drive (hold W/S/A/D + live gait tuning, Q exit)")
     print("  [M] Toggle ML compensation")
     print("  [Q] Quit")
     print("=" * 70)
@@ -2001,6 +2549,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif key == b'9':
                 test_turn_right_300()
+            elif key.lower() == b'r':
+                rc_drive_mode()
             elif key.lower() == b'm':
                 toggle_ml_compensation()
             elif key.lower() == b'q':
@@ -2016,6 +2566,8 @@ def interactive_mode():
                 test_turn_left_300()
             elif cmd == '9':
                 test_turn_right_300()
+            elif cmd.lower() == 'r':
+                rc_drive_mode()
             elif cmd.lower() == 'm':
                 toggle_ml_compensation()
             elif cmd.lower() == 'q':
@@ -2032,7 +2584,7 @@ def main():
     global SIMULATION_MODE, imu_reader, yaw_controller
 
     print("=" * 70)
-    print("  BLEGS Walk Test - Standalone (Modes 7, 8, 9)")
+    print("  BLEGS Walk Test - Standalone (Modes 7, 8, 9, R)")
     print("=" * 70)
     print(f"  ML compensation: {get_ml_status()}")
 
