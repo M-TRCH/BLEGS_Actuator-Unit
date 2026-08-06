@@ -1,9 +1,16 @@
 import argparse
+import csv
 import os
+import sys
 
 import cv2
 import cv2.aruco as aruco
 import numpy as np
+
+# Keep the Thai console output readable when stdout is redirected to a file:
+# Windows falls back to cp1252 for pipes, which cannot encode Thai.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 DEFAULT_VIDEO_PATH = r"D:\THESIS\walk_test\walk.MOV"
@@ -32,6 +39,12 @@ ROBOT_TAG_LOCAL_POINTS_CM = {
     3: (10.0, 21.5),
 }
 CALIBRATION_FRAME_COUNT = 100
+# Known distances between the robot back tags, used to re-measure the runway
+# mapping from inside the data itself (see measure_robot_tag_scale).
+ROBOT_TAG_PAIRS_CM = (((0, 1), 20.0), ((2, 3), 20.0), ((0, 2), 43.0), ((1, 3), 43.0))
+# Area actually covered by the runway markers; poses outside it are extrapolated.
+RUNWAY_GRID_X_RANGE_CM = (0.0, 80.0)
+RUNWAY_GRID_Y_RANGE_CM = (0.0, 120.0)
 DUPLICATE_ID6_MODE_CHOICES = ("right-as-7", "auto", "off")
 POSE_SMOOTHING_ALPHA = 0.25
 POSE_ARROW_LENGTH_CM = 18.0
@@ -80,6 +93,16 @@ def parse_args():
         choices=DUPLICATE_ID6_MODE_CHOICES,
         default="right-as-7",
         help="How to handle two detected ID 6 tags when ID 7 is missing",
+    )
+    parser.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Skip writing the annotated video (much faster when only the pose CSV is needed)",
+    )
+    parser.add_argument(
+        "--csv",
+        default=None,
+        help="Where to write the pose track (default: <video>_pose.csv next to the video)",
     )
     return parser.parse_args()
 
@@ -653,6 +676,164 @@ def build_draw_marker_inputs(detections):
     return draw_corners, draw_ids
 
 
+def calibrate_runway_homography(video_path, frame_step, duplicate_id6_mode):
+    """First pass: average the runway markers and lock the homography.
+
+    Doing this before tracking means the pose track can start at frame 0.  When
+    calibration was folded into the tracking loop it consumed the first
+    CALIBRATION_FRAME_COUNT * frame_step frames, so several seconds of every
+    walk went unrecorded.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video file: {video_path}")
+
+    aruco_detector = aruco.ArucoDetector(
+        aruco.getPredefinedDictionary(ARUCO_DICT),
+        aruco.DetectorParameters(),
+    )
+    point_sums = {}
+    point_counts = {}
+    processed_frames = 0
+
+    while cap.isOpened():
+        # grab() advances without decoding, so skipped frames cost almost nothing
+        if not cap.grab():
+            break
+
+        frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        if frame_index % frame_step != 0:
+            continue
+
+        ret, frame = cap.retrieve()
+        if not ret:
+            break
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = aruco_detector.detectMarkers(gray)
+        detections = build_tracked_detections(corners, ids)
+        detections, _, _ = remap_duplicate_runway_ids(detections, duplicate_id6_mode)
+        runway_positions = runway_positions_from_all(build_marker_positions(detections))
+        if not runway_positions:
+            continue
+
+        processed_frames += 1
+        update_average_accumulators(runway_positions, point_sums, point_counts)
+        if processed_frames >= CALIBRATION_FRAME_COUNT:
+            break
+
+    cap.release()
+    fixed_points = estimate_points_for_drawing(build_average_points(point_sums, point_counts))
+    return dict(fixed_points), build_runway_homography(fixed_points), processed_frames
+
+
+def measure_robot_tag_scale(positions, homography):
+    """Re-measure the known robot tag rectangle through the runway homography.
+
+    The four back tags form a rigid 20 x 43 cm rectangle, so projecting them and
+    measuring the sides checks the mapping without any extra equipment.  A scale
+    away from 1.0 means either the tags sit above the ground plane the runway
+    markers define (parallax), or ROBOT_TAG_LOCAL_POINTS_CM does not match the
+    physical layout - measure the real tag spacing to tell the two apart.
+    """
+    if homography is None:
+        return None
+
+    world = {
+        marker_id: transform_point(positions[marker_id], homography)
+        for marker_id in ROBOT_TAG_IDS
+        if marker_id in positions
+    }
+
+    scales = {}
+    for (first_id, second_id), true_cm in ROBOT_TAG_PAIRS_CM:
+        if first_id not in world or second_id not in world:
+            continue
+
+        measured_cm = float(np.hypot(
+            world[first_id][0] - world[second_id][0],
+            world[first_id][1] - world[second_id][1],
+        ))
+        scales.setdefault(true_cm, []).append(measured_cm / true_cm)
+
+    if not scales:
+        return None
+
+    return {true_cm: float(np.mean(values)) for true_cm, values in scales.items()}
+
+
+def pose_is_inside_grid(center_world):
+    x_min, x_max = RUNWAY_GRID_X_RANGE_CM
+    y_min, y_max = RUNWAY_GRID_Y_RANGE_CM
+    return bool(
+        x_min <= center_world[0] <= x_max and y_min <= center_world[1] <= y_max
+    )
+
+
+def write_pose_csv(csv_path, pose_rows):
+    if not pose_rows:
+        print("ไม่มีข้อมูล pose ให้บันทึก")
+        return None
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(pose_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(pose_rows)
+    return csv_path
+
+
+def summarise_pose_track(pose_rows):
+    measured_rows = [row for row in pose_rows if not row["is_held"]]
+    if len(measured_rows) < 2:
+        print("ข้อมูล pose ไม่พอสำหรับสรุปผล")
+        return
+
+    x_cm = np.array([row["x_cm"] for row in measured_rows], dtype=np.float64)
+    y_cm = np.array([row["y_cm"] for row in measured_rows], dtype=np.float64)
+    heading_deg = np.array([row["heading_deg"] for row in measured_rows], dtype=np.float64)
+    time_s = np.array([row["t_s"] for row in measured_rows], dtype=np.float64)
+
+    forward_sign = 1.0 if y_cm[-1] >= y_cm[0] else -1.0
+    travel_cm = float(abs(y_cm[-1] - y_cm[0]))
+    duration_s = float(time_s[-1] - time_s[0])
+    lateral_cm = (x_cm - x_cm[0]) * forward_sign
+    yaw_deg = ((heading_deg - heading_deg[0] + 180.0) % 360.0) - 180.0
+    inside_count = sum(1 for row in measured_rows if row["inside_grid"])
+
+    print(f"เฟรมที่วัด pose ได้จริง: {len(measured_rows)} "
+          f"(อยู่ในกริดอ้างอิง {inside_count}, นอกกริด {len(measured_rows) - inside_count})")
+    if duration_s > 0:
+        print(f"ระยะตามแนวทางวิ่ง: {travel_cm:.1f} cm ใน {duration_s:.1f} s "
+              f"(เฉลี่ย {travel_cm / duration_s:.1f} cm/s)")
+    print(f"เบี่ยงเบนด้านข้างจากจุดเริ่ม: สุดท้าย {lateral_cm[-1]:+.1f} cm | "
+          f"RMS {float(np.sqrt(np.mean(lateral_cm ** 2))):.1f} cm | "
+          f"สูงสุด {float(np.max(np.abs(lateral_cm))):.1f} cm")
+    print(f"เบี่ยงเบนเชิงมุมจากจุดเริ่ม: สุดท้าย {yaw_deg[-1]:+.1f} deg | "
+          f"RMS {float(np.sqrt(np.mean(yaw_deg ** 2))):.1f} deg")
+    if travel_cm > 1.0:
+        print(f"อัตราการเบี่ยงต่อระยะทาง: {lateral_cm[-1] / (travel_cm / 100.0):+.1f} cm/m")
+
+
+def summarise_tag_scale(scale_samples):
+    if not scale_samples:
+        return
+
+    print("\nตรวจสอบสเกลจากกรอบป้ายบนหุ่น (ค่าที่ถูกต้องคือ 1.000):")
+    worst_error = 0.0
+    for true_cm in sorted(scale_samples):
+        values = np.array(scale_samples[true_cm], dtype=np.float64)
+        axis_label = "ด้านกว้าง" if true_cm < 30.0 else "ด้านยาว"
+        print(f"  {axis_label} ({true_cm:.0f} cm): {values.mean():.3f} "
+              f"(sd {values.std():.3f}, n={len(values)})")
+        worst_error = max(worst_error, abs(float(values.mean()) - 1.0))
+
+    if worst_error > 0.05:
+        print(f"  คำเตือน: สเกลคลาดเคลื่อนถึง {100.0 * worst_error:.0f}% "
+              "ระยะทุกค่าที่วัดได้จึงผิดไปตามสัดส่วนนี้")
+        print("  สาเหตุที่เป็นไปได้: ป้ายบนหุ่นอยู่สูงจากระนาบพื้นที่ใช้สอบเทียบ (พารัลแลกซ์)")
+        print("  หรือค่า ROBOT_TAG_LOCAL_POINTS_CM ไม่ตรงกับระยะป้ายจริง — วัดระยะป้ายจริงเพื่อแยกสองกรณี")
+
+
 def create_video_writer(output_video_path, frame_shape, export_fps):
     output_height, output_width = frame_shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -671,6 +852,7 @@ def main():
     if not os.path.exists(args.video):
         raise FileNotFoundError(f"Video file not found: {args.video}")
 
+    # Opened only to read the frame rate; the tracking pass reopens it below
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {args.video}")
@@ -691,29 +873,48 @@ def main():
     base_name = os.path.splitext(os.path.basename(args.video))[0]
     output_dir = os.path.dirname(args.video)
     output_video_path = os.path.join(output_dir, f"{base_name}_tracked_tags_annotated.mp4")
+    output_csv_path = args.csv or os.path.join(output_dir, f"{base_name}_pose.csv")
+
+    # Pass 1: lock the runway grid before tracking, so no walk frames are lost
+    print("รอบที่ 1: สอบเทียบกริดรันเวย์...")
+    cap.release()
+    fixed_runway_points, runway_homography, calibration_frames = calibrate_runway_homography(
+        args.video, frame_step, args.duplicate_id6_mode
+    )
+    if runway_homography is None:
+        raise RuntimeError(
+            "สร้าง homography ไม่สำเร็จ: ตรวจพบเครื่องหมายทางวิ่งไม่ครบ 4 จุด"
+        )
+    print(f"ตรึงกริดรันเวย์จาก {calibration_frames} เฟรมที่มีเครื่องหมายทางวิ่ง")
+
+    cap = cv2.VideoCapture(args.video)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video file: {args.video}")
 
     video_writer = None
-    processed_frames = 0
-    point_sums = {}
-    point_counts = {}
-    fixed_runway_points = None
-    runway_homography = None
-    inverse_runway_homography = None
+    processed_frames = calibration_frames
+    inverse_runway_homography = np.linalg.inv(runway_homography)
     smoothed_robot_pose = None
     trajectory_world_points = []
+    pose_rows = []
+    scale_samples = {}
     world_to_birdeye_homography, birdseye_size = build_world_to_birdeye_homography()
 
-    print("เริ่มตรวจจับตำแหน่ง AR tag ID 0-11...")
+    print("รอบที่ 2: ตรวจจับตำแหน่ง AR tag ID 0-11 ตั้งแต่เฟรมแรก...")
 
     while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
+        if not cap.grab():
             print("จบไฟล์วิดีโอ")
             break
 
         frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
         if frame_index % frame_step != 0:
             continue
+
+        ret, frame = cap.retrieve()
+        if not ret:
+            print("จบไฟล์วิดีโอ")
+            break
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = aruco_detector.detectMarkers(gray)
@@ -723,27 +924,9 @@ def main():
             args.duplicate_id6_mode,
         )
         tracked_positions = build_marker_positions(tracked_detections)
-        runway_positions = runway_positions_from_all(tracked_positions)
         robot_detections = robot_detections_from_all(tracked_detections)
 
-        if fixed_runway_points is None:
-            if runway_positions:
-                processed_frames += 1
-                update_average_accumulators(runway_positions, point_sums, point_counts)
-            averaged_runway_points = build_average_points(point_sums, point_counts)
-            draw_runway_points = estimate_points_for_drawing(averaged_runway_points)
-            if processed_frames >= CALIBRATION_FRAME_COUNT:
-                fixed_runway_points = dict(draw_runway_points)
-                runway_homography = build_runway_homography(fixed_runway_points)
-                if runway_homography is not None:
-                    inverse_runway_homography = np.linalg.inv(runway_homography)
-                print(f"ตรึงกริดรันเวย์หลังเฉลี่ยครบ {CALIBRATION_FRAME_COUNT} เฟรมที่ประมวลผล")
-        else:
-            draw_runway_points = fixed_runway_points
-            if runway_homography is None:
-                runway_homography = build_runway_homography(fixed_runway_points)
-                if runway_homography is not None:
-                    inverse_runway_homography = np.linalg.inv(runway_homography)
+        draw_runway_points = fixed_runway_points
 
         current_robot_pose = estimate_robot_pose(robot_detections, runway_homography)
         if current_robot_pose is None and smoothed_robot_pose is not None:
@@ -770,6 +953,23 @@ def main():
 
         if smoothed_robot_pose is not None:
             trajectory_world_points.append(smoothed_robot_pose["center_world"])
+            center_world = smoothed_robot_pose["center_world"]
+            pose_rows.append({
+                "frame": frame_index,
+                "t_s": round(frame_index / source_fps, 4),
+                "x_cm": round(center_world[0], 4),
+                "y_cm": round(center_world[1], 4),
+                "heading_deg": round(smoothed_robot_pose["heading_deg"], 4),
+                "n_tags": len(current_robot_pose["visible_ids"]) if current_robot_pose else 0,
+                "source": smoothed_robot_pose["source"],
+                "is_held": int(bool(smoothed_robot_pose.get("is_held", False))),
+                "inside_grid": int(pose_is_inside_grid(center_world)),
+            })
+
+        frame_scale = measure_robot_tag_scale(tracked_positions, runway_homography)
+        if frame_scale:
+            for true_cm, scale_value in frame_scale.items():
+                scale_samples.setdefault(true_cm, []).append(scale_value)
 
         birdseye_frame = build_birdeye_view(
             frame,
@@ -800,17 +1000,6 @@ def main():
                 2,
             )
 
-        if runway_homography is None:
-            cv2.putText(
-                birdseye_frame,
-                f"Calibration progress: {processed_frames}/{CALIBRATION_FRAME_COUNT}",
-                (20, 65),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                TEXT_COLOR,
-                2,
-            )
-
         birdseye_frame = resize_birdeye_to_match_main(frame, birdseye_frame)
         combined_frame = compose_views(frame, birdseye_frame)
 
@@ -819,11 +1008,12 @@ def main():
         else:
             frame_resized = resize_to_fit(combined_frame, args.max_width * 2, args.max_height)
 
-        if video_writer is None:
-            video_writer = create_video_writer(output_video_path, frame_resized.shape, export_fps)
+        if not args.no_video:
+            if video_writer is None:
+                video_writer = create_video_writer(output_video_path, frame_resized.shape, export_fps)
 
-        if video_writer.isOpened():
-            video_writer.write(frame_resized)
+            if video_writer.isOpened():
+                video_writer.write(frame_resized)
 
         if show_display:
             cv2.imshow("AR Tag Position Check", frame_resized)
@@ -836,7 +1026,15 @@ def main():
     cv2.destroyAllWindows()
 
     print("\n--- สรุปผล ---")
-    print(f"บันทึกวิดีโอผลลัพธ์ไปที่: {output_video_path}")
+    if args.no_video:
+        print("ข้ามการบันทึกวิดีโอ (--no-video)")
+    else:
+        print(f"บันทึกวิดีโอผลลัพธ์ไปที่: {output_video_path}")
+
+    if write_pose_csv(output_csv_path, pose_rows):
+        print(f"บันทึกข้อมูล pose ไปที่: {output_csv_path}")
+    summarise_pose_track(pose_rows)
+    summarise_tag_scale(scale_samples)
 
 
 if __name__ == "__main__":
